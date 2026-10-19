@@ -1,0 +1,16 @@
+# Проекты, их память и рабочие репозитории — только локально, в git хаба не входят
+/projects/
+
+# Личные исследования и идеи — локально; в git только исследование, на котором построен хаб
+/ideas/
+/research/*
+!/research/2026-08-27-ai-dev-orchestration.md
+!/research/2026-08-27-ai-dev-orchestration.html
+
+# Локальные настройки Claude Code
+.claude/settings.local.json
+**/.claude/settings.local.json
+
+# Мусор ОС
+Thumbs.db
+Desktop.ini
