@@ -7,6 +7,9 @@
 !/research/2026-08-27-ai-dev-orchestration.md
 !/research/2026-08-27-ai-dev-orchestration.html
 
+# Личное: имя пользователя, язык ответов (образец — CLAUDE.local.md.example)
+/CLAUDE.local.md
+
 # Локальные настройки Claude Code
 .claude/settings.local.json
 **/.claude/settings.local.json

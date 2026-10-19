@@ -23,6 +23,7 @@
 | Путь | Что | В git |
 |---|---|---|
 | `CLAUDE.md` | Общие правила для всех проектов | да |
+| `CLAUDE.local.md` | Личное: кто пользователь, язык ответов (образец — `CLAUDE.local.md.example`) | нет, локально |
 | `.claude/skills/` | Скиллы хаба: `new-project`, `wind-down`, `dispatch` | да |
 | `.claude/agents/` | Агенты: `explorer`, `reviewer`, `tester` | да |
 | `templates/project/` | Шаблон обвязки нового проекта | да |
@@ -32,15 +33,33 @@
 | `projects/<имя>/repo/` | Рабочий репозиторий проекта (свой git) | нет |
 | `research/*`, `ideas/` | Личные исследования и идеи | нет, локально |
 
+## Требования
+
+| Что | Зачем |
+|---|---|
+| Windows 10/11, Windows PowerShell 5.1 | `sync-claude.ps1`, `headroom.ps1` (скрипты рассчитаны на Windows) |
+| [Git for Windows](https://git-scm.com/download/win) ≥ 2.38 (Git Bash, `cygpath`) | worktree, `merge-tree --write-tree`, скрипты `*.sh` |
+| [Node.js](https://nodejs.org/) ≥ 18 | хук-замок диспетчера и его скрипты (`*.cjs`) |
+| [Claude Code](https://claude.com/claude-code) | всё. Для `/dispatch` — десктопное приложение: запуск и список сессий (`start_session`, `list_sessions`) есть только там |
+| Скиллы `workplan` и `grilling` | нарезка на срезы в `/dispatch` (любая реализация с `plan.md`, файлом на срез и `blocked-by`). Как они называются у тебя — в профиле проекта |
+
+Без Node.js хаб работает, но очередь диспетчера держится только на правилах, без замка. Без десктопного
+приложения работают правила, `/new-project` и `/wind-down`, а `/dispatch` — нет.
+
 ## Новый компьютер
 
-1. `git clone https://github.com/Gorgog/ai-dev-hub.git W:\ai-dev-hub` (путь любой).
-2. `powershell -ExecutionPolicy Bypass -File W:\ai-dev-hub\sync-claude.ps1`:
+1. `git clone https://github.com/Gorgog/ai-dev-hub.git <папка>` — путь любой, дальше `<хаб>`. Пути внутри
+   правил и скиллов пишутся как `<хаб>`, скрипты находят себя сами.
+2. Скопировать `CLAUDE.local.md.example` в `CLAUDE.local.md` и вписать своё имя и язык ответов.
+3. `powershell -ExecutionPolicy Bypass -File <хаб>\sync-claude.ps1`:
    - скиллы хаба подключаются ссылками (junction) в `~/.claude/skills/`;
    - агенты копируются в `~/.claude/agents/`, прежние версии уходят в бэкап;
    - в `~/.claude/settings.json` ставится хук-замок диспетчера (с бэкапом настроек). Он действует только
      в `projects/*/worktrees/*` и не пускает сессии к дев-серверам, базам и тяжёлым прогонам без разрешения.
-3. Проект — `/new-project имя` в сессии Claude Code из корня хаба. Папка `projects/` создаётся локально.
+4. Проект — `/new-project имя` в сессии Claude Code из корня хаба. Папка `projects/` создаётся локально.
+5. Многосессионная работа в проекте — профиль `projects/<имя>/dispatch-profile.md` и правила замка
+   `dispatch-rules.json` по образцам из `templates/project/` (`dispatch-rules.example.json`); `/dispatch` поможет их заполнить.
+   Пока `dispatch-rules.json` нет, хук-замок в проекте не действует.
 
 ## Как пользоваться
 
