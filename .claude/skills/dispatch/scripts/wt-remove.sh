@@ -14,6 +14,22 @@ if [ -n "$(git -C "$repo" cherry origin/main "$br" | grep '^+' || true)" ]; then
   [ "$remote" = "$(git -C "$repo" rev-parse "$br")" ] || { echo "СТОП: $br не в main и не запушена целиком"; exit 1; }
   echo "ветка $br не смержена, но запушена ($remote) — убираю только папку"
 fi
+# Живые процессы из worktree (next dev, nest, jest держат файлы и DLL Prisma): remove упадёт посреди удаления
+# и оставит полуудалённую папку. Shell-процессы не считаются — в их командной строке этот же путь.
+wtw=$(cygpath -w "$wt"); wtu=$(cygpath -u "$wt")
+procs=$(WTW="$wtw" WTU="$wtu" powershell -NoProfile -Command '
+  $w = $env:WTW.TrimEnd("\"); $u = $env:WTU.TrimEnd("/")
+  $skip = "bash.exe","sh.exe","powershell.exe","pwsh.exe","cmd.exe","conhost.exe","git.exe"
+  Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and ($skip -notcontains $_.Name) -and (
+      ($_.ExecutablePath -and $_.ExecutablePath -like "$w*") -or
+      ($_.CommandLine -and ($_.CommandLine -like "*$w*" -or $_.CommandLine -like "*$u*")))
+  } | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.Name }' 2>/dev/null | tr -d '\r')
+if [ -n "$procs" ]; then
+  echo "СТОП: из $wt работают процессы (останови их хозяина, preview_stop, или погаси по PID с согласия):"
+  echo "$procs" | sed 's/^/  /'
+  exit 1
+fi
 for nm in "$wt"/apps/*/node_modules "$wt"/node_modules; do
   [ -e "$nm" ] || continue
   w=$(cygpath -w "$nm")

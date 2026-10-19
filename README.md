@@ -35,8 +35,11 @@
 ## Новый компьютер
 
 1. `git clone https://github.com/Gorgog/ai-dev-hub.git W:\ai-dev-hub` (путь любой).
-2. `powershell -ExecutionPolicy Bypass -File W:\ai-dev-hub\sync-claude.ps1` — скиллы хаба подключаются
-   ссылками (junction) в `~/.claude/skills/`, агенты копируются в `~/.claude/agents/`.
+2. `powershell -ExecutionPolicy Bypass -File W:\ai-dev-hub\sync-claude.ps1`:
+   - скиллы хаба подключаются ссылками (junction) в `~/.claude/skills/`;
+   - агенты копируются в `~/.claude/agents/`, прежние версии уходят в бэкап;
+   - в `~/.claude/settings.json` ставится хук-замок диспетчера (с бэкапом настроек). Он действует только
+     в `projects/*/worktrees/*` и не пускает сессии к дев-серверам, базам и тяжёлым прогонам без разрешения.
 3. Проект — `/new-project имя` в сессии Claude Code из корня хаба. Папка `projects/` создаётся локально.
 
 ## Как пользоваться

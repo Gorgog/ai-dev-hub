@@ -1,0 +1,14 @@
+{
+  "_comment": "Правила замка диспетчера для guard.cjs (скилл dispatch). Правило срабатывает, если совпали ВСЕ заданные поля: tools — regex имени инструмента, commands — regex команды Bash/PowerShell, input — regex JSON входа инструмента. Привязывай регэкспы к форме запуска (npx jest, npm run dev), а не к слову: иначе заблокируется grep. Держи синхронно с разделом «Ресурсы» профиля. Ниже — пример для node-монорепо, поправь под проект.",
+  "heavy": [
+    { "name": "дев-серверы", "tools": "^mcp__Claude_Browser__preview_start$" },
+    { "name": "дев-серверы", "tools": "^(Bash|PowerShell)$", "commands": "npm\\s+run\\s+(dev|start)\\b" },
+    { "name": "проверка в браузере", "tools": "^mcp__(Claude_Browser|claude-in-chrome)__", "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]" },
+    { "name": "тесты с общей базой", "tools": "^(Bash|PowerShell)$", "commands": "npx\\s+jest\\b" },
+    { "name": "миграции и общая БД", "tools": "^(Bash|PowerShell)$", "commands": "prisma\\s+(migrate|db\\s+(push|seed|execute|pull))\\b|\\bpsql\\b" }
+  ],
+  "medium": [
+    { "name": "установка зависимостей", "tools": "^(Bash|PowerShell)$", "commands": "\\bnpm\\s+(ci|install|i)(\\s|$)" },
+    { "name": "полная сборка", "tools": "^(Bash|PowerShell)$", "commands": "npx\\s+tsc\\b|npm\\s+run\\s+build\\b" }
+  ]
+}

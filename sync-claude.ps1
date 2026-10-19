@@ -31,9 +31,26 @@ foreach ($s in Get-ChildItem $skillsSrc -Directory) {
 
 $agentsSrc = Join-Path $hub ".claude\agents"
 $agentsDst = Join-Path $dest "agents"
+$agentsBak = Join-Path $dest ("agents-backup-" + (Get-Date -Format "yyyy-MM-dd"))
 if (Test-Path $agentsSrc) {
     New-Item -ItemType Directory -Force $agentsDst | Out-Null
-    Copy-Item "$agentsSrc\*" $agentsDst -Force
+    foreach ($a in Get-ChildItem $agentsSrc -File) {
+        $t = Join-Path $agentsDst $a.Name
+        if ((Test-Path $t) -and ((Get-FileHash $t).Hash -ne (Get-FileHash $a.FullName).Hash)) {
+            New-Item -ItemType Directory -Force $agentsBak | Out-Null
+            Copy-Item $t (Join-Path $agentsBak $a.Name) -Force
+            Write-Host "backup    agents\$($a.Name) -> $agentsBak"
+        }
+        Copy-Item $a.FullName $t -Force
+    }
     Write-Host "copied    agents -> $agentsDst"
 }
-Write-Host "Done. New Claude Code sessions will see the hub skills and agents."
+
+# Dispatcher's resource lock: PreToolUse hook in ~/.claude/settings.json (acts only in projects/*/worktrees/*).
+$installGuard = Join-Path $hub ".claude\skills\dispatch\scripts\install-guard.cjs"
+if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path $installGuard)) {
+    node $installGuard
+} else {
+    Write-Host "skipped   guard hook: node not found (install Node.js and re-run)"
+}
+Write-Host "Done. New Claude Code sessions will see the hub skills, agents and the guard hook."
