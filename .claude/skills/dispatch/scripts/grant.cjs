@@ -5,15 +5,22 @@
 //   node grant.cjs <project-dir> grant <heavy|medium> <worktree> <minutes> "<what>"
 //   node grant.cjs <project-dir> release <heavy|medium> [<worktree>]
 // <worktree> = the worktree folder name (projects/<p>/worktrees/<worktree>), i.e. the branch from wt-new.sh.
+// A path to the worktree is accepted too and cut down to its folder name (guard.cjs compares names, not paths).
+// <project-dir> must contain dispatch-rules.json: a wrong path (e.g. /w/... read by PowerShell as W:\w\...) is refused.
 // One holder per kind. "grant" refuses while another worktree holds an unexpired grant (release it first).
 // The file is replaced atomically (temp file + rename) so the hook never reads half a file.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
-const [, , projectDir, cmd, kind, holder, minutes, ...whatParts] = process.argv;
+const [, , projectDir, cmd, kind, holderArg, minutes, ...whatParts] = process.argv;
 function die(msg) { process.stderr.write(msg + '\n'); process.exit(1); }
 if (!projectDir || !cmd) die('usage: grant.cjs <project-dir> show | grant <heavy|medium> <worktree> <minutes> "<what>" | release <heavy|medium> [<worktree>]');
+if (!fs.existsSync(path.join(projectDir, 'dispatch-rules.json'))) {
+  die(`refused: no dispatch-rules.json in ${path.resolve(projectDir)} — wrong project dir? (run from Bash, absolute path)`);
+}
+const holder = holderArg && path.posix.basename(holderArg.replace(/\\/g, '/').replace(/\/+$/, ''));
+if (holder && holder !== holderArg) console.log(`worktree: ${holder} (из пути ${holderArg})`);
 
 const file = path.join(projectDir, 'memory', 'dispatch-grants.json');
 let grants = {};

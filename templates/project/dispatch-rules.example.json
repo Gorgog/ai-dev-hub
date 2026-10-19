@@ -9,6 +9,7 @@
   ],
   "medium": [
     { "name": "установка зависимостей", "tools": "^(Bash|PowerShell)$", "commands": "\\bnpm\\s+(ci|install|i)(\\s|$)" },
-    { "name": "полная сборка", "tools": "^(Bash|PowerShell)$", "commands": "npx\\s+tsc\\b|npm\\s+run\\s+build\\b" }
+    { "name": "полная сборка", "tools": "^(Bash|PowerShell)$", "commands": "npx\\s+tsc\\b|npm\\s+run\\s+build\\b" },
+    { "name": "полный vitest", "tools": "^(Bash|PowerShell)$", "commands": "vitest\\s+run(\\s+--project\\s+\\S+)?\\s*($|[;&|)>]|\\d>)" }
   ]
 }
