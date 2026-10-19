@@ -1,9 +1,11 @@
 # Memory headroom before granting a heavy resource, plus dev-server port check.
 # ASCII only: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI and breaks Cyrillic.
-# usage: powershell -NoProfile -File headroom.ps1 [-Ports 3005,3001] [-MinGB 4]
-# exit: 0 - OK to grant; 2 - COMMIT headroom below MinGB; 3 - a port is busy or could not be checked.
+# usage: powershell -NoProfile -File headroom.ps1 [-Ports 3005,3001] [-MinGB 4] [-MinPhysGB 1]
+# exit: 0 - OK to grant; 2 - COMMIT headroom below MinGB; 3 - a port is busy or could not be checked;
+#       4 - free PHYSICAL memory below MinPhysGB: heavy may go alone, do not grant medium alongside it.
+#       (Pilot 2026-10-19: COMMIT headroom stayed > 12 GB while free physical fell to 0.5 GB.)
 # -Ports is a string: under -File PowerShell passes "3005,3001" as one token, an [int[]] param would glue it.
-param([string]$Ports = '', [double]$MinGB = 4)
+param([string]$Ports = '', [double]$MinGB = 4, [double]$MinPhysGB = 1)
 $PortList = @($Ports -split '[,; ]+' | Where-Object { $_ -ne '' })
 $os = Get-CimInstance Win32_OperatingSystem
 $limit = $os.TotalVirtualMemorySize / 1MB
@@ -35,6 +37,10 @@ foreach ($p in $PortList) {
     "port $p BUSY: PID $($c.OwningProcess) $name"
     if ($rc -eq 0) { $rc = 3 }
   } else { "port $p free" }
+}
+if ($rc -eq 0 -and $phys -lt $MinPhysGB) {
+  "LOW PHYSICAL: free physical below $MinPhysGB GB - heavy may run alone, no medium alongside it"
+  $rc = 4
 }
 if ($rc -eq 0) { 'OK' }
 exit $rc

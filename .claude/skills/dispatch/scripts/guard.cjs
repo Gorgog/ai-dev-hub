@@ -4,7 +4,8 @@
 // <hub>/projects/<project>/dispatch-rules.json. Then a tool call that matches a "heavy" or "medium" rule is
 // blocked (exit 2, reason on stderr -> shown to Claude) unless <project>/memory/dispatch-grants.json grants that
 // kind to this worktree (written by grant.cjs on the dispatcher's side) and the grant has not expired.
-// A heavy grant also covers medium. Anything else, or any internal error, is allowed (fail-open):
+// A heavy grant also covers medium. Every rule hit is journaled to <project>/memory/dispatch-guard.log
+// (one JSON line: time, worktree, granted/blocked, rule, command). Anything else, or any internal error, is allowed (fail-open):
 // the hook must never break sessions outside the dispatcher's scope.
 'use strict';
 const fs = require('fs');
@@ -57,7 +58,17 @@ function main() {
   try { grants = JSON.parse(fs.readFileSync(grantsPath, 'utf8')); } catch { grants = {}; }
   const now = Date.now();
   const valid = (g) => g && g.holder === where.holder && (!g.until || Date.parse(g.until) > now);
-  if (valid(grants[kind]) || (kind === 'medium' && valid(grants.heavy))) return allow();
+  // Journal of every rule hit (granted or blocked): proves the lock works and shows rules that misfire.
+  const log = (decision) => {
+    try {
+      const what = typeof (ev.tool_input || {}).command === 'string' ? ev.tool_input.command : JSON.stringify(ev.tool_input || {});
+      fs.appendFileSync(path.join(where.projectDir, 'memory', 'dispatch-guard.log'),
+        JSON.stringify({ at: new Date(now).toISOString(), worktree: where.holder, decision, kind, rule: hit.name,
+          tool: ev.tool_name, what: what.slice(0, 200) }) + '\n');
+    } catch { /* journal must never break the hook */ }
+  };
+  if (valid(grants[kind]) || (kind === 'medium' && valid(grants.heavy))) { log('granted'); return allow(); }
+  log('blocked');
 
   const label = kind === 'heavy' ? 'тяжёлое' : 'среднее';
   const cur = grants[kind];
