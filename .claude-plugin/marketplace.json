@@ -1,0 +1,8 @@
+{
+  "name": "hub",
+  "description": "ai-dev-hub: the hub itself is the plugin",
+  "owner": { "name": "Gorgog" },
+  "plugins": [
+    { "name": "hub", "source": "./", "description": "Base of ai-dev-hub: hooks, skills, agents" }
+  ]
+}

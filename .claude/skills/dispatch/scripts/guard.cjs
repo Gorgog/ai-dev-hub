@@ -7,15 +7,10 @@
 // A heavy grant also covers medium. Every rule hit is journaled to <project>/memory/dispatch-guard.log
 // (one JSON line: time, worktree, granted/blocked, rule, command). Anything else, or any internal error, is allowed (fail-open):
 // the hook must never break sessions outside the dispatcher's scope.
+// The plugin's hooks/pretool.cjs calls decide() in the same process; run as a script it is the old standalone hook.
 'use strict';
 const fs = require('fs');
 const path = require('path');
-
-function allow() { process.exit(0); }
-
-function readStdin() {
-  try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
-}
 
 function locate(cwd) {
   const norm = String(cwd || '').replace(/\\/g, '/');
@@ -34,14 +29,13 @@ function matches(rule, toolName, toolInput) {
   return Boolean(rule.tools || rule.commands || rule.input);
 }
 
-function main() {
-  let ev;
-  try { ev = JSON.parse(readStdin() || '{}'); } catch { return allow(); }
+// null — allow; { reason } — block.
+function decide(ev) {
   const where = locate(ev.cwd);
-  if (!where) return allow();
+  if (!where) return null;
 
   const rulesPath = path.join(where.projectDir, 'dispatch-rules.json');
-  if (!fs.existsSync(rulesPath)) return allow();
+  if (!fs.existsSync(rulesPath)) return null;
   const rules = JSON.parse(fs.readFileSync(rulesPath, 'utf8'));
 
   let kind = null, hit = null;
@@ -51,7 +45,7 @@ function main() {
     }
     if (kind) break;
   }
-  if (!kind) return allow();
+  if (!kind) return null;
 
   let grants = {};
   const grantsPath = path.join(where.projectDir, 'memory', 'dispatch-grants.json');
@@ -67,7 +61,7 @@ function main() {
           tool: ev.tool_name, what: what.slice(0, 200) }) + '\n');
     } catch { /* journal must never break the hook */ }
   };
-  if (valid(grants[kind]) || (kind === 'medium' && valid(grants.heavy))) { log('granted'); return allow(); }
+  if (valid(grants[kind]) || (kind === 'medium' && valid(grants.heavy))) { log('granted'); return null; }
   log('blocked');
 
   const label = kind === 'heavy' ? 'тяжёлое' : 'среднее';
@@ -78,11 +72,20 @@ function main() {
         ? `Твоё разрешение истекло (${t(cur.until)}).`
         : `Сейчас держит: ${cur.holder}${cur.what ? ' (' + cur.what + ')' : ''}${cur.until ? ' до ' + t(cur.until) : ''}.`)
     : 'Сейчас никто не держит.';
-  process.stderr.write(
+  return { reason:
     `Заблокировано замком диспетчера: «${hit.name}» — ${label}. ${busy}\n` +
     `Напиши диспетчеру: «Прошу ${hit.name} на ~N мин: <зачем>» и дождись «Разрешаю». Пока делай лёгкое.\n` +
-    `(worktree «${where.holder}», правила — ${rulesPath})\n`);
-  process.exit(2);
+    `(worktree «${where.holder}», правила — ${rulesPath})\n` };
 }
 
-try { main(); } catch { allow(); }
+if (require.main === module) {
+  try {
+    let ev = {};
+    try { ev = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { process.exit(0); }
+    const r = decide(ev);
+    if (r) { process.stderr.write(r.reason); process.exit(2); }
+  } catch { /* fail-open */ }
+  process.exit(0);
+}
+
+module.exports = { decide, locate };

@@ -1,0 +1,22 @@
+[
+  { "id": "cd-no-subshell", "tools": "^(Bash|PowerShell)$", "commands": "^\\s*cd\\s",
+    "text": "вызовы делят рабочую папку сессии: `cd` — только в подоболочке `( cd /abs && … )`, либо абсолютные пути и `git -C`" },
+  { "id": "git-add-all", "tools": "^(Bash|PowerShell)$", "commands": "\\bgit\\s+add\\s+(-A\\b|--all\\b|\\.(\\s|$))",
+    "text": "добавляй конкретные пути: `git add -A` / `.` затягивает чужое (agent-memory, мусор, файлы соседних правок)" },
+  { "id": "checkout-dot", "tools": "^(Bash|PowerShell)$", "commands": "\\bgit\\s+(checkout|restore)\\s+(--\\s+)?\\.(\\s|$)",
+    "text": "стирает всё незакоммиченное; статус — `git status --short`, откат — поимённо" },
+  { "id": "worktree-force", "tools": "^(Bash|PowerShell)$", "commands": "\\bgit\\s+worktree\\s+remove\\b[^|;&]*--force",
+    "text": "worktree с junction-ссылками: сначала снять ссылки, иначе --force сотрёт их цель; уборка — `wt-remove.sh`" },
+  { "id": "clean-x", "tools": "^(Bash|PowerShell)$", "commands": "\\bgit\\s+clean\\s+-\\w*x", "mode": "ask",
+    "text": "`git clean -x` сотрёт неотслеживаемое, в корне хаба — локальную память проектов" },
+  { "id": "heredoc-escapes", "tools": "^Bash$", "commands": "(<<\\s*'?\\w+'?|\\bnode\\s+-e\\b)[\\s\\S]*(\\\\|`|\\$\\{)",
+    "text": "текст с `\\`, обратными кавычками или `${` — через Write/Edit, скрипт — файлом: heredoc и `node -e` их портят" },
+  { "id": "sed-in-place", "tools": "^Bash$", "commands": "\\bsed\\s+(-\\w*\\s+)*-i",
+    "text": "`sed -i` в Git Bash переписывает CRLF в LF и молча не меняет UTF-8 — правь Edit-ом, после — `git diff --stat`" },
+  { "id": "agent-memory-write", "tools": "^(Edit|Write|MultiEdit)$", "input": "agent-memory",
+    "text": "агенты не пишут память в рабочий репозиторий: урок — строкой «Предлагаю в errors.md» в отчёте" },
+  { "id": "agent-memory-shell", "tools": "^Bash$", "commands": "(>>?|\\btee\\b|\\bcp\\b|\\bmv\\b)[^|;&]*agent-memory",
+    "text": "агенты не пишут память в рабочий репозиторий: урок — строкой «Предлагаю в errors.md» в отчёте" },
+  { "id": "push", "tools": "^(Bash|PowerShell)$", "commands": "\\bgit\\b(?![^|;&]*\\bstash\\b)[^|;&]*\\bpush\\b", "mode": "ask",
+    "text": "пуш — только по ответу пользователя, вид пуша решает он каждый раз" }
+]
