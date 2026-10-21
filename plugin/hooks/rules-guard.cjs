@@ -46,7 +46,15 @@ function readJson(file, warnings) {
 function loadRules(baseFile, projectDir) {
   const warnings = [];
   const base = readJson(baseFile, warnings) || [];
-  const proj = projectDir ? readJson(path.join(projectDir, 'rules.json'), warnings) || {} : {};
+  let proj = projectDir ? readJson(path.join(projectDir, 'rules.json'), warnings) || {} : {};
+  // The shape of rules.json: an array of rules, or {rules: [...], modes: {id: mode}} — anything else is reported.
+  const shape = (msg) => warnings.push(`rules.json: ${msg} — ожидается {"rules": [...], "modes": {...}} или массив правил`);
+  if (proj === null || (typeof proj !== 'object')) { shape(`верхний уровень ${JSON.stringify(proj)}`); proj = {}; }
+  if (!Array.isArray(proj)) {
+    for (const k of Object.keys(proj)) if (k !== 'rules' && k !== 'modes') shape(`лишний ключ «${k}»`);
+    if (proj.rules !== undefined && !Array.isArray(proj.rules)) { shape('«rules» не массив, правила проекта не действуют'); proj = { ...proj, rules: [] }; }
+    if (proj.modes !== undefined && (typeof proj.modes !== 'object' || proj.modes === null || Array.isArray(proj.modes))) { shape('«modes» не объект'); proj = { ...proj, modes: {} }; }
+  }
   const projRules = Array.isArray(proj) ? proj : proj.rules || [];
   const modes = Array.isArray(proj) ? {} : proj.modes || {};
   const rules = [];
