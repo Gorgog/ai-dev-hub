@@ -176,7 +176,9 @@ if (require.main === module) {
   if (!found) { console.error('checks.json не найден: нужен projects/<имя>/checks.json хаба выше папки или --config'); process.exit(2); }
   const cfg = JSON.parse(fs.readFileSync(found.file, 'utf8'));
   const repo = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-  const base = opt('--base') || cfg.base || 'origin/main';
+  // The background is one per project: it is recorded only against the project base, never a branch's --base.
+  const baseArg = opt('--base');
+  const base = (args.includes('--record-baseline') ? null : baseArg) || cfg.base || 'origin/main';
   const files = ownFiles(repo, base);
   const scratch = path.join(os.tmpdir(), `checks-${found.project}`);
   fs.mkdirSync(scratch, { recursive: true });
