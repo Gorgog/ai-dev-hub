@@ -96,11 +96,19 @@ function buildBrief(cwd, hub = HUB_ROOT) {
   const note = latestNote(proj.dir, branch);
   const tail = [];
   if (note) tail.push(`Последняя заметка этой ветки: ${note.file}`, note.next ? `Дальше:\n${note.next}` : '');
-  let idx = read(path.join(proj.dir, 'memory', 'errors-index.md'));
-  if (idx !== null) idx = pickSections(idx, readJsonSafe(path.join(proj.dir, 'brief.json')));
+  const raw = read(path.join(proj.dir, 'memory', 'errors-index.md'));
+  const room = BUDGET - head.join('\n').length - tail.join('\n').length - 200;
+  let idx = raw;
+  const cfg = readJsonSafe(path.join(proj.dir, 'brief.json'));
+  if (raw !== null && cfg && Array.isArray(cfg.indexSections)) {
+    // Too long with a long note? The last chosen sections step down to «по касанию» lines — pointers stay, nothing
+    // is cut in the middle.
+    const chosen = [...cfg.indexSections];
+    idx = pickSections(raw, { indexSections: chosen });
+    while (idx.length > room && chosen.length) { chosen.pop(); idx = pickSections(raw, { indexSections: chosen }); }
+  }
   let body = '';
   if (idx !== null) {
-    const room = BUDGET - head.join('\n').length - tail.join('\n').length - 200;
     body = idx.length <= room ? idx
       : `${idx.slice(0, Math.max(0, room)).replace(/\n[^\n]*$/, '')}\n… индекс обрезан под бюджет брифа — полностью: memory/errors-index.md`;
   }

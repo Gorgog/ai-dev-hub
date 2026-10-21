@@ -22,19 +22,37 @@ function pendingFile(cwd) {
   return path.join(gitDir, 'mutants-pending.json');
 }
 
+// Put a file back only if it still holds exactly the mutant this script wrote; anything else is someone's work —
+// keep it, keep the backup next to .git for a manual look, and say so.
 function recoverPending(cwd) {
   const pend = pendingFile(cwd);
-  if (!fs.existsSync(pend)) return [];
-  const list = JSON.parse(fs.readFileSync(pend, 'utf8'));
-  for (const p of list) fs.writeFileSync(p.file, p.original);
-  fs.unlinkSync(pend);
-  return list.map((p) => p.file);
+  if (!fs.existsSync(pend)) return { restored: [], untouched: [] };
+  const restored = [], untouched = [];
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(pend, 'utf8')); } catch { list = null; }
+  if (!Array.isArray(list)) {
+    const keep = `${pend}.broken-${Date.now()}`;
+    fs.renameSync(pend, keep);
+    return { restored, untouched: [`бэкап прошлого обрыва не читается — ${keep}, сверить файлы через git diff`] };
+  }
+  for (const p of list) {
+    let now = null;
+    try { now = fs.readFileSync(p.file, 'utf8'); } catch { /* gone */ }
+    if (now !== null && now === p.mutated) { fs.writeFileSync(p.file, p.original); restored.push(p.file); }
+    else untouched.push(p.file);
+  }
+  if (untouched.length) fs.renameSync(pend, `${pend}.kept-${Date.now()}`); else fs.unlinkSync(pend);
+  return { restored, untouched };
 }
 
 function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mutants-')) } = {}) {
   const results = [];
   const originals = new Map();
   const recovered = recoverPending(cfg.cwd);
+  const recoveryText = [
+    ...recovered.restored.map((f) => `восстановлен после обрыва: ${f} — прошлый прогон убит на мутанте`),
+    ...recovered.untouched.map((f) => `не тронут: ${f} — после обрыва файл уже менялся, бэкап оставлен в .git (mutants-pending.json.kept-*)`),
+  ];
   const pend = pendingFile(cfg.cwd);
   const step = (name) => ({ name, cmd: cfg.cmd, okOn: cfg.okOn, failOn: cfg.failOn, timeoutSec: cfg.timeoutSec });
   // Green without mutants first: otherwise every mutant would count as killed by a suite that is simply red.
@@ -42,7 +60,7 @@ function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'muta
   if (base.status !== 'OK') {
     const why = `без мутантов тесты красные (${base.log}) — сначала починить прогон`;
     const all = (cfg.mutants || []).map((m) => ({ id: m.id, status: 'ERROR', why }));
-    return { results: all, notRestored: [], text: `мутанты: не запускались — ${why}` };
+    return { results: all, notRestored: [], baselineRed: true, text: [...recoveryText, `мутанты: не запускались — ${why}`].join('\n') };
   }
   for (const m of cfg.mutants || []) {
     const file = path.join(cfg.cwd, m.file);
@@ -52,8 +70,9 @@ function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'muta
     if (count !== 1) { results.push({ id: m.id, status: 'ERROR', why: `find встречается ${count} раз(а)` }); continue; }
     if (!originals.has(file)) originals.set(file, src);
     try {
-      fs.writeFileSync(pend, JSON.stringify([{ file, original: src }]));
-      fs.writeFileSync(file, src.replace(m.find, () => m.replace)); // a function: «$» in replace stays literal
+      const mutated = src.replace(m.find, () => m.replace); // a function: «$» in replace stays literal
+      fs.writeFileSync(pend, JSON.stringify([{ file, original: src, mutated }]));
+      fs.writeFileSync(file, mutated);
       const [r] = runSteps([step(`mutant-${m.id}`)], { repo: cfg.cwd, files: [], scratch });
       results.push({ id: m.id, status: r.status === 'OK' ? 'SURVIVED' : 'KILLED', log: r.log });
     } finally {
@@ -64,7 +83,7 @@ function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'muta
   const notRestored = [...originals].filter(([f, src]) => fs.readFileSync(f, 'utf8') !== src).map(([f]) => f);
   const n = (s) => results.filter((r) => r.status === s).length;
   const text = [
-    ...recovered.map((f) => `восстановлен после обрыва: ${f} — прошлый прогон убит на мутанте`),
+    ...recoveryText,
     `мутанты: убито ${n('KILLED')} · выжило ${n('SURVIVED')} · пропущено ${n('SKIP') + n('ERROR')}`,
     ...results.filter((r) => r.status === 'SURVIVED').map((r) => `  выжил: ${r.id} — нужен тест, который его ловит`),
     ...results.filter((r) => r.status === 'SKIP' || r.status === 'ERROR').map((r) => `  ${r.status === 'SKIP' ? 'пропущен' : 'ошибка'}: ${r.id} — ${r.why}`),
@@ -73,7 +92,8 @@ function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'muta
   return { results, notRestored, text };
 }
 
-// Exit codes: 0 — every mutant killed, 1 — a mutant survived, 2 — the run itself failed (config, paths), 3 — a file
+// Exit codes: 0 — every mutant killed, 1 — a mutant survived, 2 — the run did not happen (config, paths, red tests
+// without mutants, a mutant that could not be applied), 3 — a file
 // was not put back.
 if (require.main === module) {
   const f = process.argv[2];
@@ -88,7 +108,8 @@ if (require.main === module) {
     process.exit(2);
   }
   console.log(res.text);
-  process.exit(res.notRestored.length ? 3 : res.results.some((r) => r.status === 'SURVIVED') ? 1 : 0);
+  const has = (s) => res.results.some((r) => r.status === s);
+  process.exit(res.notRestored.length ? 3 : res.baselineRed || has('ERROR') ? 2 : has('SURVIVED') ? 1 : 0);
 }
 
 module.exports = { runMutants, pendingFile };
