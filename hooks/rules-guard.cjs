@@ -38,7 +38,11 @@ function loadRules(baseFile, projectDir) {
   const projRules = Array.isArray(proj) ? proj : proj.rules || [];
   const modes = Array.isArray(proj) ? {} : proj.modes || {};
   const rules = [];
-  for (const r of [...(Array.isArray(base) ? base : []), ...projRules]) {
+  const all = [...(Array.isArray(base) ? base : []), ...(Array.isArray(projRules) ? projRules : [])];
+  const ids = new Set(all.filter((r) => r && typeof r === 'object').map((r) => r.id));
+  for (const id of Object.keys(modes)) if (!ids.has(id)) warnings.push(`modes: правила «${id}» нет — режим не действует`);
+  for (const r of all) {
+    if (!r || typeof r !== 'object') { warnings.push(`${JSON.stringify(r)} в rules.json — не правило, пропущено`); continue; }
     let mode = modes[r.id] || r.mode || 'log';
     if (!RANK[mode]) { warnings.push(`правило ${r.id}: режим «${mode}» неизвестен — действует как log`); mode = 'log'; }
     const bad = FIELDS.find((f) => { if (!r[f]) return false; try { new RegExp(r[f], 'i'); return false; } catch { return true; } });

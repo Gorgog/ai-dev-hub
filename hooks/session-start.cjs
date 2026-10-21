@@ -41,12 +41,14 @@ const TRUNKS = new Set(['main', 'master', 'develop', 'production']);
 function latestNote(dir, branch) {
   const sessions = path.join(dir, 'memory', 'sessions');
   if (!branch || TRUNKS.has(branch) || !fs.existsSync(sessions)) return null;
-  const key = branch.replace(/^.*\//, '').toLowerCase();
+  const key = branch.replace(/^.*\//, '');
+  // A whole key: K-7 does not catch K-7-2 (a sibling branch) or XK-7; K-7-review (a topic after it) is fine.
+  const re = new RegExp(`(^|[^\\w-]|-)${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w|-\\d)`, 'i');
   const notes = fs.readdirSync(sessions).filter((f) => f.endsWith('.md')).map((f) => {
     const file = path.join(sessions, f);
     const text = read(file) || '';
-    const title = (text.split(/\r?\n/).find((l) => l.trim()) || '').toLowerCase();
-    return { f, text, own: f.toLowerCase().includes(key) || title.includes(key), mtime: fs.statSync(file).mtimeMs };
+    const title = text.split(/\r?\n/).find((l) => l.trim()) || '';
+    return { f, text, own: re.test(f.replace(/\.md$/, '')) || re.test(title), mtime: fs.statSync(file).mtimeMs };
   }).filter((n) => n.own).sort((a, b) => b.mtime - a.mtime || b.f.localeCompare(a.f));
   if (!notes.length) return null;
   const m = notes[0].text.match(/^##\s*Дальше[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m);
