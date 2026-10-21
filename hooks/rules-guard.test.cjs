@@ -81,6 +81,12 @@ test('loadRules: project rules add to base, modes raise or lower a rule; broken 
   assert.ok(w.warnings.some((s) => /block/.test(s)), 'unknown mode is reported');
   assert.strictEqual(evaluate(bash('cd x && git push'), w.rules).decision, 'ask', 'an unknown mode falls back to log and does not swallow ask');
 
+  fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({ rules: [null, 7], modes: { 'git-push': 'deny' } }));
+  const odd = loadRules(SHIPPED, p);
+  assert.ok(odd.warnings.some((s) => /git-push/.test(s)), 'a mode for an unknown rule id is reported');
+  assert.ok(odd.warnings.some((s) => /не правило/.test(s)), 'a non-object rule is reported');
+  assert.strictEqual(evaluate(bash('git push'), odd.rules).decision, 'ask', 'base rules survive a broken project entry');
+
   fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify([{ id: 'arr', commands: 'zzz', text: 't' }]));
   const arr = loadRules(SHIPPED, p);
   assert.ok(arr.rules.some((r) => r.id === 'arr'), 'an array is read as a list of rules');

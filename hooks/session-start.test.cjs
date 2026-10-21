@@ -25,6 +25,8 @@ function project() {
   write(path.join(p, 'memory', 'sessions', '2026-10-01-k-7-old.md'), '# K-7 старое\n## Дальше\nстарое\n');
   write(path.join(p, 'memory', 'sessions', '2026-10-05-k-7-review.md'), '# K-7 ревью\n## Сделано\nx\n## Дальше\n1. Добить тест\n');
   write(path.join(p, 'memory', 'sessions', '2026-10-06-other.md'), '# K-9\nрядом упомянута K-7 одной строкой\n## Дальше\nчужое\n');
+  write(path.join(p, 'memory', 'sessions', '2026-10-07-k-7-2-next.md'), '# K-7-2 правка\n## Дальше\nсоседняя ветка\n');
+  write(path.join(p, 'memory', 'sessions', '2026-10-08-main-rebase.md'), '# Ребейз main\n## Дальше\nпро ствол\n');
   write(path.join(p, 'dispatch-rules.json'), '{ broken');
   return { hub, p, repo };
 }
@@ -36,7 +38,7 @@ test('brief: project, branch of repo/, changes, index, the latest note OF this b
   assert.match(b, /правило два/);
   assert.match(b, /2026-10-05-k-7-review\.md/);
   assert.match(b, /Добить тест/);
-  assert.doesNotMatch(b, /чужое|старое/);
+  assert.doesNotMatch(b, /чужое|старое|соседняя ветка/);
   assert.match(b, /dispatch-rules\.json/);
   assert.ok(b.length <= BUDGET);
 });
@@ -51,7 +53,7 @@ test('brief: no note on main; a big index is cut to the budget with a pointer', 
   execFileSync('git', ['switch', '-q', 'main'], { cwd: repo });
   write(path.join(p, 'memory', 'errors-index.md'), '# Индекс\n' + '- длинное правило про всё на свете\n'.repeat(1000));
   const b = buildBrief(repo, hub);
-  assert.doesNotMatch(b, /Последняя заметка/);
+  assert.doesNotMatch(b, /Последняя заметка|про ствол/);
   assert.ok(b.length <= BUDGET, `length ${b.length}`);
   assert.match(b, /обрезан.*errors-index\.md/);
 });
