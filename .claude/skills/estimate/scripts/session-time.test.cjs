@@ -13,6 +13,8 @@ const human = (min, text) => ({ type: 'user', timestamp: at(min), message: { rol
 const said = (min, text) => ({ type: 'assistant', timestamp: at(min), message: { content: [{ type: 'text', text }] } });
 const toolUse = (min) => ({ type: 'assistant', timestamp: at(min), message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'echo EST-START TASK-1' } }] } });
 const toolResult = (min) => ({ type: 'user', timestamp: at(min), message: { content: [{ type: 'tool_result', content: 'ok' }] } });
+const callTool = (min, name, id) => ({ type: 'assistant', timestamp: at(min), message: { content: [{ type: 'tool_use', id, name, input: {} }] } });
+const answerTool = (min, id) => ({ type: 'user', timestamp: at(min), message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'answer' }] } });
 
 function transcript(dir, name, lines) {
   fs.mkdirSync(dir, { recursive: true });
@@ -34,11 +36,13 @@ const LINES = [
   said(70, 'готово'),
 ];
 
+// The 30-min answer in LINES (said 20 → human 50): 20 min of waiting, the rest the user was away (pause).
 test('whole transcript: active and waiting split at human messages', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
   const r = measure(parseFile(transcript(dir, 'a.jsonl', LINES)));
   assert.strictEqual(r.activeMin, 1 + 9 + 1 + 9 + 5 + 5 + 5);
-  assert.strictEqual(r.waitMin, 30 + 5);
+  assert.strictEqual(r.waitMin, 20 + 5);
+  assert.strictEqual(r.pauseMin, 10);
   assert.strictEqual(r.humanMessages, 2);
 });
 
@@ -46,7 +50,7 @@ test('key window: from EST-START to EST-END in assistant text only', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
   const r = measure(parseFile(transcript(dir, 'a.jsonl', LINES)), { key: 'TASK-1' });
   assert.strictEqual(r.activeMin, 9 + 1 + 9 + 5);
-  assert.strictEqual(r.waitMin, 30);
+  assert.strictEqual(r.waitMin, 20);
   assert.strictEqual(r.humanMessages, 1);
   assert.strictEqual(r.ended, true);
 });
@@ -57,7 +61,35 @@ test('key without EST-END runs to the end of the transcript', () => {
   const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)), { key: 'TASK-1' });
   assert.strictEqual(r.ended, false);
   assert.strictEqual(r.activeMin, 9 + 1 + 9 + 5 + 5);
-  assert.strictEqual(r.waitMin, 30 + 10);
+  assert.strictEqual(r.waitMin, 20 + 10);
+});
+
+test('a human answer after a night: 20 min of waiting, the rest is a pause', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const r = measure(parseFile(transcript(dir, 'a.jsonl', [human(0, 'go'), said(1, 'Пушить?'), human(301, 'да')])));
+  assert.strictEqual(r.activeMin, 1);
+  assert.strictEqual(r.waitMin, 20);
+  assert.strictEqual(r.pauseMin, 280);
+  assert.strictEqual(r.humanMessages, 1);
+});
+
+for (const name of ['AskUserQuestion', 'ExitPlanMode']) {
+  test(`an answer to ${name} is the user's waiting, not work`, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+    const lines = [human(0, 'go'), callTool(1, name, 'q1'), answerTool(4, 'q1'), said(5, 'ok')];
+    const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)));
+    assert.strictEqual(r.activeMin, 1 + 1);
+    assert.strictEqual(r.waitMin, 3);
+    assert.strictEqual(r.humanMessages, 1);
+  });
+}
+
+test('a result of an ordinary tool stays active', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const lines = [human(0, 'go'), callTool(1, 'Bash', 'b1'), answerTool(4, 'b1'), said(5, 'ok')];
+  const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)));
+  assert.strictEqual(r.activeMin, 5);
+  assert.strictEqual(r.waitMin, 0);
 });
 
 test('TASK-1 does not match TASK-12', () => {
@@ -74,7 +106,7 @@ test('findByKey sums rounds across transcripts', () => {
   const r = findByKey(root, 'TASK-1');
   assert.strictEqual(r.rounds.length, 2);
   assert.strictEqual(r.total.activeMin, 24 + 10);
-  assert.strictEqual(r.total.waitMin, 30);
+  assert.strictEqual(r.total.waitMin, 20);
 });
 
 test('findByKey counts a forked transcript (a copy of the history) once', () => {
@@ -85,7 +117,7 @@ test('findByKey counts a forked transcript (a copy of the history) once', () => 
   transcript(path.join(root, 'proj'), 'fork.jsonl', [...withIds, { ...said(80, 'дальше в форке'), uuid: 'f1' }]);
   const r = findByKey(root, 'TASK-1');
   assert.strictEqual(r.total.activeMin, 24);
-  assert.strictEqual(r.total.waitMin, 30);
+  assert.strictEqual(r.total.waitMin, 20);
   assert.strictEqual(r.total.humanMessages, 1);
 });
 
