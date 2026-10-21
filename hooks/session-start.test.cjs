@@ -1,0 +1,54 @@
+// node --test session-start.test.cjs
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const { buildBrief, BUDGET } = require('./session-start.cjs');
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ss-'));
+const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
+
+function project() {
+  const hub = tmp();
+  const p = path.join(hub, 'projects', 'demo');
+  const repo = path.join(p, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+  write(path.join(repo, 'a.txt'), '1'); git('add', '.'); git('commit', '-q', '-m', 'x');
+  git('switch', '-q', '-c', 'K-7');
+  write(path.join(repo, 'b.txt'), 'new');
+  write(path.join(p, 'memory', 'errors-index.md'), '# Индекс\n- правило один\n- правило два\n');
+  write(path.join(p, 'memory', 'sessions', '2026-10-01-old.md'), '# K-7 старое\n## Дальше\nстарое\n');
+  write(path.join(p, 'memory', 'sessions', '2026-10-05-new.md'), '# K-7 ревью\n## Сделано\nx\n## Дальше\n1. Добить тест\n');
+  write(path.join(p, 'memory', 'sessions', '2026-10-06-other.md'), '# K-9\n## Дальше\nчужое\n');
+  write(path.join(p, 'dispatch-rules.json'), '{ broken');
+  return { hub, p, repo };
+}
+
+test('brief: project, branch, changes, index, the latest note of this branch, preflight warnings', () => {
+  const { repo } = project();
+  const b = buildBrief(repo);
+  assert.match(b, /demo · ветка K-7 · изменённых 1/);
+  assert.match(b, /правило два/);
+  assert.match(b, /2026-10-05-new\.md/);
+  assert.match(b, /Добить тест/);
+  assert.doesNotMatch(b, /чужое|старое/);
+  assert.match(b, /dispatch-rules\.json/);
+  assert.ok(b.length <= BUDGET);
+});
+
+test('brief: a big index is cut to the budget with a pointer to the file', () => {
+  const { p, repo } = project();
+  write(path.join(p, 'memory', 'errors-index.md'), '# Индекс\n' + '- длинное правило про всё на свете\n'.repeat(1000));
+  const b = buildBrief(repo);
+  assert.ok(b.length <= BUDGET, `length ${b.length}`);
+  assert.match(b, /обрезан.*errors-index\.md/);
+});
+
+test('brief: silent outside a hub project', () => {
+  assert.strictEqual(buildBrief(tmp()), '');
+});
