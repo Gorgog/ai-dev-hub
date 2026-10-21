@@ -79,6 +79,16 @@ test('runSteps: no own files -> SKIP, failing command -> FAIL, filterOwn ignores
   assert.ok(fs.existsSync(res[1].log));
 });
 
+test('failOn: exit 0 with a failure line in the output is a FAIL (runners that lie with their exit code)', () => {
+  const r = tmp();
+  const res = runSteps([
+    { name: 'lies', failOn: 'Tests\\s+\\d+ failed', cmd: 'node -e "console.log(\'Tests  2 failed | 10 passed\')"' },
+    { name: 'honest', failOn: 'Tests\\s+\\d+ failed', cmd: 'node -e "console.log(\'Tests  12 passed\')"' },
+  ], { repo: r, files: [], scratch: tmp() });
+  assert.deepStrictEqual(res.map((x) => x.status), ['FAIL', 'OK']);
+  assert.deepStrictEqual(res[0].lines, ['Tests  2 failed | 10 passed']);
+});
+
 test('summarize: one line per step, errors under FAIL, exit code 1 on any FAIL', () => {
   const s = summarize([
     { name: 'fmt', status: 'OK', ms: 1200, log: 'L1' },
