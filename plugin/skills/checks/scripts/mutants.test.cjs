@@ -41,6 +41,36 @@ test('mutants: killed, survived, find not unique, dirty file skipped; every file
   assert.match(res.text, /выжил: limit-11/);
 });
 
+test('mutants: a run killed mid-mutant leaves a backup; the next run restores the file before anything else', () => {
+  const r = repo();
+  const original = fs.readFileSync(path.join(r, 'calc.js'), 'utf8');
+  const { pendingFile } = require('./mutants.cjs');
+  // What a killed run leaves: the mutated file and its pending backup.
+  const pend = pendingFile(r);
+  fs.mkdirSync(path.dirname(pend), { recursive: true });
+  fs.writeFileSync(pend, JSON.stringify([{ file: path.join(r, 'calc.js'), original }]));
+  fs.writeFileSync(path.join(r, 'calc.js'), original.replace('a + b', 'a - b'));
+  const res = runMutants({ cwd: r, cmd: 'node check.js', mutants: [] }, { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
+  assert.strictEqual(fs.readFileSync(path.join(r, 'calc.js'), 'utf8'), original);
+  assert.match(res.text, /восстановлен после обрыва: .*calc\.js/);
+  assert.ok(!fs.existsSync(pend));
+});
+
+test('mutants: «$» in replace is literal, not a replacement pattern', () => {
+  const r = repo();
+  const res = runMutants({ cwd: r, cmd: 'node check.js', mutants: [{ id: 'dollar', file: 'calc.js', find: 'limit = 10', replace: "limit = '$&$$'" }] },
+    { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
+  assert.deepStrictEqual(res.results.map((x) => x.status), ['SURVIVED']);
+});
+
+test('mutants CLI: a broken config is exit 2, not the «survived» code', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mu-c-'));
+  fs.writeFileSync(path.join(dir, 'm.json'), '{ broken');
+  let code = 0;
+  try { execFileSync('node', [path.join(__dirname, 'mutants.cjs'), path.join(dir, 'm.json')], { stdio: 'pipe' }); } catch (e) { code = e.status; }
+  assert.strictEqual(code, 2);
+});
+
 test('mutants: tests red without any mutant — nothing is counted as killed', () => {
   const r = repo();
   const res = runMutants({ cwd: r, cmd: 'node -e "process.exit(1)"', mutants: [{ id: 'add-minus', file: 'calc.js', find: 'a + b', replace: 'a - b' }] },

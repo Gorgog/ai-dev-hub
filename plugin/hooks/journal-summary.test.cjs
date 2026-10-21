@@ -30,6 +30,13 @@ test('summary: per rule and mode, count, last command; only since the given time
   assert.match(s, /кандидат в deny: cd-no-subshell/);
 });
 
+test('summary: --since is a moment, whatever its time zone', () => {
+  const p = journal([{ at: '2026-10-21T04:24:00.000Z', id: 'cd-no-subshell', mode: 'log', what: 'cd a' }]);
+  assert.match(summarize(p, { since: '2026-10-21T07:00+03:00' }), /×1/);
+  assert.match(summarize(p, { since: '2026-10-21T08:00+03:00' }), /срабатываний нет/);
+  assert.throws(() => summarize(p, { since: 'вчера' }), /since/);
+});
+
 test('summary: no journal or nothing since — one quiet line', () => {
   const p = fs.mkdtempSync(path.join(os.tmpdir(), 'js-'));
   assert.match(summarize(p, {}), /срабатываний нет/);
