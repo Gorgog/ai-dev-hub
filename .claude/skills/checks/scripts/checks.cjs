@@ -80,7 +80,7 @@ function runSteps(steps, { repo, files, scratch }) {
     const r = spawnSync(render(step.cmd, { files: sel, scratch }), {
       shell: true, cwd: path.join(repo, step.cwd || ''), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
     });
-    const out = `${r.stdout || ''}${r.stderr || ''}${r.error ? String(r.error) : ''}`;
+    const out = `${r.stdout || ''}${r.stderr || ''}${r.error ? String(r.error) : ''}`.replace(/\x1b\[[0-9;]*m/g, '');
     fs.writeFileSync(log, out);
     let status, lines;
     if (step.filterOwn) {
