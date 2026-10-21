@@ -17,7 +17,7 @@ else
   git -C "$repo" worktree add --no-track -b "$br" "$wt" "$base"
 fi
 for f in "$@"; do
-  if [ -f "$repo/$f" ] && [ ! -e "$wt/$f" ]; then cp "$repo/$f" "$wt/$f"; echo "скопирован $f"; fi
+  if [ -f "$repo/$f" ] && [ ! -e "$wt/$f" ]; then mkdir -p "$(dirname "$wt/$f")"; cp "$repo/$f" "$wt/$f"; echo "скопирован $f"; fi
 done
 echo "worktree: $wt"
 git -C "$wt" log -1 --format='HEAD %h %s'

@@ -10,6 +10,9 @@
 # Личное: имя пользователя, язык ответов (образец — CLAUDE.local.md.example)
 /CLAUDE.local.md
 
+# Личный список запретных имён для pre-commit (рабочие проекты, ключи задач, студии)
+/.githooks/private-patterns
+
 # Локальные настройки Claude Code
 .claude/settings.local.json
 **/.claude/settings.local.json

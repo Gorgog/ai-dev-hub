@@ -1,0 +1,26 @@
+#!/bin/sh
+# Blocks a commit whose added lines match a private pattern: names of work projects, task keys, studio names.
+# Patterns live in .githooks/private-patterns (untracked, one extended regex per line, case-insensitive,
+# '#' starts a comment). No patterns file -> no check. Enabled by sync-claude.ps1 (core.hooksPath .githooks).
+# ASCII only.
+root=$(git rev-parse --show-toplevel) || exit 0
+src="$root/.githooks/private-patterns"
+[ -f "$src" ] || exit 0
+pat=$(mktemp)
+trap 'rm -f "$pat"' EXIT
+tr -d '\r' < "$src" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' > "$pat"
+[ -s "$pat" ] || exit 0
+found=0
+for f in $(git diff --cached --name-only --diff-filter=ACMR); do
+  hits=$(git diff --cached -U0 --no-color -- "$f" | grep '^+' | grep -v '^+++' | grep -i -E -f "$pat")
+  if [ -n "$hits" ]; then
+    found=1
+    echo "private pattern in $f:" >&2
+    echo "$hits" | head -5 >&2
+  fi
+done
+if [ "$found" = 1 ]; then
+  echo "Commit blocked: remove private names (see .githooks/private-patterns) or move the text out of the hub." >&2
+  exit 1
+fi
+exit 0

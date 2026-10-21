@@ -53,4 +53,10 @@ if ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path $installGua
 } else {
     Write-Host "skipped   guard hook: node not found (install Node.js and re-run)"
 }
+
+# Hub's own git hooks: pre-commit blocks private names (.githooks/private-patterns, untracked) from this public repo.
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    git -C $hub config core.hooksPath .githooks
+    Write-Host "set       git hooks of the hub -> .githooks (add your private names to .githooks/private-patterns)"
+}
 Write-Host "Done. New Claude Code sessions will see the hub skills, agents and the guard hook."
