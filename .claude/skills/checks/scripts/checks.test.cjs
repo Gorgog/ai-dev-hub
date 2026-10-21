@@ -99,6 +99,39 @@ test('okOn: a success line beats a noisy non-zero exit, but not a failOn line', 
   assert.deepStrictEqual(res.map((x) => x.status), ['OK', 'FAIL', 'FAIL', 'OK']);
 });
 
+test('filterOwn matches the whole path: own src/index.ts does not catch src/index.tsx', () => {
+  assert.deepStrictEqual(filterOwn('src/index.tsx(1,1): error TS1\nsrc/index.ts(2,2): error TS2', ['src/index.ts']),
+    ['src/index.ts(2,2): error TS2']);
+});
+
+test('filterOwn step: a command that did not run is a FAIL, not a silent OK', () => {
+  const r = tmp();
+  const res = runSteps([
+    { name: 'nocwd', cwd: 'nope', filterOwn: true, cmd: 'node -e "process.exit(0)"' },
+    { name: 'nocmd', filterOwn: true, cmd: 'definitely-not-a-cmd-xyz' },
+    { name: 'slow', timeoutSec: 1, cmd: 'node -e "setTimeout(()=>{},5000)"' },
+  ], { repo: r, files: ['src/a.ts'], scratch: tmp() });
+  assert.deepStrictEqual(res.map((x) => x.status), ['FAIL', 'FAIL', 'FAIL']);
+});
+
+test('baseline: an error new against the recorded background fails even outside own files', () => {
+  const r = tmp();
+  const bdir = tmp();
+  fs.writeFileSync(path.join(bdir, 'types.txt'), 'src/old.ts: error TS1: old\n');
+  const step = (lines) => ({ name: 'types', filterOwn: true, baseline: true,
+    cmd: `node -e "console.log(${JSON.stringify(lines.join('\n')).replace(/"/g, '\\"')});process.exit(2)"` });
+  const ctx = { repo: r, files: ['src/a.ts'], scratch: tmp(), baselineDir: bdir };
+  const [same] = runSteps([step(['src/old.ts(9,9): error TS1: old'])], ctx);
+  const [consumer] = runSteps([step(['src/old.ts(1,1): error TS1: old', 'src/b.ts(3,3): error TS2: broke'])], ctx);
+  const [own] = runSteps([step(['src/a.ts(1,1): error TS3: mine'])], ctx);
+  assert.strictEqual(same.status, 'OK');
+  assert.strictEqual(consumer.status, 'FAIL');
+  assert.deepStrictEqual(consumer.lines, ['src/b.ts(3,3): error TS2: broke']);
+  assert.strictEqual(own.status, 'FAIL');
+  const [nobase] = runSteps([step(['src/b.ts(3,3): error TS2: broke'])], { ...ctx, baselineDir: tmp() });
+  assert.strictEqual(nobase.status, 'WARN');
+});
+
 test('summarize: one line per step, errors under FAIL, exit code 1 on any FAIL', () => {
   const s = summarize([
     { name: 'fmt', status: 'OK', ms: 1200, log: 'L1' },
