@@ -66,9 +66,10 @@ function render(cmd, { files = [], scratch = '' }) {
   return cmd.replace(/\{files\}/g, files.map((f) => `"${f}"`).join(' ')).replace(/\{scratch\}/g, scratch);
 }
 
-// Lines that name an own file as a whole path (src/index.ts does not catch src/index.tsx), whatever the slash.
+// Lines that name an own file as a whole path (src/index.ts does not catch src/index.tsx or xsrc/index.ts), whatever
+// the slash, relative, ./ or absolute.
 function filterOwn(output, files) {
-  const own = files.map((f) => new RegExp(`(^|[^\\w./-])${escape(f.replace(/\\/g, '/'))}(?![\\w.])`));
+  const own = files.map((f) => new RegExp(`(^|[^\\w-])${escape(f.replace(/\\/g, '/'))}(?![\\w.])`));
   return output.split(/\r?\n/).filter((l) => own.some((re) => re.test(l.replace(/\\/g, '/'))));
 }
 
@@ -135,6 +136,13 @@ function runSteps(steps, { repo, files, scratch, baselineDir }) {
   });
 }
 
+// A background recorded on a branch would hide that branch's own breakage — only a clean checkout of the base.
+function baselineRefusal({ head, base, own }) {
+  if (head !== base) return `HEAD ${head} не база ${base}: фон пишется только на чистом checkout базы`;
+  if (own) return `есть свои правки (${own} файлов): фон пишется только на чистом checkout базы`;
+  return null;
+}
+
 // Background errors of the base: run on a clean checkout of the base, once per base move.
 function recordBaseline(steps, { repo, scratch, baselineDir }) {
   fs.mkdirSync(baselineDir, { recursive: true });
@@ -174,17 +182,24 @@ if (require.main === module) {
   fs.mkdirSync(scratch, { recursive: true });
   const baselineDir = path.join(path.dirname(found.file), 'checks-baseline');
   const head = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  const baseSha = execFileSync('git', ['rev-parse', '--short', base], { cwd: repo, encoding: 'utf8' }).trim();
+  const stamp = path.join(baselineDir, 'BASE');
   if (args.includes('--record-baseline')) {
-    const baseSha = execFileSync('git', ['rev-parse', '--short', base], { cwd: repo, encoding: 'utf8' }).trim();
-    console.log(`фон с HEAD ${head} (база ${base} = ${baseSha})${head === baseSha && !files.length ? '' : ' — ВНИМАНИЕ: HEAD не база или есть свои правки'}`);
+    const refusal = baselineRefusal({ head, base: baseSha, own: files.length });
+    if (refusal) { console.error(refusal); process.exit(1); }
     console.log(recordBaseline(cfg.full || [], { repo, scratch, baselineDir }).join('\n'));
+    fs.writeFileSync(stamp, `${baseSha}\n`);
+    console.log(`фон записан с базы ${base} = ${baseSha}`);
     process.exit(0);
   }
   const count = execFileSync('git', ['rev-list', '--count', `${base}..HEAD`], { cwd: repo, encoding: 'utf8' }).trim();
   console.log(`checks ${full ? 'full' : 'fast'} · своих файлов ${files.length} · HEAD ${head} · коммитов от ${base}: ${count}`);
+  if (full && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() !== baseSha) {
+    console.log(`  фон снят с ${fs.readFileSync(stamp, 'utf8').trim()}, база уже ${baseSha}: возможен ложный FAIL — фон перепишет тот, кто на чистой базе`);
+  }
   const s = summarize(runSteps((full ? cfg.full : cfg.fast) || [], { repo, files, scratch, baselineDir }));
   console.log(s.text);
   process.exit(s.code);
 }
 
-module.exports = { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize };
+module.exports = { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize, baselineRefusal };

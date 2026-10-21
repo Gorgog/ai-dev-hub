@@ -1,0 +1,12 @@
+{
+  "base": "origin/main",
+  "fast": [
+    { "name": "format", "cwd": "app", "glob": "app/**/*.{ts,tsx,js,json,css}", "cmd": "npx prettier --write {files}" },
+    { "name": "types", "cwd": "app", "glob": "app/**/*.{ts,tsx}", "filterOwn": true, "cmd": "npx tsc --noEmit" },
+    { "name": "tests", "cwd": "app", "glob": "app/src/**/*.{ts,tsx}", "okOn": "Tests\\s+\\d+ passed|No test files found", "failOn": "Test Files\\s+\\d+ failed|Tests\\s+\\d+ failed", "cmd": "npx vitest related {files} --run --passWithNoTests" }
+  ],
+  "full": [
+    { "name": "types", "cwd": "app", "filterOwn": true, "baseline": true, "cmd": "npx tsc --noEmit" },
+    { "name": "tests", "cwd": "app", "okOn": "Tests\\s+\\d+ passed", "failOn": "Test Files\\s+\\d+ failed|Tests\\s+\\d+ failed", "cmd": "npx vitest run" }
+  ]
+}
