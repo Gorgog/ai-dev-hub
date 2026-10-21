@@ -58,6 +58,23 @@ test('brief: no note on main; a big index is cut to the budget with a pointer', 
   assert.match(b, /обрезан.*errors-index\.md/);
 });
 
+test('brief.json: chosen index sections in full, the others as one line each with their keys', () => {
+  const { hub, p, repo } = project();
+  write(path.join(p, 'memory', 'errors-index.md'), [
+    '# Индекс', 'шапка',
+    '## Git: коммиты — ключи: `git add`', '- правило гита', '',
+    '## kubb и OpenAPI — ключи: `kubb generate`', '- ' + 'длинное правило kubb '.repeat(600), '',
+    '## Шелл Windows — ключи: `heredoc`', '- правило шелла', '',
+  ].join('\n'));
+  write(path.join(p, 'brief.json'), JSON.stringify({ indexSections: ['Git', 'Шелл'] }));
+  const b = buildBrief(repo, hub);
+  assert.match(b, /правило гита/);
+  assert.match(b, /правило шелла/);
+  assert.doesNotMatch(b, /длинное правило kubb/);
+  assert.match(b, /по касанию: kubb и OpenAPI — ключи: `kubb generate`/);
+  assert.doesNotMatch(b, /обрезан/);
+});
+
 test('brief: silent outside a project of this hub', () => {
   const { hub } = project();
   assert.strictEqual(buildBrief(tmp(), hub), '');
