@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Install the hub as the Claude Code plugin `hub` from this folder (a local marketplace, read in place: edits
-// apply from the next session). Writes ~/.claude/settings.json (backup first): the marketplace `hub` and the
+// Install the hub as the Claude Code plugin `hub` from this folder (a local marketplace; Claude Code keeps a cached
+// copy tied to the hub's commit, so after edits: commit, then update — this script runs `claude plugin marketplace
+// update hub` and `claude plugin update hub@hub` when the CLI is there). Writes ~/.claude/settings.json (backup first): the marketplace `hub` and the
 // enabled plugin `hub@hub`; removes what the old install left — the user-level guard hook (now the plugin's
 // PreToolUse), junctions of hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
 // (moved to a backup, never deleted). Idempotent. usage: node install.cjs [--dry-run]
@@ -69,5 +70,14 @@ for (const name of fs.existsSync(path.join(plugin, 'agents')) ? fs.readdirSync(p
   if (fs.existsSync(dest)) dest = path.join(bakDir, `${Date.now()}-${name}`);
   if (!dry) { fs.mkdirSync(bakDir, { recursive: true }); fs.renameSync(p, dest); }
   say(`moved    agents/${name} -> ${bakDir} (the plugin provides hub:${name.replace(/\.md$/, '')})`);
+}
+// Refresh the cached copy of the plugin to the current commit (the CLI may be missing or not signed in — then say how).
+if (!dry) {
+  const { spawnSync } = require('child_process');
+  const cli = (args) => spawnSync('claude', args, { encoding: 'utf8', shell: process.platform === 'win32' });
+  const m = cli(['plugin', 'marketplace', 'update', 'hub']);
+  const u = m.status === 0 ? cli(['plugin', 'update', 'hub@hub']) : m;
+  const out = `${u.stdout || ''}${u.stderr || ''}`.trim().split('\n').pop();
+  say(u.status === 0 ? `plugin:  ${out}` : 'plugin:  claude CLI недоступен — обнови вручную: claude plugin marketplace update hub && claude plugin update hub@hub');
 }
 say('Done. Start a NEW Claude Code session: skills /hub:*, agents hub:*, hooks of the plugin load at session start.');
