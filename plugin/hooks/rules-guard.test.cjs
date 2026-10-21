@@ -75,6 +75,11 @@ test('loadRules: project rules add to base, modes raise or lower a rule; broken 
   fs.writeFileSync(path.join(p, 'rules.json'), '{ broken');
   assert.match(loadRules(SHIPPED, p).warnings[0], /rules\.json/);
 
+  for (const shape of [{ rules: { id: 'one', commands: 'zzz', mode: 'deny' } }, { rules: 'oops' }, 5, { rule: [] }, { modes: 'deny' }]) {
+    fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify(shape));
+    assert.ok(loadRules(SHIPPED, p).warnings.length, `a wrong shape is reported: ${JSON.stringify(shape)}`);
+  }
+
   fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({ rules: [{ id: 'bad', commands: '(' , text: 't' }], modes: { 'cd-no-subshell': 'block' } }));
   const w = loadRules(SHIPPED, p);
   assert.ok(w.warnings.some((s) => /bad/.test(s)), 'broken regex is reported');
