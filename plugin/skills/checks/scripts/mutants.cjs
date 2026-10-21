@@ -109,7 +109,8 @@ if (require.main === module) {
   }
   console.log(res.text);
   const has = (s) => res.results.some((r) => r.status === s);
-  process.exit(res.notRestored.length ? 3 : res.baselineRed || has('ERROR') ? 2 : has('SURVIVED') ? 1 : 0);
+  const ran = has('KILLED') || has('SURVIVED');
+  process.exit(res.notRestored.length ? 3 : res.baselineRed || has('ERROR') || !ran ? 2 : has('SURVIVED') ? 1 : 0);
 }
 
 module.exports = { runMutants, pendingFile };
