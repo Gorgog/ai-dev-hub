@@ -75,6 +75,21 @@ test('brief.json: chosen index sections in full, the others as one line each wit
   assert.doesNotMatch(b, /обрезан/);
 });
 
+test('brief.json: when chosen sections and a long note do not fit, the last chosen sections become «по касанию» — nothing is cut', () => {
+  const { hub, p, repo } = project();
+  const big = (name) => [`## ${name} — ключи: \`${name}\``, '- ' + `правило ${name} `.repeat(220)].join('\n');
+  write(path.join(p, 'memory', 'errors-index.md'), ['# Индекс', big('Git'), big('Шелл'), big('Мутации'), big('kubb')].join('\n\n'));
+  write(path.join(p, 'brief.json'), JSON.stringify({ indexSections: ['Git', 'Шелл', 'Мутации'] }));
+  write(path.join(p, 'memory', 'sessions', '2026-10-09-k-7-long.md'), '# K-7 длинная\n## Дальше\n' + 'шаг дальше '.repeat(130) + '\n');
+  const b = buildBrief(repo, hub);
+  assert.ok(b.length <= BUDGET, `length ${b.length}`);
+  assert.doesNotMatch(b, /обрезан/);
+  assert.match(b, /правило Git/);
+  assert.match(b, /по касанию: Мутации/);
+  assert.match(b, /по касанию: kubb/);
+  assert.match(b, /шаг дальше/);
+});
+
 test('brief: silent outside a project of this hub', () => {
   const { hub } = project();
   assert.strictEqual(buildBrief(tmp(), hub), '');

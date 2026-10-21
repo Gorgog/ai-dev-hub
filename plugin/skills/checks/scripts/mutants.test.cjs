@@ -48,19 +48,58 @@ test('mutants: a run killed mid-mutant leaves a backup; the next run restores th
   // What a killed run leaves: the mutated file and its pending backup.
   const pend = pendingFile(r);
   fs.mkdirSync(path.dirname(pend), { recursive: true });
-  fs.writeFileSync(pend, JSON.stringify([{ file: path.join(r, 'calc.js'), original }]));
-  fs.writeFileSync(path.join(r, 'calc.js'), original.replace('a + b', 'a - b'));
+  const mutated = original.replace('a + b', 'a - b');
+  fs.writeFileSync(pend, JSON.stringify([{ file: path.join(r, 'calc.js'), original, mutated }]));
+  fs.writeFileSync(path.join(r, 'calc.js'), mutated);
   const res = runMutants({ cwd: r, cmd: 'node check.js', mutants: [] }, { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
   assert.strictEqual(fs.readFileSync(path.join(r, 'calc.js'), 'utf8'), original);
   assert.match(res.text, /восстановлен после обрыва: .*calc\.js/);
   assert.ok(!fs.existsSync(pend));
 });
 
+test('mutants: after a kill the file was fixed and edited by hand — the backup never overwrites that work', () => {
+  const r = repo();
+  const original = fs.readFileSync(path.join(r, 'calc.js'), 'utf8');
+  const { pendingFile } = require('./mutants.cjs');
+  const pend = pendingFile(r);
+  fs.writeFileSync(pend, JSON.stringify([{ file: path.join(r, 'calc.js'), original, mutated: original.replace('a + b', 'a - b') }]));
+  const work = original + 'exports.mul = (a, b) => a * b;\n';
+  fs.writeFileSync(path.join(r, 'calc.js'), work); // restored by hand and new uncommitted work
+  const res = runMutants({ cwd: r, cmd: 'node check.js', mutants: [] }, { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
+  assert.strictEqual(fs.readFileSync(path.join(r, 'calc.js'), 'utf8'), work);
+  assert.match(res.text, /не тронут: .*calc\.js/);
+  assert.ok(!fs.existsSync(pend));
+});
+
+test('mutants: the backup is on disk while the mutant runs', () => {
+  const r = repo();
+  // The "suite" fails exactly when a pending backup exists — so KILLED proves the backup was written first.
+  fs.writeFileSync(path.join(r, 'probe.js'), "process.exit(require('fs').existsSync(process.argv[2]) ? 1 : 0);\n");
+  const { pendingFile } = require('./mutants.cjs');
+  const res = runMutants({ cwd: r, cmd: `node probe.js "${pendingFile(r)}"`, mutants: [{ id: 'm', file: 'calc.js', find: 'a + b', replace: 'a - b' }] },
+    { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
+  assert.deepStrictEqual(res.results.map((x) => x.status), ['KILLED']);
+});
+
 test('mutants: «$» in replace is literal, not a replacement pattern', () => {
   const r = repo();
-  const res = runMutants({ cwd: r, cmd: 'node check.js', mutants: [{ id: 'dollar', file: 'calc.js', find: 'limit = 10', replace: "limit = '$&$$'" }] },
+  // Fails (KILLED) only if the literal text $&$$ reached the file; a pattern replace would put «limit = 10$» there.
+  fs.writeFileSync(path.join(r, 'lit.js'), "process.exit(require('fs').readFileSync('calc.js', 'utf8').includes(\"'$&$$'\") ? 1 : 0);\n");
+  const res = runMutants({ cwd: r, cmd: 'node lit.js', mutants: [{ id: 'dollar', file: 'calc.js', find: 'limit = 10', replace: "limit = '$&$$'" }] },
     { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
-  assert.deepStrictEqual(res.results.map((x) => x.status), ['SURVIVED']);
+  assert.deepStrictEqual(res.results.map((x) => x.status), ['KILLED']);
+});
+
+test('mutants CLI: red baseline or a mutant that could not run — exit 2', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mu-c-'));
+  const r = repo();
+  const run = (cfg) => {
+    fs.writeFileSync(path.join(dir, 'm.json'), JSON.stringify(cfg));
+    try { execFileSync('node', [path.join(__dirname, 'mutants.cjs'), path.join(dir, 'm.json')], { stdio: 'pipe' }); return 0; } catch (e) { return e.status; }
+  };
+  assert.strictEqual(run({ cwd: r, cmd: 'node -e "process.exit(1)"', mutants: [{ id: 'a', file: 'calc.js', find: 'a + b', replace: 'a - b' }] }), 2);
+  assert.strictEqual(run({ cwd: r, cmd: 'node check.js', mutants: [{ id: 'a', file: 'calc.js', find: 'nope', replace: 'x' }] }), 2);
+  assert.strictEqual(run({ cwd: r, cmd: 'node check.js', mutants: [{ id: 'a', file: 'calc.js', find: 'a + b', replace: 'a - b' }] }), 0);
 });
 
 test('mutants CLI: a broken config is exit 2, not the «survived» code', () => {
