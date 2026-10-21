@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize } = require('./checks.cjs');
+const { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize, baselineRefusal } = require('./checks.cjs');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'checks-'));
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -102,6 +102,17 @@ test('okOn: a success line beats a noisy non-zero exit, but not a failOn line', 
 test('filterOwn matches the whole path: own src/index.ts does not catch src/index.tsx', () => {
   assert.deepStrictEqual(filterOwn('src/index.tsx(1,1): error TS1\nsrc/index.ts(2,2): error TS2', ['src/index.ts']),
     ['src/index.ts(2,2): error TS2']);
+});
+
+test('filterOwn catches own files printed as absolute or ./ paths', () => {
+  const out = ['./src/a.ts:1:1 - error TS1', 'W:/x/app/src/a.ts:1:1 error', 'W:\\x\\app\\src\\a.ts(1,1): error', 'xsrc/a.ts(1,1): error'].join('\n');
+  assert.strictEqual(filterOwn(out, ['src/a.ts']).length, 3);
+});
+
+test('baselineRefusal: the background is recorded only on a clean checkout of the base', () => {
+  assert.strictEqual(baselineRefusal({ head: 'abc', base: 'abc', own: 0 }), null);
+  assert.match(baselineRefusal({ head: 'abc', base: 'def', own: 0 }), /не база/);
+  assert.match(baselineRefusal({ head: 'abc', base: 'abc', own: 2 }), /свои правки/);
 });
 
 test('filterOwn step: a command that did not run is a FAIL, not a silent OK', () => {
