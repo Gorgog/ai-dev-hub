@@ -5,7 +5,8 @@
 //   node session-time.cjs dir <working-folder> [--root <dir>]  every session started in that folder (a worktree)
 //   node session-time.cjs file <transcript.jsonl> [--key <KEY>]
 // Every gap between two events goes to «active» (Claude, agents, tests running), to «wait» (the gap that ends
-// with a human message: the user was answering) or to «pause» (20 min or more with no human message at its end:
+// with a human message or an answer to AskUserQuestion / ExitPlanMode: the user was answering — its first 20 min,
+// the rest is a pause, the user was away) or to «pause» (20 min or more with no human message at its end:
 // a permission prompt nobody answered, a night, a resumed session — not work). The markers count only in Claude's
 // own text, not in tool input.
 // A window without EST-END runs to the end of its transcript (ended: false).
@@ -16,9 +17,12 @@ const path = require('path');
 
 const NOT_HUMAN = /^\s*<task-notification/;
 const PAUSE_MS = 20 * 60000;
+// Tools whose result is the user's answer, not work.
+const ASKS_USER = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
 function parseFile(file) {
   const events = [];
+  const asks = new Set();
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     let o;
@@ -30,9 +34,13 @@ function parseFile(file) {
     let text = '';
     if (o.type === 'user' && !o.isMeta) {
       if (typeof content === 'string') human = !NOT_HUMAN.test(content);
-      else human = blocks.some((b) => b.type === 'text') && !blocks.some((b) => b.type === 'tool_result');
+      else human = (blocks.some((b) => b.type === 'text') && !blocks.some((b) => b.type === 'tool_result')) ||
+        blocks.some((b) => b.type === 'tool_result' && asks.has(b.tool_use_id));
     }
-    if (o.type === 'assistant') text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    if (o.type === 'assistant') {
+      text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+      for (const b of blocks) if (b.type === 'tool_use' && ASKS_USER.has(b.name)) asks.add(b.id);
+    }
     events.push({ t: Date.parse(o.timestamp), id: o.uuid || `${o.timestamp}|${o.type}`, human, text });
   }
   return events.sort((a, b) => a.t - b.t);
@@ -44,13 +52,16 @@ function marker(word, key) {
 }
 
 // A gap is named by its two events: a forked transcript repeats the history with the same ids, so the same gap
-// found in two files is counted once.
+// found in two files is counted once. A human-ended gap longer than PAUSE_MS splits into a wait and a pause.
 function gapsOf(events) {
   const gaps = [];
   for (let i = 1; i < events.length; i++) {
     const ms = events[i].t - events[i - 1].t;
-    const kind = events[i].human ? 'wait' : ms >= PAUSE_MS ? 'pause' : 'active';
-    gaps.push({ id: `${events[i - 1].id}>${events[i].id}`, ms, kind });
+    const id = `${events[i - 1].id}>${events[i].id}`;
+    if (events[i].human) {
+      gaps.push({ id, ms: Math.min(ms, PAUSE_MS), kind: 'wait' });
+      if (ms > PAUSE_MS) gaps.push({ id: `${id}#away`, ms: ms - PAUSE_MS, kind: 'pause' });
+    } else gaps.push({ id, ms, kind: ms >= PAUSE_MS ? 'pause' : 'active' });
   }
   return gaps;
 }
