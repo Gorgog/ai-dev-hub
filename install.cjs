@@ -44,9 +44,10 @@ else {
   say('settings: marketplace hub, plugin hub@hub enabled, old guard hook removed');
 }
 
-// Leftovers of the junction install: links to <hub>/.claude/skills/* or <hub>/skills/*, copies of hub agents.
+// Leftovers of the junction install: links to <hub>/.claude/skills/* (or later layouts), copies of hub agents.
+const plugin = path.join(hub, 'plugin');
 const skillsDir = path.join(home, 'skills');
-for (const name of fs.existsSync(path.join(hub, 'skills')) ? fs.readdirSync(path.join(hub, 'skills')) : []) {
+for (const name of fs.existsSync(path.join(plugin, 'skills')) ? fs.readdirSync(path.join(plugin, 'skills')) : []) {
   const p = path.join(skillsDir, name);
   let st; try { st = fs.lstatSync(p); } catch { continue; }
   let target = null;
@@ -57,12 +58,12 @@ for (const name of fs.existsSync(path.join(hub, 'skills')) ? fs.readdirSync(path
   say(`unlinked skills/${name} (the plugin provides /hub:${name})`);
 }
 const agentsDir = path.join(home, 'agents');
-for (const name of fs.existsSync(path.join(hub, 'agents')) ? fs.readdirSync(path.join(hub, 'agents')) : []) {
+for (const name of fs.existsSync(path.join(plugin, 'agents')) ? fs.readdirSync(path.join(plugin, 'agents')) : []) {
   const p = path.join(agentsDir, name);
   if (!fs.existsSync(p)) continue;
   // Only an old copy of the hub agent: the same `name:` in its frontmatter.
   const nameLine = (f) => (fs.readFileSync(f, 'utf8').match(/^name:\s*(.+)$/m) || [])[1];
-  if (nameLine(p) !== nameLine(path.join(hub, 'agents', name))) { say(`kept     agents/${name}: not a copy of the hub agent`); continue; }
+  if (nameLine(p) !== nameLine(path.join(plugin, 'agents', name))) { say(`kept     agents/${name}: not a copy of the hub agent`); continue; }
   const bakDir = path.join(home, `agents-backup-${stamp}`);
   let dest = path.join(bakDir, name);
   if (fs.existsSync(dest)) dest = path.join(bakDir, `${Date.now()}-${name}`);

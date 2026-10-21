@@ -9,9 +9,9 @@ description: Быстрые проверки по своим файлам вет
 итоговом HEAD, перед докладом «готово к пушу» (правило 3 хаба: цифры — оттуда).
 
 ```bash
-node <хаб>/skills/checks/scripts/checks.cjs                    # по ходу: свои файлы
-node <хаб>/skills/checks/scripts/checks.cjs --full             # перед докладом
-node <хаб>/skills/checks/scripts/checks.cjs --record-baseline  # фон ошибок: на чистой базе
+node <хаб>/plugin/skills/checks/scripts/checks.cjs                    # по ходу: свои файлы
+node <хаб>/plugin/skills/checks/scripts/checks.cjs --full             # перед докладом
+node <хаб>/plugin/skills/checks/scripts/checks.cjs --record-baseline  # фон ошибок: на чистой базе
 ```
 
 Запускать из рабочей папки проекта (`repo/` или `worktrees/<ветка>`). Скрипт сам находит

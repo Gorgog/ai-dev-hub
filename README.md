@@ -28,10 +28,11 @@
 |---|---|---|
 | `CLAUDE.md` | Общие правила для всех проектов | да |
 | `CLAUDE.local.md` | Личное: кто пользователь, язык ответов (образец — `CLAUDE.local.md.example`) | нет, локально |
-| `.claude-plugin/` | Хаб — плагин `hub` и его маркетплейс: скиллы `/hub:*`, агенты `hub:*`, хуки | да |
-| `skills/` | Скиллы хаба: `new-project`, `wind-down`, `dispatch`, `estimate`, `fast-lane`, `checks`, `ship`, `debug` | да |
-| `agents/` | Агенты: `explorer`, `reviewer`, `tester` | да |
-| `hooks/` | Хуки плагина: правила памяти при вызове (`rules-guard`, базовые — `base-rules.json`), бриф проекта на старте сессии, проверка «готово к пушу», замок диспетчера | да |
+| `.claude-plugin/marketplace.json` | Маркетплейс `hub`: плагин из `plugin/` (в кэш плагинов копируется только он, не `projects/`) | да |
+| `plugin/` | Плагин `hub`: скиллы `/hub:*`, агенты `hub:*`, хуки; манифест — `plugin/.claude-plugin/plugin.json` | да |
+| `plugin/skills/` | Скиллы хаба: `new-project`, `wind-down`, `dispatch`, `estimate`, `fast-lane`, `checks`, `ship`, `debug` | да |
+| `plugin/agents/` | Агенты: `explorer`, `reviewer`, `tester` | да |
+| `plugin/hooks/` | Хуки плагина: правила памяти при вызове (`rules-guard`, базовые — `base-rules.json`), бриф проекта на старте сессии, проверка «готово к пушу», замок диспетчера | да |
 | `templates/project/` | Шаблон обвязки нового проекта | да |
 | `sync-claude.ps1`, `install.cjs` | Ставят плагин `hub` из этой папки, убирают следы старой установки, включают git-хуки хаба | да |
 | `research/2026-08-27-ai-dev-orchestration.*` | Исследование, на котором построен хаб | да |
@@ -133,7 +134,7 @@
    задачи из журнала. Строка пишется в `memory/estimates.md` до начала и потом не правится. Новые вводные
    добавляются отдельной строкой «пересмотр».
 2. **Факт после работы.** В ответах ставятся метки `⏱ EST-START <ключ>` и `⏱ EST-END <ключ>`.
-   `skills/estimate/scripts/session-time.cjs` читает журналы сессий Claude Code (`~/.claude/projects/`)
+   `plugin/skills/estimate/scripts/session-time.cjs` читает журналы сессий Claude Code (`~/.claude/projects/`)
    и делит время между метками на три части:
    - **активно** — работа ИИ, тесты, агенты;
    - **ожидание** — время, пока пользователь отвечал (в том числе на вопрос с вариантами и одобрение плана), не

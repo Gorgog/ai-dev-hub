@@ -8,7 +8,19 @@ const path = require('path');
 
 const RANK = { log: 1, ask: 2, deny: 3 };
 const FIELDS = ['tools', 'commands', 'input', 'path'];
-const HUB_ROOT = path.resolve(__dirname, '..');
+// The hub (where projects/ live): AI_DEV_HUB, else the folder of the `hub` marketplace in user settings (the plugin
+// may run from a cache copy), else two levels above this file (<hub>/plugin/hooks).
+function hubRoot() {
+  if (process.env.AI_DEV_HUB) return process.env.AI_DEV_HUB;
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.claude', 'settings.json'), 'utf8'));
+    const m = s.extraKnownMarketplaces && s.extraKnownMarketplaces.hub;
+    const p = m && m.source && m.source.path;
+    if (p && fs.existsSync(path.join(p, 'projects'))) return p;
+  } catch { /* fall through */ }
+  return path.resolve(__dirname, '..', '..');
+}
+const HUB_ROOT = hubRoot();
 const slash = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
 
 // projects/<name> of THIS hub only: the plugin runs in every session of the user, and a folder named
