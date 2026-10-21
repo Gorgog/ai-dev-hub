@@ -49,17 +49,24 @@ const skillsDir = path.join(home, 'skills');
 for (const name of fs.existsSync(path.join(hub, 'skills')) ? fs.readdirSync(path.join(hub, 'skills')) : []) {
   const p = path.join(skillsDir, name);
   let st; try { st = fs.lstatSync(p); } catch { continue; }
-  const link = st.isSymbolicLink() || (() => { try { return fs.realpathSync(p) !== path.resolve(p); } catch { return true; } })();
-  if (!link) { say(`kept     skills/${name}: a real folder, not a hub link — check it by hand`); continue; }
-  if (!dry) fs.rmdirSync(p); // removes the junction itself, never its target
+  let target = null;
+  try { target = fs.readlinkSync(p); } catch { /* not a link */ }
+  const ours = target && path.resolve(target).replace(/\\/g, '/').toLowerCase().startsWith(hub.toLowerCase() + '/');
+  if (!st.isSymbolicLink() || !ours) { say(`kept     skills/${name}: not a link into this hub — check it by hand`); continue; }
+  if (!dry) { try { fs.rmdirSync(p); } catch { fs.unlinkSync(p); } } // the link itself, never its target
   say(`unlinked skills/${name} (the plugin provides /hub:${name})`);
 }
 const agentsDir = path.join(home, 'agents');
 for (const name of fs.existsSync(path.join(hub, 'agents')) ? fs.readdirSync(path.join(hub, 'agents')) : []) {
   const p = path.join(agentsDir, name);
   if (!fs.existsSync(p)) continue;
+  // Only an old copy of the hub agent: the same `name:` in its frontmatter.
+  const nameLine = (f) => (fs.readFileSync(f, 'utf8').match(/^name:\s*(.+)$/m) || [])[1];
+  if (nameLine(p) !== nameLine(path.join(hub, 'agents', name))) { say(`kept     agents/${name}: not a copy of the hub agent`); continue; }
   const bakDir = path.join(home, `agents-backup-${stamp}`);
-  if (!dry) { fs.mkdirSync(bakDir, { recursive: true }); fs.renameSync(p, path.join(bakDir, name)); }
+  let dest = path.join(bakDir, name);
+  if (fs.existsSync(dest)) dest = path.join(bakDir, `${Date.now()}-${name}`);
+  if (!dry) { fs.mkdirSync(bakDir, { recursive: true }); fs.renameSync(p, dest); }
   say(`moved    agents/${name} -> ${bakDir} (the plugin provides hub:${name.replace(/\.md$/, '')})`);
 }
 say('Done. Start a NEW Claude Code session: skills /hub:*, agents hub:*, hooks of the plugin load at session start.');

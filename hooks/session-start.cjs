@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { findProject } = require('./rules-guard.cjs');
+const { findProject, HUB_ROOT } = require('./rules-guard.cjs');
 
 const BUDGET = 9500;
 const NOTE_BUDGET = 1500;
@@ -35,25 +35,40 @@ function preflight(dir) {
   return warn;
 }
 
+const TRUNKS = new Set(['main', 'master', 'develop', 'production']);
+
+// The note OF this branch: the key in the file name or the title line — not a passing mention in the body.
 function latestNote(dir, branch) {
   const sessions = path.join(dir, 'memory', 'sessions');
-  if (!branch || !fs.existsSync(sessions)) return null;
-  const key = branch.replace(/^.*\//, '');
-  const files = fs.readdirSync(sessions).filter((f) => f.endsWith('.md')).sort().reverse();
-  for (const f of files) {
-    const text = read(path.join(sessions, f)) || '';
-    if (!new RegExp(`(^|[^\\w-])${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(text)) continue;
-    const m = text.match(/^##\s*Дальше[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m);
-    return { file: `memory/sessions/${f}`, next: m ? m[1].trim().slice(0, NOTE_BUDGET) : '' };
-  }
+  if (!branch || TRUNKS.has(branch) || !fs.existsSync(sessions)) return null;
+  const key = branch.replace(/^.*\//, '').toLowerCase();
+  const notes = fs.readdirSync(sessions).filter((f) => f.endsWith('.md')).map((f) => {
+    const file = path.join(sessions, f);
+    const text = read(file) || '';
+    const title = (text.split(/\r?\n/).find((l) => l.trim()) || '').toLowerCase();
+    return { f, text, own: f.toLowerCase().includes(key) || title.includes(key), mtime: fs.statSync(file).mtimeMs };
+  }).filter((n) => n.own).sort((a, b) => b.mtime - a.mtime || b.f.localeCompare(a.f));
+  if (!notes.length) return null;
+  const m = notes[0].text.match(/^##\s*Дальше[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m);
+  return { file: `memory/sessions/${notes[0].f}`, next: m ? m[1].trim().slice(0, NOTE_BUDGET) : '' };
+}
+
+// The project's own git: repo/ or worktrees/<branch> under cwd; the project folder itself — its repo/.
+function workTree(cwd, proj) {
+  let real = cwd;
+  try { real = fs.realpathSync.native(cwd); } catch { /* as given */ }
+  const rel = String(real).replace(/\\/g, '/').slice(proj.dir.length).replace(/^\/+/, '').split('/');
+  if (rel[0] === 'repo') return path.join(proj.dir, 'repo');
+  if (rel[0] === 'worktrees' && rel[1]) return path.join(proj.dir, 'worktrees', rel[1]);
   return null;
 }
 
-function buildBrief(cwd) {
-  const proj = findProject(cwd);
+function buildBrief(cwd, hub = HUB_ROOT) {
+  const proj = findProject(cwd, hub);
   if (!proj || !fs.existsSync(proj.dir)) return '';
-  const branch = git(cwd, 'branch', '--show-current');
-  const changed = git(cwd, 'status', '--porcelain').split('\n').filter(Boolean).length;
+  const wt = workTree(cwd, proj) || (fs.existsSync(path.join(proj.dir, 'repo')) ? path.join(proj.dir, 'repo') : null);
+  const branch = wt ? git(wt, 'branch', '--show-current') : '';
+  const changed = wt ? git(wt, 'status', '--porcelain').split('\n').filter(Boolean).length : 0;
   const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}`];
   const warn = preflight(proj.dir);
   if (warn.length) head.push('Предполётная проверка:', ...warn.map((w) => `- ${w}`));
@@ -76,4 +91,4 @@ if (require.main === module) {
   try { const b = buildBrief(ev.cwd || process.cwd()); if (b) process.stdout.write(b + '\n'); } catch { /* never break a session start */ }
 }
 
-module.exports = { buildBrief, BUDGET };
+module.exports = { buildBrief, workTree, BUDGET };

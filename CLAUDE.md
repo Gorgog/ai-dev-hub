@@ -4,7 +4,8 @@
 `CLAUDE.local.md.example`). В правилах ниже он — «пользователь».
 
 ## Структура хаба
-В git хаба — только база: эти правила, `.claude/` (скиллы, агенты), `templates/`, README, `sync-claude.ps1` и
+В git хаба — только база: эти правила, плагин `hub` (`.claude-plugin/`, `skills/`, `agents/`, `hooks/`),
+`templates/`, README, установщик `sync-claude.ps1` + `install.cjs` и
 исследование-основа в `research/`. Всё остальное живёт только на этой машине: git его не видит (`.gitignore`).
 - `projects/<имя>/` — обвязка проекта: CLAUDE.md (знания), memory/ (решения, ошибки, сессии), deploy.md.
   Создаётся `/hub:new-project`. ЛОКАЛЬНО: память проектов не коммитить и не пушить.

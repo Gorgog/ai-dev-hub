@@ -19,7 +19,7 @@ description: Многосессионная работа — эта сессия
 | `slicing.md` (рядом) | как резать задачу на срезы, чтобы часть шла параллельно; git-рецепты для веток срезов |
 | `brief.md` (рядом) | шаблон брифа сессии задачи |
 | `<хаб>/projects/<имя>/dispatch-rules.json` | что тяжёлое и среднее — для хука-замка. Образец — `<хаб>/templates/project/dispatch-rules.example.json`: скопировать в проект как `dispatch-rules.json` и поправить. Пока файла нет, замок в проекте не действует |
-| `scripts/` (рядом) | `wt-new.sh`, `wt-remove.sh`, `parallel-check.sh`, `headroom.ps1`, `guard.cjs` (хук), `grant.cjs` (разрешения), `install-guard.cjs` |
+| `scripts/` (рядом) | `wt-new.sh`, `wt-remove.sh`, `parallel-check.sh`, `headroom.ps1`, `guard.cjs` (замок, его зовёт хук плагина), `grant.cjs` (разрешения) |
 
 ## 0. Старт и перезапуск
 
@@ -96,8 +96,8 @@ description: Многосессионная работа — эта сессия
 - **среднее** — по одному, разрешение короткое, без замера памяти, если запас ≥ 6 ГБ;
 - **лёгкое** — без очереди.
 
-**Очередь держит механизм, а не уговор.** Хук `guard.cjs` (ставится в `~/.claude/settings.json` скриптом
-`install-guard.cjs`, его вызывает `sync-claude.ps1`) перед каждой командой сессии из `projects/*/worktrees/*`
+**Очередь держит механизм, а не уговор.** Замок `guard.cjs` (его функцию `decide()` вызывает PreToolUse-хук
+плагина `hub`, `hooks/pretool.cjs`) перед каждой командой сессии из `projects/*/worktrees/*`
 сверяет её с `<хаб>/projects/<имя>/dispatch-rules.json`. Команду тяжёлого или среднего он блокирует, пока в
 `memory/dispatch-grants.json` нет разрешения этому worktree. Разрешение пишет только диспетчер:
 `node <скрипты>/grant.cjs <папка проекта> grant <heavy|medium> <worktree> <минут> "<что>"`, снимает —
