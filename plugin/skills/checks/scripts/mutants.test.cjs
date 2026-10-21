@@ -40,3 +40,11 @@ test('mutants: killed, survived, find not unique, dirty file skipped; every file
   assert.match(res.text, /убито 1 · выжило 1 · пропущено 2/);
   assert.match(res.text, /выжил: limit-11/);
 });
+
+test('mutants: tests red without any mutant — nothing is counted as killed', () => {
+  const r = repo();
+  const res = runMutants({ cwd: r, cmd: 'node -e "process.exit(1)"', mutants: [{ id: 'add-minus', file: 'calc.js', find: 'a + b', replace: 'a - b' }] },
+    { scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'mu-s-')) });
+  assert.deepStrictEqual(res.results.map((x) => x.status), ['ERROR']);
+  assert.match(res.text, /без мутантов тесты красные/);
+});

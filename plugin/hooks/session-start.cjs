@@ -55,6 +55,25 @@ function latestNote(dir, branch) {
   return { file: `memory/sessions/${notes[0].f}`, next: m ? m[1].trim().slice(0, NOTE_BUDGET) : '' };
 }
 
+const readJsonSafe = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+
+// brief.json {"indexSections": [heading prefixes]}: those `##` sections of the index in full, every other one as a
+// single «по касанию» line with its keys — the index stays whole on disk, the brief stays within the budget.
+function pickSections(idx, cfg) {
+  const want = cfg && Array.isArray(cfg.indexSections) ? cfg.indexSections.map((s) => String(s).toLowerCase()) : null;
+  if (!want) return idx;
+  const parts = idx.split(/^(?=## )/m);
+  const out = [parts[0].trimEnd()];
+  const touch = [];
+  for (const sec of parts.slice(1)) {
+    const heading = sec.split(/\r?\n/)[0].replace(/^##\s*/, '').trim();
+    if (want.some((w) => heading.toLowerCase().startsWith(w))) out.push(sec.trimEnd());
+    else touch.push(`- по касанию: ${heading}`);
+  }
+  if (touch.length) out.push('## Остальное — по касанию (детали: grep по ключам в memory/errors-index.md)', ...touch);
+  return out.join('\n\n');
+}
+
 // The project's own git: repo/ or worktrees/<branch> under cwd; the project folder itself — its repo/.
 function workTree(cwd, proj) {
   let real = cwd;
@@ -77,7 +96,8 @@ function buildBrief(cwd, hub = HUB_ROOT) {
   const note = latestNote(proj.dir, branch);
   const tail = [];
   if (note) tail.push(`Последняя заметка этой ветки: ${note.file}`, note.next ? `Дальше:\n${note.next}` : '');
-  const idx = read(path.join(proj.dir, 'memory', 'errors-index.md'));
+  let idx = read(path.join(proj.dir, 'memory', 'errors-index.md'));
+  if (idx !== null) idx = pickSections(idx, readJsonSafe(path.join(proj.dir, 'brief.json')));
   let body = '';
   if (idx !== null) {
     const room = BUDGET - head.join('\n').length - tail.join('\n').length - 200;
