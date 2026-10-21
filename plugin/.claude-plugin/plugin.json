@@ -1,7 +1,6 @@
 {
   "name": "hub",
   "displayName": "ai-dev-hub",
-  "version": "0.1.0",
   "description": "Base of ai-dev-hub: rules-guard and session brief hooks, dispatcher with resource lock, task lanes (fast-lane, checks, ship, debug), estimates, wind-down, clean-context reviewer.",
   "author": { "name": "Gorgog" },
   "repository": "https://github.com/Gorgog/ai-dev-hub",
