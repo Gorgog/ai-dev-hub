@@ -18,6 +18,14 @@ function dirty(cwd, file) {
 function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mutants-')) } = {}) {
   const results = [];
   const originals = new Map();
+  const step = (name) => ({ name, cmd: cfg.cmd, okOn: cfg.okOn, failOn: cfg.failOn, timeoutSec: cfg.timeoutSec });
+  // Green without mutants first: otherwise every mutant would count as killed by a suite that is simply red.
+  const [base] = runSteps([step('mutants-baseline')], { repo: cfg.cwd, files: [], scratch });
+  if (base.status !== 'OK') {
+    const why = `без мутантов тесты красные (${base.log}) — сначала починить прогон`;
+    const all = (cfg.mutants || []).map((m) => ({ id: m.id, status: 'ERROR', why }));
+    return { results: all, notRestored: [], text: `мутанты: не запускались — ${why}` };
+  }
   for (const m of cfg.mutants || []) {
     const file = path.join(cfg.cwd, m.file);
     if (dirty(cfg.cwd, m.file)) { results.push({ id: m.id, status: 'SKIP', why: 'незакоммиченные правки в файле' }); continue; }
@@ -27,8 +35,7 @@ function runMutants(cfg, { scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'muta
     if (!originals.has(file)) originals.set(file, src);
     try {
       fs.writeFileSync(file, src.replace(m.find, m.replace));
-      const [r] = runSteps([{ name: `mutant-${m.id}`, cmd: cfg.cmd, okOn: cfg.okOn, failOn: cfg.failOn, timeoutSec: cfg.timeoutSec }],
-        { repo: cfg.cwd, files: [], scratch });
+      const [r] = runSteps([step(`mutant-${m.id}`)], { repo: cfg.cwd, files: [], scratch });
       results.push({ id: m.id, status: r.status === 'OK' ? 'SURVIVED' : 'KILLED', log: r.log });
     } finally {
       fs.writeFileSync(file, src);
