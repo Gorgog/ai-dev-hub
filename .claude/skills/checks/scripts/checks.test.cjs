@@ -93,9 +93,10 @@ test('okOn: a success line beats a noisy non-zero exit, but not a failOn line', 
   const r = tmp();
   const step = (out, code) => ({ name: 'v', okOn: 'Tests\\s+\\d+ passed', failOn: 'Tests\\s+\\d+ failed',
     cmd: `node -e "console.log('${out}');process.exit(${code})"` });
-  const res = runSteps([step('Tests  10 passed', 1), step('Tests  1 failed | 9 passed', 1), step('crash', 1)],
+  const res = runSteps([step('Tests  10 passed', 1), step('Tests  1 failed | 9 passed', 1), step('crash', 1),
+    step('\\x1b[2m      Tests \\x1b[22m \\x1b[1m\\x1b[32m10 passed\\x1b[39m', 1)],
     { repo: r, files: [], scratch: tmp() });
-  assert.deepStrictEqual(res.map((x) => x.status), ['OK', 'FAIL', 'FAIL']);
+  assert.deepStrictEqual(res.map((x) => x.status), ['OK', 'FAIL', 'FAIL', 'OK']);
 });
 
 test('summarize: one line per step, errors under FAIL, exit code 1 on any FAIL', () => {
