@@ -1,6 +1,6 @@
 # Профиль диспетчера — <имя проекта>
 
-Читает скилл `dispatch` (`<хаб>\.claude\skills\dispatch\`). Здесь — только специфика проекта. Профиль лежит в
+Читает скилл `dispatch` (`<хаб>\skills\dispatch\`). Здесь — только специфика проекта. Профиль лежит в
 локальной папке проекта и в git хаба не входит.
 
 ## Скиллы
@@ -11,10 +11,10 @@
 - repo: `<хаб>\projects\<имя>\repo`
 - worktrees: `<хаб>\projects\<имя>\worktrees\<ветка>` (внутри проекта: CLAUDE.md хаба и проекта
   подгружаются сами). Имена веток короткие — `<KEY>-NN`.
-- Создание: `bash <хаб>/.claude/skills/dispatch/scripts/wt-new.sh <repo> <worktrees> <ветка> <база> <env-файлы…>`
-- Замер: `powershell -NoProfile -File <хаб>/.claude/skills/dispatch/scripts/headroom.ps1 -Ports <порты>`
-- Проверка конфликтов: `bash <хаб>/.claude/skills/dispatch/scripts/parallel-check.sh <repo> <родитель волны> <ветки…>`
-- Уборка: `bash <хаб>/.claude/skills/dispatch/scripts/wt-remove.sh <repo> <worktree>`
+- Создание: `bash <хаб>/skills/dispatch/scripts/wt-new.sh <repo> <worktrees> <ветка> <база> <env-файлы…>`
+- Замер: `powershell -NoProfile -File <хаб>/skills/dispatch/scripts/headroom.ps1 -Ports <порты>`
+- Проверка конфликтов: `bash <хаб>/skills/dispatch/scripts/parallel-check.sh <repo> <родитель волны> <ветки…>`
+- Уборка: `bash <хаб>/skills/dispatch/scripts/wt-remove.sh <repo> <worktree>`
 - Доска: `memory/dispatch.md`
 
 ## Лимиты
@@ -22,7 +22,7 @@
 
 ## Ресурсы
 Хук-замок берёт правила из `dispatch-rules.json` рядом с профилем (образец — `templates/project/dispatch-rules.example.json`): этот раздел
-и файл правил меняются вместе. Разрешения — `node <хаб>/.claude/skills/dispatch/scripts/grant.cjs <папка проекта> …`.
+и файл правил меняются вместе. Разрешения — `node <хаб>/skills/dispatch/scripts/grant.cjs <папка проекта> …`.
 
 - **Тяжёлое** (одно на всех, с разрешения): <дев-серверы с портами и запасными портами, браузерные проверки,
   любые тесты и скрипты, которые ходят в общие базы>.
