@@ -87,9 +87,11 @@ function runSteps(steps, { repo, files, scratch }) {
       lines = filterOwn(out, step.glob ? sel : selectFiles(files, { cwd: step.cwd }));
       status = lines.length ? 'FAIL' : 'OK';
     } else {
-      // failOn: a runner whose exit code lies (vitest from Git Bash exits 0 on failures) — trust its output.
+      // A runner whose exit code lies either way (vitest: 0 on failures from Git Bash, 1 on a noisy plugin with all
+      // tests green) — trust its output: failOn marks a failure, okOn a success.
       const failed = step.failOn ? out.split(/\r?\n/).filter((l) => new RegExp(step.failOn).test(l)) : [];
-      status = r.status === 0 && !failed.length ? 'OK' : 'FAIL';
+      const ok = step.okOn ? new RegExp(step.okOn, 'm').test(out) : r.status === 0;
+      status = ok && !failed.length ? 'OK' : 'FAIL';
       lines = failed.length ? failed : status === 'FAIL' ? out.split(/\r?\n/).filter((l) => l.trim()).slice(-ERR_LINES) : [];
     }
     return { name: step.name, status, ms: Date.now() - t0, log, lines };
