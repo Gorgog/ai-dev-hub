@@ -41,6 +41,7 @@ if (JSON.stringify(settings) === before) say('settings: already installed');
 else if (dry) say(JSON.stringify({ extraKnownMarketplaces: settings.extraKnownMarketplaces, enabledPlugins: settings.enabledPlugins, hooks: settings.hooks }, null, 2));
 else {
   if (fs.existsSync(file)) { const bak = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`; fs.copyFileSync(file, bak); say(`backup:   ${bak}`); }
+  fs.mkdirSync(home, { recursive: true }); // a new machine may not have ~/.claude yet
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   say('settings: marketplace hub, plugin hub@hub enabled, old guard hook removed');
 }
@@ -72,12 +73,20 @@ for (const name of fs.existsSync(path.join(plugin, 'agents')) ? fs.readdirSync(p
   say(`moved    agents/${name} -> ${bakDir} (the plugin provides hub:${name.replace(/\.md$/, '')})`);
 }
 // Refresh the cached copy of the plugin to the current commit (the CLI may be missing or not signed in — then say how).
+// On a new machine the marketplace is only declared in settings, and the CLI answers "Marketplace 'hub' not found"
+// until it is added: then add it and install the plugin instead of updating.
 if (!dry) {
   const { spawnSync } = require('child_process');
   const cli = (args) => spawnSync('claude', args, { encoding: 'utf8', shell: process.platform === 'win32' });
-  const m = cli(['plugin', 'marketplace', 'update', 'hub']);
-  const u = m.status === 0 ? cli(['plugin', 'update', 'hub@hub']) : m;
-  const out = `${u.stdout || ''}${u.stderr || ''}`.trim().split('\n').pop();
+  const text = (r) => `${r.stdout || ''}${r.stderr || ''}`.trim();
+  let m = cli(['plugin', 'marketplace', 'update', 'hub']);
+  let next = ['plugin', 'update', 'hub@hub'];
+  if (m.status !== 0 && /not found/i.test(text(m))) {
+    m = cli(['plugin', 'marketplace', 'add', hub]);
+    next = ['plugin', 'install', 'hub@hub'];
+  }
+  const u = m.status === 0 ? cli(next) : m;
+  const out = text(u).split('\n').pop();
   say(u.status === 0 ? `plugin:  ${out}` : 'plugin:  claude CLI недоступен — обнови вручную: claude plugin marketplace update hub && claude plugin update hub@hub');
 }
 say('Done. Start a NEW Claude Code session: skills /hub:*, agents hub:*, hooks of the plugin load at session start.');

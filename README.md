@@ -34,7 +34,7 @@
 | `plugin/agents/` | Агенты: `explorer`, `reviewer`, `tester` | да |
 | `plugin/hooks/` | Хуки плагина: правила памяти при вызове (`rules-guard`, базовые — `base-rules.json`), бриф проекта на старте сессии, проверка «готово к пушу», замок диспетчера | да |
 | `templates/project/` | Шаблон обвязки нового проекта | да |
-| `sync-claude.ps1`, `install.cjs` | Ставят плагин `hub` из этой папки, убирают следы старой установки, включают git-хуки хаба | да |
+| `sync-claude.sh`, `install.cjs` | Ставят плагин `hub` из этой папки, убирают следы старой установки, включают git-хуки хаба | да |
 | `research/2026-08-27-ai-dev-orchestration.*` | Исследование, на котором построен хаб | да |
 | `projects/<имя>/` | Обвязка проекта: CLAUDE.md, memory/, deploy.md | нет, локально |
 | `projects/<имя>/repo/` | Рабочий репозиторий проекта (свой git) | нет |
@@ -44,9 +44,9 @@
 
 | Что | Зачем |
 |---|---|
-| Windows 10/11, Windows PowerShell 5.1 | `sync-claude.ps1`, `headroom.ps1` (скрипты рассчитаны на Windows) |
-| [Git for Windows](https://git-scm.com/download/win) ≥ 2.38 (Git Bash, `cygpath`) | worktree, `merge-tree --write-tree`, скрипты `*.sh` |
-| [Node.js](https://nodejs.org/) ≥ 18 | хук-замок диспетчера и его скрипты (`*.cjs`), подсчёт факта в `/hub:estimate` |
+| Linux (проверено на Kubuntu 26.04), bash, `ss` из iproute2 | `sync-claude.sh`, скрипты диспетчера `*.sh` (`headroom.sh` читает `/proc/meminfo` и `ss`) |
+| git ≥ 2.38 | worktree, `merge-tree --write-tree` |
+| [Node.js](https://nodejs.org/) ≥ 18, виден в `~/.local/bin` | хуки плагина, хук-замок диспетчера и его скрипты (`*.cjs`), подсчёт факта в `/hub:estimate`. Claude Desktop, запущенный из меню, не читает `~/.bashrc` и не видит node из nvm: `ln -s "$(command -v node)" ~/.local/bin/node` (и перелогиниться) |
 | [Claude Code](https://claude.com/claude-code) | всё. Для `/hub:dispatch` — десктопное приложение: запуск и список сессий (`start_session`, `list_sessions`) есть только там |
 | Скиллы `workplan` и `grilling` | нарезка на срезы в `/hub:dispatch` (любая реализация с `plan.md`, файлом на срез и `blocked-by`). Как они называются у тебя — в профиле проекта |
 
@@ -60,15 +60,16 @@
    правил и скиллов пишутся как `<хаб>`, скрипты находят себя сами.
 2. Скопировать `CLAUDE.local.md.example` в `CLAUDE.local.md` и вписать своё имя и язык ответов.
 3. Плагин: `claude plugin marketplace add <хаб>` и `claude plugin install hub@hub` — или
-   `powershell -ExecutionPolicy Bypass -File <хаб>\sync-claude.ps1`, который делает то же через настройки:
-   - в `~/.claude/settings.json` (с бэкапом) — маркетплейс `hub` из этой папки и включённый `hub@hub`. Claude Code
-     держит копию плагина в кэше, привязанную к коммиту хаба: правки хаба вступают в силу после коммита и
-     обновления плагина (`sync-claude.ps1` его делает) и нового старта сессии;
+   `bash <хаб>/sync-claude.sh`, который делает то же через настройки и CLI:
+   - в `~/.claude/settings.json` (с бэкапом) — маркетплейс `hub` из этой папки и включённый `hub@hub`; CLI
+     добавляет маркетплейс и ставит плагин, если их ещё нет. Claude Code держит копию плагина в кэше,
+     привязанную к коммиту хаба: правки хаба вступают в силу после коммита и обновления плагина
+     (`sync-claude.sh` его делает) и нового старта сессии;
    - плагин даёт скиллы `/hub:*`, агентов `hub:reviewer`, `hub:explorer`, `hub:tester` и хуки: правила памяти
      при каждом вызове инструмента (новые правила начинают с режима `log` — подсказка и журнал, без блока;
      поднять до `ask`/`deny` — `modes` в `projects/<имя>/rules.json`), бриф проекта на старте сессии, проверку
      «готово к пушу» и замок диспетчера (только в `projects/*/worktrees/*`);
-   - следы старой установки (junction-ссылки в `~/.claude/skills/`, копии агентов, хук-замок в настройках)
+   - следы старой установки (ссылки в `~/.claude/skills/`, копии агентов, хук-замок в настройках)
      убираются, копии — в бэкап;
    - git хаба получает свои хуки из `.githooks/`: pre-commit не пустит в публичный хаб строку с именем
      рабочего проекта, ключом задачи или студии. Список — в `.githooks/private-patterns`, по регэкспу на строку;
@@ -94,7 +95,7 @@
    `/hub:debug`.
 6. **Конец сессии:** `/hub:wind-down` — итог уходит в локальную память проекта, открытая оценка закрывается фактом.
 7. **После правки хаба** (скилл, агент, хук): коммит, затем `claude plugin marketplace update hub` и
-   `claude plugin update hub@hub` (или снова `sync-claude.ps1`) и новая сессия. Без коммита и обновления сессии
+   `claude plugin update hub@hub` (или снова `bash sync-claude.sh`) и новая сессия. Без коммита и обновления сессии
    работают со старой копией плагина из кэша.
 8. **Правила памяти механизмом:** повторившийся урок из `errors.md` — правило в `projects/<имя>/rules.json`
    (`tools`, `commands`/`input` — регэкспы, `text`). Журнал срабатываний — `memory/rules-guard.log`; правило без

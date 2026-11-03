@@ -1,7 +1,7 @@
 #!/bin/sh
 # Blocks a commit whose added lines match a private pattern: names of work projects, task keys, studio names.
 # Patterns live in .githooks/private-patterns (untracked, one extended regex per line, case-insensitive,
-# '#' starts a comment). No patterns file -> no check. Enabled by sync-claude.ps1 (core.hooksPath .githooks).
+# '#' starts a comment). No patterns file -> no check. Enabled by sync-claude.sh (core.hooksPath .githooks).
 # ASCII only.
 root=$(git rev-parse --show-toplevel) || exit 0
 src="$root/.githooks/private-patterns"

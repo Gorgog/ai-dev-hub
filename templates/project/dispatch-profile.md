@@ -12,7 +12,7 @@
 - worktrees: `<хаб>\projects\<имя>\worktrees\<ветка>` (внутри проекта: CLAUDE.md хаба и проекта
   подгружаются сами). Имена веток короткие — `<KEY>-NN`.
 - Создание: `bash <хаб>/plugin/skills/dispatch/scripts/wt-new.sh <repo> <worktrees> <ветка> <база> <env-файлы…>`
-- Замер: `powershell -NoProfile -File <хаб>/plugin/skills/dispatch/scripts/headroom.ps1 -Ports <порты>`
+- Замер: `bash <хаб>/plugin/skills/dispatch/scripts/headroom.sh -Ports <порты>`
 - Проверка конфликтов: `bash <хаб>/plugin/skills/dispatch/scripts/parallel-check.sh <repo> <родитель волны> <ветки…>`
 - Уборка: `bash <хаб>/plugin/skills/dispatch/scripts/wt-remove.sh <repo> <worktree>`
 - Доска: `memory/dispatch.md`

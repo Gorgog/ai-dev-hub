@@ -131,8 +131,8 @@ test('a gap of 20 min or more that no human message ends is a pause, not work', 
 });
 
 test('slugFor maps a working folder to its transcripts folder', () => {
-  assert.strictEqual(
-    slugFor('W:\\ai-dev-hub\\projects\\demo\\worktrees\\TASK-7'),
-    'W--ai-dev-hub-projects-demo-worktrees-TASK-7',
-  );
+  const [dir, slug] = process.platform === 'win32'
+    ? ['W:\\ai-dev-hub\\projects\\demo\\worktrees\\TASK-7', 'W--ai-dev-hub-projects-demo-worktrees-TASK-7']
+    : ['/home/u/ai-dev-hub/projects/demo/worktrees/TASK-7', '-home-u-ai-dev-hub-projects-demo-worktrees-TASK-7'];
+  assert.strictEqual(slugFor(dir), slug);
 });
