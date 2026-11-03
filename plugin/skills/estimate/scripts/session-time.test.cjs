@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseFile, measure, slugFor, findByKey, candidates } = require('./session-time.cjs');
+const { parseFile, measure, slugFor, findByKey, candidates, withBuffer, BUFFER_PCT } = require('./session-time.cjs');
 
 const made = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'st-')); made.push(d); return d; };
@@ -131,6 +131,19 @@ test('key window: markers in a sent message on their own line count, a brief quo
   assert.strictEqual(path.basename(r.rounds[0].file), 'task.jsonl');
   assert.strictEqual(r.rounds[0].ended, true);
   assert.strictEqual(r.total.activeMin, 40);
+});
+
+test('+20% reserve: next to active time, rounded to a minute; the measured figure is untouched', () => {
+  assert.strictEqual(BUFFER_PCT, 20);
+  assert.strictEqual(withBuffer(48), 58);
+  assert.strictEqual(withBuffer(27), 32);
+  assert.strictEqual(withBuffer(0), 0);
+  assert.strictEqual(withBuffer(100, 50), 150);
+  const { execFileSync } = require('child_process');
+  const root = tmp();
+  transcript(path.join(root, 'p'), 's.jsonl', [human(0, 'x'), said(1, '⏱ EST-START TASK-1'), said(11, '⏱ EST-END TASK-1')]);
+  const out = execFileSync(process.execPath, [path.join(__dirname, 'session-time.cjs'), 'key', 'TASK-1', '--root', root], { encoding: 'utf8' });
+  assert.match(out, /TOTAL {2}active 10 min {2}\+20% 12 min {2}wait/);
 });
 
 test('findByKey sums rounds across transcripts', () => {

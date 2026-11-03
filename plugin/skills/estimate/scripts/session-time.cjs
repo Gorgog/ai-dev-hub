@@ -12,6 +12,7 @@
 // «⏱ EST-START <KEY>» in its «принял бриф» there), in a message only on a line of its own. Other tool input does
 // not count: a brief written with Write or start_session quotes the marker mid-sentence for the task session.
 // A window without EST-END runs to the end of its transcript (ended: false).
+// Next to active time the output shows it +20% (--buffer <pct>): a reserve for what transcripts do not see.
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -160,14 +161,21 @@ function byDir(root, workdir) {
   return { rounds, total: total(rounds) };
 }
 
-function print(result) {
+// Active time with a reserve for what the transcripts do not see (setup, context switches, the user's own checks):
+// printed next to the measured figure, never instead of it.
+const BUFFER_PCT = 20;
+const withBuffer = (min, pct = BUFFER_PCT) => Math.round(min * (1 + pct / 100));
+
+function print(result, pct = BUFFER_PCT) {
+  const plus = (min) => `+${pct}% ${withBuffer(min, pct)} min`;
   for (const r of result.rounds) {
-    console.log(`${r.start.slice(0, 16)} → ${r.end.slice(11, 16)}  active ${r.activeMin} min  wait ${r.waitMin} min  ` +
-      `pause ${r.pauseMin} min  human ${r.humanMessages}${r.ended ? '' : '  (no EST-END)'}  ${path.basename(r.file)}`);
+    console.log(`${r.start.slice(0, 16)} → ${r.end.slice(11, 16)}  active ${r.activeMin} min  ${plus(r.activeMin)}  ` +
+      `wait ${r.waitMin} min  pause ${r.pauseMin} min  human ${r.humanMessages}${r.ended ? '' : '  (no EST-END)'}  ` +
+      `${path.basename(r.file)}`);
   }
   const t = result.total;
-  console.log(`TOTAL  active ${t.activeMin} min  wait ${t.waitMin} min  pause ${t.pauseMin} min  human ${t.humanMessages}  ` +
-    `rounds ${result.rounds.length}`);
+  console.log(`TOTAL  active ${t.activeMin} min  ${plus(t.activeMin)}  wait ${t.waitMin} min  pause ${t.pauseMin} min  ` +
+    `human ${t.humanMessages}  rounds ${result.rounds.length}`);
 }
 
 if (require.main === module) {
@@ -175,15 +183,17 @@ if (require.main === module) {
   const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
   const root = opt('--root') || path.join(os.homedir(), '.claude', 'projects');
   const key = opt('--key');
-  const [cmd, arg] = args;
   const die = (m) => { process.stderr.write(m + '\n'); process.exit(1); };
-  if (cmd === 'key' && arg) print(findByKey(root, arg));
-  else if (cmd === 'dir' && arg) print(byDir(root, arg));
+  const pct = Number(opt('--buffer') ?? BUFFER_PCT);
+  if (!Number.isFinite(pct) || pct < 0) die('--buffer: a percentage, e.g. 20');
+  const [cmd, arg] = args;
+  if (cmd === 'key' && arg) print(findByKey(root, arg), pct);
+  else if (cmd === 'dir' && arg) print(byDir(root, arg), pct);
   else if (cmd === 'file' && arg) {
     const r = measure(parseFile(arg), { key });
     if (!r) die(`no EST-START ${key} in ${arg}`);
-    print({ rounds: [{ file: arg, ...r }], total: total([r]) });
-  } else die('usage: session-time.cjs key <KEY> | dir <working-folder> | file <transcript.jsonl> [--key KEY]  [--root <dir>]');
+    print({ rounds: [{ file: arg, ...r }], total: total([r]) }, pct);
+  } else die('usage: session-time.cjs key <KEY> | dir <working-folder> | file <transcript.jsonl> [--key KEY]  [--root <dir>]  [--buffer 20]');
 }
 
-module.exports = { parseFile, measure, slugFor, findByKey, byDir, candidates };
+module.exports = { parseFile, measure, slugFor, findByKey, byDir, candidates, withBuffer, BUFFER_PCT };
