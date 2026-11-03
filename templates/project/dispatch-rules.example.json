@@ -1,7 +1,7 @@
 {
   "_comment": "Правила замка диспетчера для guard.cjs (скилл dispatch). Правило срабатывает, если совпали ВСЕ заданные поля: tools — regex имени инструмента, commands — regex команды Bash, input — regex JSON входа инструмента. Привязывай регэкспы к форме запуска (npx jest, npm run dev), а не к слову: иначе заблокируется grep. Держи синхронно с разделом «Ресурсы» профиля. Ниже — пример для node-монорепо, поправь под проект.",
   "heavy": [
-    { "name": "дев-серверы", "tools": "^mcp__Claude_Browser__preview_start$" },
+    { "name": "дев-серверы", "tools": "^mcp__Claude_Browser__preview_start$", "input": "\"name\"\\s*:" },
     { "name": "дев-серверы", "tools": "^Bash$", "commands": "npm\\s+run\\s+(dev|start)\\b" },
     { "name": "проверка в браузере", "tools": "^mcp__(Claude_Browser|claude-in-chrome)__", "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]" },
     { "name": "тесты с общей базой", "tools": "^Bash$", "commands": "npx\\s+jest\\b" },
