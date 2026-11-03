@@ -21,15 +21,17 @@ function hubRoot() {
   return path.resolve(__dirname, '..', '..');
 }
 const HUB_ROOT = hubRoot();
-const slash = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+const trim = (p) => String(p || '').replace(/\/+$/, '');
+// A path through a symlink is compared by its target; a path that does not exist — as given.
+const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
 
 // projects/<name> of THIS hub only: the plugin runs in every session of the user, and a folder named
-// «projects» elsewhere is not ours. A junction to the hub (old drive letter) resolves through realpath.
+// «projects» elsewhere is not ours. Both sides go through realpath: a hub reached through a symlink (~/hub ->
+// /data/ai-dev-hub) would otherwise never match the session's resolved cwd and switch the hooks off silently.
+// Case matters on Linux: /Hub is not /hub.
 function findProject(cwd, hub = HUB_ROOT) {
-  let real = cwd;
-  try { real = fs.realpathSync.native(cwd); } catch { /* a path that does not exist is compared as given */ }
-  const c = slash(real), h = slash(hub);
-  if (!c.toLowerCase().startsWith(`${h.toLowerCase()}/projects/`)) return null;
+  const c = trim(real(cwd)), h = trim(real(hub));
+  if (!c.startsWith(`${h}/projects/`)) return null;
   const name = c.slice(h.length + '/projects/'.length).split('/')[0];
   return name ? { dir: `${h}/projects/${name}`, name } : null;
 }
@@ -78,7 +80,7 @@ function matches(rule, ev) {
   if (rule.tools && !new RegExp(rule.tools, 'i').test(ev.tool_name || '')) return false;
   if (rule.commands && !(typeof input.command === 'string' && new RegExp(rule.commands, 'i').test(input.command))) return false;
   if (rule.input && !new RegExp(rule.input, 'i').test(JSON.stringify(input))) return false;
-  if (rule.path && !(typeof file === 'string' && new RegExp(rule.path, 'i').test(file.replace(/\\/g, '/')))) return false;
+  if (rule.path && !(typeof file === 'string' && new RegExp(rule.path, 'i').test(file))) return false;
   return FIELDS.some((f) => rule[f]);
 }
 

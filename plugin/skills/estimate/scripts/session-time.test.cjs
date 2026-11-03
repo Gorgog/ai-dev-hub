@@ -5,7 +5,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseFile, measure, slugFor, findByKey } = require('./session-time.cjs');
+const { parseFile, measure, slugFor, findByKey, candidates } = require('./session-time.cjs');
+
+const made = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'st-')); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 
 const T0 = Date.parse('2026-10-20T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60000).toISOString();
@@ -38,7 +42,7 @@ const LINES = [
 
 // The 30-min answer in LINES (said 20 → human 50): 20 min of waiting, the rest the user was away (pause).
 test('whole transcript: active and waiting split at human messages', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const r = measure(parseFile(transcript(dir, 'a.jsonl', LINES)));
   assert.strictEqual(r.activeMin, 1 + 9 + 1 + 9 + 5 + 5 + 5);
   assert.strictEqual(r.waitMin, 20 + 5);
@@ -47,7 +51,7 @@ test('whole transcript: active and waiting split at human messages', () => {
 });
 
 test('key window: from EST-START to EST-END in assistant text only', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const r = measure(parseFile(transcript(dir, 'a.jsonl', LINES)), { key: 'TASK-1' });
   assert.strictEqual(r.activeMin, 9 + 1 + 9 + 5);
   assert.strictEqual(r.waitMin, 20);
@@ -56,7 +60,7 @@ test('key window: from EST-START to EST-END in assistant text only', () => {
 });
 
 test('key without EST-END runs to the end of the transcript', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const lines = LINES.filter((l) => !JSON.stringify(l).includes('EST-END'));
   const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)), { key: 'TASK-1' });
   assert.strictEqual(r.ended, false);
@@ -65,7 +69,7 @@ test('key without EST-END runs to the end of the transcript', () => {
 });
 
 test('a human answer after a night: 20 min of waiting, the rest is a pause', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const r = measure(parseFile(transcript(dir, 'a.jsonl', [human(0, 'go'), said(1, 'Пушить?'), human(301, 'да')])));
   assert.strictEqual(r.activeMin, 1);
   assert.strictEqual(r.waitMin, 20);
@@ -75,7 +79,7 @@ test('a human answer after a night: 20 min of waiting, the rest is a pause', () 
 
 for (const name of ['AskUserQuestion', 'ExitPlanMode']) {
   test(`an answer to ${name} is the user's waiting, not work`, () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+    const dir = tmp();
     const lines = [human(0, 'go'), callTool(1, name, 'q1'), answerTool(4, 'q1'), said(5, 'ok')];
     const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)));
     assert.strictEqual(r.activeMin, 1 + 1);
@@ -85,7 +89,7 @@ for (const name of ['AskUserQuestion', 'ExitPlanMode']) {
 }
 
 test('a result of an ordinary tool stays active', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const lines = [human(0, 'go'), callTool(1, 'Bash', 'b1'), answerTool(4, 'b1'), said(5, 'ok')];
   const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)));
   assert.strictEqual(r.activeMin, 5);
@@ -93,13 +97,13 @@ test('a result of an ordinary tool stays active', () => {
 });
 
 test('TASK-1 does not match TASK-12', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const lines = [human(0, 'x'), said(1, '⏱ EST-START TASK-12'), said(5, 'y')];
   assert.strictEqual(measure(parseFile(transcript(dir, 'a.jsonl', lines)), { key: 'TASK-1' }), null);
 });
 
 test('findByKey sums rounds across transcripts', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const root = tmp();
   transcript(path.join(root, 'proj-a'), 's1.jsonl', LINES);
   transcript(path.join(root, 'proj-b'), 's2.jsonl', [human(0, 'ревью'), said(2, '⏱ EST-START TASK-1'), said(12, '⏱ EST-END TASK-1')]);
   transcript(path.join(root, 'proj-c'), 's3.jsonl', [human(0, 'z'), said(1, 'нет метки')]);
@@ -110,7 +114,7 @@ test('findByKey sums rounds across transcripts', () => {
 });
 
 test('findByKey counts a forked transcript (a copy of the history) once', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const root = tmp();
   let n = 0;
   const withIds = LINES.map((l) => ({ ...l, uuid: `u${n++}` }));
   transcript(path.join(root, 'proj'), 'orig.jsonl', withIds);
@@ -122,7 +126,7 @@ test('findByKey counts a forked transcript (a copy of the history) once', () => 
 });
 
 test('a gap of 20 min or more that no human message ends is a pause, not work', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const dir = tmp();
   const lines = [human(0, 'go'), toolUse(5), toolResult(95), said(100, 'done'), toolUse(119), toolResult(139)];
   const r = measure(parseFile(transcript(dir, 'a.jsonl', lines)));
   assert.strictEqual(r.pauseMin, 90 + 20);
@@ -131,8 +135,15 @@ test('a gap of 20 min or more that no human message ends is a pause, not work', 
 });
 
 test('slugFor maps a working folder to its transcripts folder', () => {
-  const [dir, slug] = process.platform === 'win32'
-    ? ['W:\\ai-dev-hub\\projects\\demo\\worktrees\\TASK-7', 'W--ai-dev-hub-projects-demo-worktrees-TASK-7']
-    : ['/home/u/ai-dev-hub/projects/demo/worktrees/TASK-7', '-home-u-ai-dev-hub-projects-demo-worktrees-TASK-7'];
-  assert.strictEqual(slugFor(dir), slug);
+  assert.strictEqual(slugFor('/home/u/ai-dev-hub/projects/demo/worktrees/TASK-7'), '-home-u-ai-dev-hub-projects-demo-worktrees-TASK-7');
+});
+
+test('candidates: only top-level transcripts that mention the marker, not subagent files deeper down', () => {
+  const root = tmp();
+  transcript(path.join(root, 'proj-a'), 's1.jsonl', LINES);
+  transcript(path.join(root, 'proj-a', 's1', 'subagents'), 'agent.jsonl', LINES);
+  transcript(path.join(root, 'proj-b'), 's2.jsonl', [human(0, 'z'), said(1, 'нет метки')]);
+  fs.writeFileSync(path.join(root, 'proj-b', 'notes.txt'), 'EST-START TASK-1');
+  assert.deepStrictEqual(candidates(root, 'EST-START TASK-1'), [path.join(root, 'proj-a', 's1.jsonl')]);
+  assert.deepStrictEqual(candidates(root, 'EST-START NOPE-1'), []);
 });

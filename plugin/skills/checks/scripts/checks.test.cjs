@@ -5,10 +5,17 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize, baselineRefusal } = require('./checks.cjs');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'checks-'));
+const made = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'checks-')); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
+const hasSystemd = spawnSync('systemctl', ['--user', 'show-environment'], { stdio: 'ignore' }).status === 0;
+// A process whose argv[0] is the marker (exec -a): the shell command lines that launch it merely mention it.
+const alive = (marker) => fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).some((pid) => {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')[0] === marker; } catch { return false; }
+});
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
 const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
 
@@ -52,14 +59,17 @@ test('selectFiles keeps the glob and makes paths relative to the step cwd', () =
   assert.deepStrictEqual(selectFiles(files, {}), files);
 });
 
-test('render quotes {files} and fills {scratch}', () => {
+test('render quotes {files} and fills {scratch}, {hub}, {project}', () => {
   assert.strictEqual(render('fmt {files} --cache {scratch}/x', { files: ['a b.ts', 'c.ts'], scratch: 'S' }),
     'fmt "a b.ts" "c.ts" --cache S/x');
+  assert.strictEqual(render('node {project}/memory/snippets/fmt.cjs --hub {hub} {files}',
+    { files: ['a.ts'], hub: '/home/u/hub', project: '/home/u/hub/projects/demo' }),
+  'node /home/u/hub/projects/demo/memory/snippets/fmt.cjs --hub /home/u/hub "a.ts"');
 });
 
-test('filterOwn keeps only lines about own files, whatever the slash', () => {
-  const out = ['src/a.tsx(3,1): error TS1', 'src\\other.ts(1,1): error TS2', 'src\\b.ts(9,9): error TS3', 'Found 3 errors'].join('\n');
-  assert.deepStrictEqual(filterOwn(out, ['src/a.tsx', 'src/b.ts']), ['src/a.tsx(3,1): error TS1', 'src\\b.ts(9,9): error TS3']);
+test('filterOwn keeps only lines about own files', () => {
+  const out = ['src/a.tsx(3,1): error TS1', 'src/other.ts(1,1): error TS2', 'src/b.ts(9,9): error TS3', 'Found 3 errors'].join('\n');
+  assert.deepStrictEqual(filterOwn(out, ['src/a.tsx', 'src/b.ts']), ['src/a.tsx(3,1): error TS1', 'src/b.ts(9,9): error TS3']);
 });
 
 test('runSteps: no own files -> SKIP, failing command -> FAIL, filterOwn ignores background errors', () => {
@@ -105,7 +115,8 @@ test('filterOwn matches the whole path: own src/index.ts does not catch src/inde
 });
 
 test('filterOwn catches own files printed as absolute or ./ paths', () => {
-  const out = ['./src/a.ts:1:1 - error TS1', 'W:/x/app/src/a.ts:1:1 error', 'W:\\x\\app\\src\\a.ts(1,1): error', 'xsrc/a.ts(1,1): error'].join('\n');
+  const out = ['./src/a.ts:1:1 - error TS1', '/home/u/x/app/src/a.ts:1:1 error', '/home/u/x/app/src/a.ts(1,1): error',
+    'xsrc/a.ts(1,1): error', '/home/u/x/app/src/a.tsx(1,1): error'].join('\n');
   assert.strictEqual(filterOwn(out, ['src/a.ts']).length, 3);
 });
 
@@ -123,6 +134,32 @@ test('filterOwn step: a command that did not run is a FAIL, not a silent OK', ()
     { name: 'slow', timeoutSec: 1, cmd: 'node -e "setTimeout(()=>{},5000)"' },
   ], { repo: r, files: ['src/a.ts'], scratch: tmp() });
   assert.deepStrictEqual(res.map((x) => x.status), ['FAIL', 'FAIL', 'FAIL']);
+  assert.match(res[2].lines[0], /таймаут 1 с/);
+});
+
+// sh -> node -> a worker: the old spawnSync timeout killed only sh, the worker lived on.
+test('timeout stops the whole tree of a step, not just the shell', () => {
+  const marker = `checks-worker-${process.pid}`;
+  const [res] = runSteps([{ name: 'tree', timeoutSec: 1,
+    cmd: `node -e "require('child_process').spawn('bash', ['-c', 'exec -a ${marker} sleep 60'], { stdio: 'ignore' }); setTimeout(() => {}, 60000)"` }],
+  { repo: tmp(), files: [], scratch: tmp() });
+  assert.strictEqual(res.status, 'FAIL');
+  assert.match(res.lines[0], /таймаут/);
+  const end = Date.now() + 5000;
+  while (alive(marker) && Date.now() < end) spawnSync('sleep', ['0.2']);
+  assert.ok(!alive(marker), 'the grandchild of the step is gone');
+});
+
+test('memory: a step over its ceiling is a FAIL that says so, not a checker verdict', { skip: !hasSystemd && 'no systemd user manager' }, () => {
+  const hog = 'const a = []; for (;;) a.push(Buffer.alloc(1e7, 1));';
+  const res = runSteps([
+    { name: 'hog', memory: '150M', okOn: '.*', cmd: `node -e "${hog}"` },
+    { name: 'full-default', cmd: `node -e "${hog}"` },
+  ], { repo: tmp(), files: [], scratch: tmp(), memory: '200M' });
+  assert.deepStrictEqual(res.map((x) => x.status), ['FAIL', 'FAIL']);
+  assert.match(res[0].lines[0], /убит: MemoryMax 150M/);
+  assert.match(res[1].lines[0], /убит: MemoryMax 200M/);
+  assert.match(fs.readFileSync(res[0].log, 'utf8'), /убит: MemoryMax 150M/, 'the reason is in the log too');
 });
 
 test('baseline: an error new against the recorded background fails even outside own files', () => {

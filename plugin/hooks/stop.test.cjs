@@ -7,9 +7,13 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { doneGate } = require('./stop.cjs');
+// Temp folders of this file, removed after its tests.
+const made = [];
+const mkdtemp = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 
 function repo() {
-  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  const hub = mkdtemp('st-');
   const r = path.join(hub, 'projects', 'demo', 'repo');
   fs.mkdirSync(r, { recursive: true });
   const git = (...a) => execFileSync('git', a, { cwd: r, encoding: 'utf8' }).trim();

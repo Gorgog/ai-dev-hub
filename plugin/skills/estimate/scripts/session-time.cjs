@@ -14,6 +14,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const NOT_HUMAN = /^\s*<task-notification/;
 const PAUSE_MS = 20 * 60000;
@@ -113,16 +114,24 @@ function total(rounds) {
   return sumGaps(rounds.flatMap((r) => r.gaps));
 }
 
+// Transcripts (root/<folder>/<session>.jsonl, not deeper: subagents) that mention the marker. grep reads the
+// gigabytes of journals at disk speed in one process; reading each file into node took seconds and hundreds of MB.
+// No grep or an error — every transcript, filtered in node.
+function candidates(root, needle) {
+  const all = () => fs.readdirSync(root).map((d) => path.join(root, d))
+    .filter((dir) => fs.statSync(dir).isDirectory()).flatMap(transcripts);
+  const g = spawnSync('grep', ['-rlF', '--include=*.jsonl', '--', needle, root],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+  if (g.error || (g.status !== 0 && g.status !== 1)) return all().filter((f) => fs.readFileSync(f, 'utf8').includes(needle));
+  const top = path.resolve(root);
+  return g.stdout.split('\n').filter((f) => f && path.dirname(path.dirname(path.resolve(f))) === top);
+}
+
 function findByKey(root, key) {
   const rounds = [];
-  for (const d of fs.readdirSync(root)) {
-    const dir = path.join(root, d);
-    if (!fs.statSync(dir).isDirectory()) continue;
-    for (const f of transcripts(dir)) {
-      if (!fs.readFileSync(f, 'utf8').includes(`EST-START ${key}`)) continue;
-      const r = measure(parseFile(f), { key });
-      if (r) rounds.push({ file: f, ...r });
-    }
+  for (const f of candidates(root, `EST-START ${key}`)) {
+    const r = measure(parseFile(f), { key });
+    if (r) rounds.push({ file: f, ...r });
   }
   rounds.sort((a, b) => a.start.localeCompare(b.start));
   return { rounds, total: total(rounds) };
@@ -167,4 +176,4 @@ if (require.main === module) {
   } else die('usage: session-time.cjs key <KEY> | dir <working-folder> | file <transcript.jsonl> [--key KEY]  [--root <dir>]');
 }
 
-module.exports = { parseFile, measure, slugFor, findByKey, byDir };
+module.exports = { parseFile, measure, slugFor, findByKey, byDir, candidates };

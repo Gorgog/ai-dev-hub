@@ -3,7 +3,7 @@
 // copy tied to the hub's commit, so after edits: commit, then update — this script runs `claude plugin marketplace
 // update hub` and `claude plugin update hub@hub` when the CLI is there). Writes ~/.claude/settings.json (backup first): the marketplace `hub` and the
 // enabled plugin `hub@hub`; removes what the old install left — the user-level guard hook (now the plugin's
-// PreToolUse), junctions of hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
+// PreToolUse), links to hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
 // (moved to a backup, never deleted). Idempotent. usage: node install.cjs [--dry-run]
 'use strict';
 const fs = require('fs');
@@ -11,7 +11,7 @@ const os = require('os');
 const path = require('path');
 
 const dry = process.argv.includes('--dry-run');
-const hub = __dirname.replace(/\\/g, '/');
+const hub = __dirname;
 const home = path.join(os.homedir(), '.claude');
 const file = path.join(home, 'settings.json');
 const stamp = new Date().toISOString().slice(0, 10);
@@ -46,7 +46,7 @@ else {
   say('settings: marketplace hub, plugin hub@hub enabled, old guard hook removed');
 }
 
-// Leftovers of the junction install: links to <hub>/.claude/skills/* (or later layouts), copies of hub agents.
+// Leftovers of the old install: links to <hub>/.claude/skills/* (or later layouts), copies of hub agents.
 const plugin = path.join(hub, 'plugin');
 const skillsDir = path.join(home, 'skills');
 for (const name of fs.existsSync(path.join(plugin, 'skills')) ? fs.readdirSync(path.join(plugin, 'skills')) : []) {
@@ -54,9 +54,9 @@ for (const name of fs.existsSync(path.join(plugin, 'skills')) ? fs.readdirSync(p
   let st; try { st = fs.lstatSync(p); } catch { continue; }
   let target = null;
   try { target = fs.readlinkSync(p); } catch { /* not a link */ }
-  const ours = target && path.resolve(target).replace(/\\/g, '/').toLowerCase().startsWith(hub.toLowerCase() + '/');
+  const ours = target && path.resolve(skillsDir, target).startsWith(hub + '/');
   if (!st.isSymbolicLink() || !ours) { say(`kept     skills/${name}: not a link into this hub — check it by hand`); continue; }
-  if (!dry) { try { fs.rmdirSync(p); } catch { fs.unlinkSync(p); } } // the link itself, never its target
+  if (!dry) fs.unlinkSync(p); // the link itself, never its target
   say(`unlinked skills/${name} (the plugin provides /hub:${name})`);
 }
 const agentsDir = path.join(home, 'agents');
@@ -77,7 +77,7 @@ for (const name of fs.existsSync(path.join(plugin, 'agents')) ? fs.readdirSync(p
 // until it is added: then add it and install the plugin instead of updating.
 if (!dry) {
   const { spawnSync } = require('child_process');
-  const cli = (args) => spawnSync('claude', args, { encoding: 'utf8', shell: process.platform === 'win32' });
+  const cli = (args) => spawnSync('claude', args, { encoding: 'utf8' });
   const text = (r) => `${r.stdout || ''}${r.stderr || ''}`.trim();
   let m = cli(['plugin', 'marketplace', 'update', 'hub']);
   let next = ['plugin', 'update', 'hub@hub'];

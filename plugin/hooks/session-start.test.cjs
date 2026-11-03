@@ -7,8 +7,12 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { buildBrief, BUDGET } = require('./session-start.cjs');
+// Temp folders of this file, removed after its tests.
+const made = [];
+const mkdtemp = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ss-'));
+const tmp = () => mkdtemp('ss-');
 const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
 
 function project() {

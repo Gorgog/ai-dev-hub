@@ -6,7 +6,7 @@
 //   node grant.cjs <project-dir> release <heavy|medium> [<worktree>]
 // <worktree> = the worktree folder name (projects/<p>/worktrees/<worktree>), i.e. the branch from wt-new.sh.
 // A path to the worktree is accepted too and cut down to its folder name (guard.cjs compares names, not paths).
-// <project-dir> must contain dispatch-rules.json: a wrong path (e.g. /w/... read by PowerShell as W:\w\...) is refused.
+// <project-dir> must contain dispatch-rules.json: a wrong path (a typo, a relative path from another folder) is refused.
 // One holder per kind. "grant" refuses while another worktree holds an unexpired grant (release it first).
 // The file is replaced atomically (temp file + rename) so the hook never reads half a file.
 'use strict';

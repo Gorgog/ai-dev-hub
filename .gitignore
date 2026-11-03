@@ -17,6 +17,7 @@
 .claude/settings.local.json
 **/.claude/settings.local.json
 
-# Мусор ОС
+# Мусор ОС и файловых менеджеров (KDE Dolphin пишет .directory)
+.directory
 Thumbs.db
 Desktop.ini

@@ -7,6 +7,6 @@
   ],
   "full": [
     { "name": "types", "cwd": "app", "filterOwn": true, "baseline": true, "cmd": "npx tsc --noEmit" },
-    { "name": "tests", "cwd": "app", "okOn": "Tests\\s+\\d+ passed", "failOn": "Test Files\\s+\\d+ failed|Tests\\s+\\d+ failed", "cmd": "npx vitest run" }
+    { "name": "tests", "cwd": "app", "memory": "4G", "okOn": "Tests\\s+\\d+ passed", "failOn": "Test Files\\s+\\d+ failed|Tests\\s+\\d+ failed", "cmd": "npx vitest run" }
   ]
 }

@@ -4,10 +4,14 @@
 # env HOT — regex горячих точек из профиля (по умолчанию — монорепо NestJS + Prisma и Next + kubb).
 # Код выхода: 0 — чисто; 1 — есть текстовый конфликт; 3 — только общие горячие точки/файлы.
 set -uo pipefail
+# Один порядок байтов для sort и comm: под ru_RU sort (uutils) сортирует по правилам языка, comm сравнивает байты —
+# общие файлы терялись (176 из 193).
+export LC_ALL=C
 [ $# -ge 4 ] || { sed -n 2,5p "$0"; exit 2; }
 repo=$1; base=$2; shift 2
 HOT=${HOT:-'prisma/migrations/|prisma/models/|src/kubb/|i18n/locales/|permission.*enum|^docs/|app\.module\.ts'}
-g() { git -C "$repo" "$@"; }
+# Пути как есть, без восьмеричных кавычек git: кириллица читается.
+g() { git -C "$repo" -c core.quotePath=false "$@"; }
 declare -A files
 for b in "$@"; do files[$b]=$(g diff --name-only "$base...$b"); done
 rc=0

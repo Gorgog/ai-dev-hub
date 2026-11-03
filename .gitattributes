@@ -1,3 +1,3 @@
-# Shell scripts and git hooks keep LF on Windows checkouts too: sh/bash stop on CR.
+# Shell scripts and git hooks keep LF whatever the checkout settings (core.autocrlf): bash stops on CR.
 *.sh text eol=lf
 .githooks/* text eol=lf

@@ -7,19 +7,32 @@ const os = require('os');
 const path = require('path');
 const { findProject, loadRules, evaluate, toHookOutput } = require('./rules-guard.cjs');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rg-'));
+const made = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-')); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 const SHIPPED = path.join(__dirname, 'base-rules.json');
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
-const ps = (command) => ({ tool_name: 'PowerShell', tool_input: { command } });
 
 test('findProject: only projects/<name> of THIS hub — repo, worktree, project folder; not any …/projects/x', () => {
-  const hub = 'W:/hub';
-  assert.deepStrictEqual(findProject('W:\\hub\\projects\\demo\\repo\\apps\\web', hub), { dir: 'W:/hub/projects/demo', name: 'demo' });
-  assert.deepStrictEqual(findProject('w:/HUB/projects/demo/worktrees/K-1', hub), { dir: 'W:/hub/projects/demo', name: 'demo' });
-  assert.deepStrictEqual(findProject('W:/hub/projects/demo', hub), { dir: 'W:/hub/projects/demo', name: 'demo' });
-  assert.strictEqual(findProject('C:/Users/u/projects/app', hub), null);
-  assert.strictEqual(findProject('W:/hub/projects/demo/repo/apps/x/projects/y', hub).name, 'demo');
-  assert.strictEqual(findProject('W:/hub', hub), null);
+  const hub = '/home/u/hub';
+  assert.deepStrictEqual(findProject('/home/u/hub/projects/demo/repo/apps/web', hub), { dir: '/home/u/hub/projects/demo', name: 'demo' });
+  assert.deepStrictEqual(findProject('/home/u/hub/projects/demo/worktrees/K-1/', hub), { dir: '/home/u/hub/projects/demo', name: 'demo' });
+  assert.deepStrictEqual(findProject('/home/u/hub/projects/demo', hub), { dir: '/home/u/hub/projects/demo', name: 'demo' });
+  assert.strictEqual(findProject('/home/u/HUB/projects/demo', hub), null, 'case matters on Linux');
+  assert.strictEqual(findProject('/home/u/work/projects/app', hub), null);
+  assert.strictEqual(findProject('/home/u/hub/projects/demo/repo/apps/x/projects/y', hub).name, 'demo');
+  assert.strictEqual(findProject('/home/u/hub', hub), null);
+  assert.strictEqual(findProject('/home/u/hubby/projects/demo', hub), null);
+});
+
+test('findProject: a hub or a session reached through a symlink still finds the project', () => {
+  const base = tmp();
+  const hub = path.join(base, 'ai-dev-hub');
+  fs.mkdirSync(path.join(hub, 'projects', 'demo', 'repo'), { recursive: true });
+  fs.symlinkSync(hub, path.join(base, 'hub-link'));
+  const want = { dir: `${fs.realpathSync(hub)}/projects/demo`, name: 'demo' };
+  assert.deepStrictEqual(findProject(path.join(hub, 'projects', 'demo', 'repo'), path.join(base, 'hub-link')), want, 'hub via a link');
+  assert.deepStrictEqual(findProject(path.join(base, 'hub-link', 'projects', 'demo', 'repo'), hub), want, 'session via a link');
 });
 
 test('shipped base-rules.json: catches the forms the hub itself advises and leaves look-alikes alone', () => {
@@ -30,8 +43,6 @@ test('shipped base-rules.json: catches the forms the hub itself advises and leav
     [bash('cd /w/repo && git status'), ['cd-no-subshell']],
     [bash('ls && cd x && make'), ['cd-no-subshell']],
     [bash('( cd /w/repo && git status )'), []],
-    [ps('(cd W:/x; npm test)'), ['cd-powershell']],
-    [ps('Set-Location W:/x'), ['cd-powershell']],
     [bash('git add -A apps/frontend'), ['git-add-all']],
     [bash('git -C repo add -A'), ['git-add-all']],
     [bash('git add apps/frontend/src/a.ts'), []],
@@ -40,7 +51,7 @@ test('shipped base-rules.json: catches the forms the hub itself advises and leav
     [bash('git -C repo worktree remove --force wt'), ['worktree-force']],
     [bash('git clean -fdx'), ['clean-x']],
     [bash('git clean -f -x'), ['clean-x']],
-    [bash('git -C W:/ai-dev-hub clean -fdx'), ['clean-x']],
+    [bash('git -C /home/u/ai-dev-hub clean -fdx'), ['clean-x']],
     [bash('git clean -fd'), []],
     [bash('git push -u origin K-1'), ['push']],
     [bash('git -C /w/repo push -o ci.skip'), ['push']],
@@ -54,8 +65,10 @@ test('shipped base-rules.json: catches the forms the hub itself advises and leav
     [bash("sed -Ei 's/a/b/' f.md"), ['sed-in-place']],
     [bash('sed -e s/a/b/ -i f'), ['sed-in-place']],
     [bash('sed -n 1,5p f'), []],
-    [{ tool_name: 'Write', tool_input: { file_path: 'W:/x/repo/.claude/agent-memory/r.md', content: 'x' } }, ['agent-memory-write']],
-    [{ tool_name: 'Edit', tool_input: { file_path: 'W:/x/memory/errors-index.md', new_string: 'не писать в .claude/agent-memory/' } }, []],
+    [bash("node -e 'console.log(`${1}`)'"), []],
+    [bash("cat <<'EOF'\na\\b ${x}\nEOF"), []],
+    [{ tool_name: 'Write', tool_input: { file_path: '/home/u/x/repo/.claude/agent-memory/r.md', content: 'x' } }, ['agent-memory-write']],
+    [{ tool_name: 'Edit', tool_input: { file_path: '/home/u/x/memory/errors-index.md', new_string: 'не писать в .claude/agent-memory/' } }, []],
   ];
   for (const [ev, ids] of cases) assert.deepStrictEqual(hit(ev), ids, ev.tool_input.command || ev.tool_input.file_path);
 });

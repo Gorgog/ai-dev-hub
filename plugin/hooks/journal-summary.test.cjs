@@ -6,9 +6,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { summarize } = require('./journal-summary.cjs');
+// Temp folders of this file, removed after its tests.
+const made = [];
+const mkdtemp = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 
 function journal(lines) {
-  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'js-'));
+  const p = mkdtemp('js-');
   fs.mkdirSync(path.join(p, 'memory'));
   fs.writeFileSync(path.join(p, 'memory', 'rules-guard.log'), lines.map((l) => JSON.stringify(l)).join('\n') + '\nnot json\n');
   return p;
@@ -38,6 +42,6 @@ test('summary: --since is a moment, whatever its time zone', () => {
 });
 
 test('summary: no journal or nothing since — one quiet line', () => {
-  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'js-'));
+  const p = mkdtemp('js-');
   assert.match(summarize(p, {}), /срабатываний нет/);
 });

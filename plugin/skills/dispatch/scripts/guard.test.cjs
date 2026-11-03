@@ -6,9 +6,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { decide } = require('./guard.cjs');
+// Temp folders of this file, removed after its tests.
+const made = [];
+const mkdtemp = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 
 function project(grants) {
-  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gd-')), 'projects', 'demo');
+  const p = path.join(mkdtemp('gd-'), 'projects', 'demo');
   fs.mkdirSync(path.join(p, 'memory'), { recursive: true });
   fs.writeFileSync(path.join(p, 'dispatch-rules.json'), JSON.stringify({
     heavy: [{ name: 'e2e', tools: '^Bash$', commands: 'jest' }],
