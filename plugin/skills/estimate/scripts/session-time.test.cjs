@@ -102,6 +102,37 @@ test('TASK-1 does not match TASK-12', () => {
   assert.strictEqual(measure(parseFile(transcript(dir, 'a.jsonl', lines)), { key: 'TASK-1' }), null);
 });
 
+// A session under the dispatcher puts its markers in the messages it sends; the dispatcher's brief quotes them.
+const tool = (min, name, input) => ({ type: 'assistant', timestamp: at(min), message: { content: [{ type: 'tool_use', id: `t${min}`, name, input }] } });
+const BRIEF = 'Первым делом ответь диспетчеру «принял бриф» и отдельной строкой `⏱ EST-START TASK-7`; в докладе `⏱ EST-END TASK-7`.';
+
+test('key window: markers in a sent message on their own line count, a brief quoting them does not', () => {
+  const root = tmp();
+  // The dispatcher: writes the brief, starts the session, relays a reminder — none of it opens a window.
+  transcript(path.join(root, 'hub'), 'dispatcher.jsonl', [
+    human(0, 'запусти TASK-7'),
+    tool(1, 'Write', { file_path: '/x/brief.md', content: BRIEF }),
+    tool(2, 'mcp__ccd_session__start_session', { prompt: BRIEF }),
+    tool(3, 'SendMessage', { to: 'task', message: `Напоминаю: ${BRIEF}` }),
+    said(4, 'запустил'),
+  ]);
+  // The task session: its «принял бриф» and its report go to the dispatcher through SendMessage.
+  transcript(path.join(root, 'wt-TASK-7'), 'task.jsonl', [
+    human(0, BRIEF),
+    tool(1, 'SendMessage', { to: 'dispatcher', message: 'TASK-7: принял бриф.\n⏱ EST-START TASK-7' }),
+    toolResult(2),
+    said(15, 'сделано'),
+    toolResult(28),
+    tool(41, 'mcp__ccd_session_mgmt__send_message', { message: 'готово к пушу: TASK-7 abc123\n\n`⏱ EST-END TASK-7`' }),
+    said(50, 'после доклада'),
+  ]);
+  const r = findByKey(root, 'TASK-7');
+  assert.strictEqual(r.rounds.length, 1);
+  assert.strictEqual(path.basename(r.rounds[0].file), 'task.jsonl');
+  assert.strictEqual(r.rounds[0].ended, true);
+  assert.strictEqual(r.total.activeMin, 40);
+});
+
 test('findByKey sums rounds across transcripts', () => {
   const root = tmp();
   transcript(path.join(root, 'proj-a'), 's1.jsonl', LINES);

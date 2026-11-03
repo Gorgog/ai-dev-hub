@@ -7,8 +7,10 @@
 // Every gap between two events goes to «active» (Claude, agents, tests running), to «wait» (the gap that ends
 // with a human message or an answer to AskUserQuestion / ExitPlanMode: the user was answering — its first 20 min,
 // the rest is a pause, the user was away) or to «pause» (20 min or more with no human message at its end:
-// a permission prompt nobody answered, a night, a resumed session — not work). The markers count only in Claude's
-// own text, not in tool input.
+// a permission prompt nobody answered, a night, a resumed session — not work). The markers count in Claude's own
+// text and in the messages it sends (SendMessage / *send_message `message` — a session under the dispatcher puts
+// «⏱ EST-START <KEY>» in its «принял бриф» there), in a message only on a line of its own. Other tool input does
+// not count: a brief written with Write or start_session quotes the marker mid-sentence for the task session.
 // A window without EST-END runs to the end of its transcript (ended: false).
 'use strict';
 const fs = require('fs');
@@ -20,6 +22,8 @@ const NOT_HUMAN = /^\s*<task-notification/;
 const PAUSE_MS = 20 * 60000;
 // Tools whose result is the user's answer, not work.
 const ASKS_USER = new Set(['AskUserQuestion', 'ExitPlanMode']);
+// Tools that send a message to another session: what Claude says there is its own text too.
+const sends = (name) => name === 'SendMessage' || /(^|__)send_message$/.test(name || '');
 
 function parseFile(file) {
   const events = [];
@@ -33,6 +37,7 @@ function parseFile(file) {
     const blocks = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
     let human = false;
     let text = '';
+    let sent = '';
     if (o.type === 'user' && !o.isMeta) {
       if (typeof content === 'string') human = !NOT_HUMAN.test(content);
       else human = (blocks.some((b) => b.type === 'text') && !blocks.some((b) => b.type === 'tool_result')) ||
@@ -40,16 +45,21 @@ function parseFile(file) {
     }
     if (o.type === 'assistant') {
       text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+      sent = blocks.filter((b) => b.type === 'tool_use' && sends(b.name) && b.input && typeof b.input.message === 'string')
+        .map((b) => b.input.message).join('\n');
       for (const b of blocks) if (b.type === 'tool_use' && ASKS_USER.has(b.name)) asks.add(b.id);
     }
-    events.push({ t: Date.parse(o.timestamp), id: o.uuid || `${o.timestamp}|${o.type}`, human, text });
+    events.push({ t: Date.parse(o.timestamp), id: o.uuid || `${o.timestamp}|${o.type}`, human, text, sent });
   }
   return events.sort((a, b) => a.t - b.t);
 }
 
+// Matches an event: anywhere in Claude's text, or at the start of a line (after «⏱», backticks) in a sent message.
 function marker(word, key) {
   const k = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`EST-${word}\\s+${k}(?![\\w-])`);
+  const said = new RegExp(`EST-${word}\\s+${k}(?![\\w-])`);
+  const sent = new RegExp(`(^|\\n)[^\\S\\n]*\`?(⏱\\uFE0F?[^\\S\\n]*)?EST-${word}\\s+${k}(?![\\w-])`);
+  return { test: (e) => said.test(e.text) || sent.test(e.sent || '') };
 }
 
 // A gap is named by its two events: a forked transcript repeats the history with the same ids, so the same gap
@@ -87,9 +97,9 @@ function measure(events, { key } = {}) {
     const start = marker('START', key), end = marker('END', key);
     windows = [];
     for (let i = 0; i < events.length; i++) {
-      if (!start.test(events[i].text)) continue;
+      if (!start.test(events[i])) continue;
       let j = i + 1;
-      while (j < events.length && !end.test(events[j].text)) j++;
+      while (j < events.length && !end.test(events[j])) j++;
       windows.push(j < events.length ? { from: i, to: j, ended: true } : { from: i, to: events.length - 1, ended: false });
       i = j;
     }
