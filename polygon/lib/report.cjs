@@ -12,7 +12,7 @@ function aggregate(sc) {
   const byCheck = {};
   for (const r of sc.runs) for (const c of r.checks) {
     const b = (byCheck[c.id] ||= { id: c.id, source: c.source, observe: Boolean(c.observe), real: Boolean(c.real),
-      skip: c.skip || null, kind: c.kind || (sc.level === 'model' ? 'task' : 'catch'), mech: c.mech || sc.mech || sc.id,
+      skip: c.skip || null, proto: c.proto !== false, kind: c.kind || (sc.level === 'model' ? 'task' : 'catch'), mech: c.mech || sc.mech || sc.id,
       pass: 0, n: 0, details: [] });
     b.n++; if (c.pass) b.pass++;
     if (c.detail) b.details.push(String(c.detail).slice(0, 300));
@@ -43,7 +43,7 @@ function summary(results) {
     const g = group(sc, c), ok = c.pass === c.n;
     if (g === 'skip') { s.skipped++; continue; }
     if (g === 'observe') continue;
-    if (sc.proto && !c.real) add(s.proto, ok);
+    if (sc.proto && !c.real && c.proto) add(s.proto, ok);
     if (g === 'contract') { add(s.contract, ok); if (!s.contractIds.includes(sc.id)) s.contractIds.push(sc.id); continue; }
     if (g === 'real') { add(s.real, ok); continue; }
     add(s.gate.all, ok); add(s.gate[c.kind] || (s.gate[c.kind] = tally()), ok);

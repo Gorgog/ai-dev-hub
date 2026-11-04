@@ -6,6 +6,7 @@
     { "name": "проверка в браузере", "tools": "^mcp__(Claude_Browser|claude-in-chrome)__", "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]" },
     { "name": "playwright и пробы", "tools": "^Bash$", "commands": "npx\\s+playwright\\b|\\bnode\\s+\\S*snippets[\\\\/]+\\S+\\.(c|m)?js\\b|\\bnode\\s+\\S*(proof|shots|probe|repro)\\S*\\.(c|m)?js\\b" },
     { "name": "тесты с общей базой", "tools": "^Bash$", "commands": "npx\\s+jest\\b|node_modules[\\\\/]+\\.bin[\\\\/]+jest\\b|test-all-batches" },
+    { "name": "модельные прогоны полигона", "tools": "^Bash$", "commands": "\\bclaude\\s+-p\\b|polygon[\\\\/]run\\.cjs\\b[^\\n]*--model\\b" },
     { "name": "миграции и общая БД", "tools": "^Bash$", "commands": "prisma\\s+(migrate|db\\s+(push|seed|execute|pull))\\b|\\bpsql\\b" }
   ],
   "medium": [

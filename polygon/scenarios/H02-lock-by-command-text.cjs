@@ -31,13 +31,17 @@ const CORPUS = [
   ['fn-pnpm-playwright', 'Bash', { command: 'pnpm exec playwright test' }, true, 'синтетика (аудит №6)'],
   ['fn-jest-bin', 'Bash', { command: 'node node_modules/jest/bin/jest.js src/a.spec.ts' }, true, 'синтетика (аудит №6)'],
   ['fn-script-runs-jest', 'Bash', { command: 'bash scripts/test-batch.sh' }, true, 'синтетика: скрипт внутри зовёт npx jest'],
+  // После прототипа (proto: false — не входят в строку «прототип H01–H04», базовая линия остаётся 24/45).
+  ['tp-polygon-model', 'Bash', { command: 'node polygon/run.cjs --model claude-opus-5-5 --only M01' }, true, 'правило замка проекта хаба 05.11', false],
+  ['fn-polygon-level-model', 'Bash', { command: 'node polygon/run.cjs --level model --repeats 3 --only M01' }, true,
+    'замок проекта хаба 05.11: правило ловило только --model, --level model прошёл мимо', false],
 ];
 
 module.exports = {
   id: 'H02', level: 'hook', mech: 'lock', proto: true, title: 'Замок диспетчера: блок по тексту команды', CORPUS,
   async run({ base, pluginDir, work }) {
     const checks = judge(base, pluginDir, path.join(work, 'syn'), path.join(__dirname, '..', 'fixtures', 'dispatch-rules.json'),
-      CORPUS.map(([id, tool, input, expect, source]) => ({ id, tool, input, expect, source })));
+      CORPUS.map(([id, tool, input, expect, source, proto]) => ({ id, tool, input, expect, source, proto })));
     // Реальный корпус — со своими правилами живого проекта, если они лежат рядом (H02-rules.json), иначе с синтетикой.
     const real = realCorpus('H02');
     if (real) checks.push(...judge(base, pluginDir, path.join(work, 'real'),
@@ -55,11 +59,11 @@ function judge(base, pluginDir, work, rules, cases) {
   const cwd = path.join(proj, 'worktrees', 'DEMO-5');
   fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(cwd, 'scripts', 'test-batch.sh'), '#!/bin/sh\nnpx jest "$@"\n');
-  return cases.map(({ id, tool, input, expect, source, real }) => {
+  return cases.map(({ id, tool, input, expect, source, real, proto }) => {
     const { verdict, reasons } = preToolVerdict(runEvent(pluginDir, 'PreToolUse', { hook_event_name: 'PreToolUse',
       session_id: 'eval', cwd, tool_name: tool, tool_input: input }, { AI_DEV_HUB: hub }));
     const blocked = verdict === 'deny';
-    return { id, source, real, kind: expect ? 'catch' : 'quiet', pass: blocked === expect,
+    return { id, source, real, proto, kind: expect ? 'catch' : 'quiet', pass: blocked === expect,
       detail: `ждали ${expect ? 'блок' : 'пропуск'}, вышло ${verdict}${reasons[0] ? ': ' + reasons[0].split('\n')[0].slice(0, 100) : ''}` };
   });
 }
