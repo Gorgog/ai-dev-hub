@@ -45,7 +45,8 @@ function rebuild(sig) {
     const keys = (text.match(/^keys:\s*\[(.*)\]$/m) || [, ''])[1];
     ins.run(f.slice(0, -3), keys, text.replace(/^---[\s\S]*?\n---\n/, ''));
   }
-  db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('sig', sig);
+  // A lesson changed while being read: keep the index, but mark it stale so the next search rebuilds again.
+  db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run('sig', signature() === sig ? sig : `stale:${sig}`);
   db.exec('COMMIT');
   db.close();
   fs.renameSync(tmp, indexFile);

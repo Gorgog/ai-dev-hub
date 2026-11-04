@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """P2: FTS5 + `unicode61` in `node:sqlite` of the node the hooks run (~/.local/bin/node).
 Corpus — every record of the largest errors.md in the hub-data copy (project A, ~700) as lessons/<id>.md.
-Passed: query < 5 ms and the whole hook process < 50 ms (p95 of warm runs), no ExperimentalWarning in the hook
+Passed: query < 5 ms and the whole hook process < 50 ms (p95 of warm runs — the rebuild after a lesson changed is
+measured and reported apart, it does not fit 50 ms), no ExperimentalWarning in the hook
 output, and after 7 parallel rebuilds (× rounds, with readers running) the index is whole: integrity checks pass,
 row count = corpus, the same query gives the same hits.
 
@@ -102,7 +103,7 @@ def main():
     warm = [hook(mem, q) for q in qs]
     lesson = sorted((mem / 'lessons').glob('*.md'))[n // 2]
     stale = []
-    for i in range(10):  # a lesson changed → the next search rebuilds
+    for i in range(20):  # a lesson changed → the next search rebuilds
         lesson.write_text(lesson.read_text() + f'edit {i}\n')
         stale.append(hook(mem, qs[i % len(qs)]))
     expect = hook(mem, 'heredoc node кавычки')['probe'].get('hits')
@@ -123,7 +124,8 @@ def main():
         'node': node_version(), 'lessons': n, 'query_p95_ms': round(q95, 2), 'hook_p95_ms': round(w95, 1),
         'hook_max_ms': round(max(r['wall_ms'] for r in warm), 1),
         'rebuild_hook_p95_ms': round(pct([r['wall_ms'] for r in stale], 95), 1),
-        'cold_build_ms': round(cold['wall_ms'], 1), 'warnings': len(warnings),
+        'cold_build_ms': round(cold['wall_ms'], 1), 'threshold_on': 'тёплый путь (без пересборки)',
+        'warnings': len(warnings),
         'parallel_rounds_ok': f'{par_ok}/{len(par)}', 'hits_expected': len(expect or []),
     }
     passed = (q95 < 5 and w95 < 50 and not warnings and not stderr_any and not bad and par_ok == len(par)
@@ -131,7 +133,8 @@ def main():
     save('P2', 'прошла' if passed else 'не прошла', numbers,
          'запрос < 5 мс, хук целиком < 50 мс, без ExperimentalWarning в выводе хука, 7 параллельных пересборок — '
          'индекс цел',
-         'индекс памяти (срез 14) — FTS5 в node:sqlite, пересборка во временный файл + rename' if passed else
+         'индекс памяти (срез 14) — FTS5 в node:sqlite, пересборка во временный файл + rename; порог 50 мс — '
+         'только без пересборки (с ней p95 выше порога): пересборку держать вне горячего пути хука' if passed else
          'BM25 на JS по .triggers.json для recall; горячий путь не меняется',
          {'corpus': f'{n} записей errors.md проекта A (копия hub-data)', 'warm_rebuilt': rebuilt_warm,
           'stale_rebuilt': sum(1 for r in stale if r['probe'].get('rebuilt')), 'stderr': stderr_any[:3],
@@ -141,7 +144,7 @@ def main():
           'work': str(root)},
         method=f'хук-заглушка p02_index.cjs на {NODE}: подпись уроков (число, mtime, размер) → пересборка FTS5 '
                f'во временный файл + rename → BM25-запрос; {a.runs} тёплых вызовов процесса со случайными '
-               f'запросами по словам корпуса, 10 вызовов после правки урока, {a.rounds} раундов по 7 параллельных '
+               f'запросами по словам корпуса, 20 вызовов после правки урока, {a.rounds} раундов по 7 параллельных '
                'пересборок и 5 читателей; целостность — PRAGMA integrity_check, FTS5 integrity-check, число строк')
 
 
