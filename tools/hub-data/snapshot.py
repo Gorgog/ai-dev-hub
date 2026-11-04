@@ -17,6 +17,7 @@ Sources are only read: no fetch, no worktree add, git runs without optional lock
 snapshot is only noted), `git bundle verify` of every bundle. Stdlib only.
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -50,16 +51,24 @@ SECRETS = [
     ('slack-token', rb'\bxox[abposr]-[A-Za-z0-9-]{10,}'),
     ('google-key', rb'\bAIza[0-9A-Za-z_-]{35}'),
     ('jwt', rb'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'),
-    # NAME=value, "name": "value", also JSON-escaped. The value is one whole token of 16+ key characters with a
-    # letter and a digit (checked in scan_secrets): code (`token = data.token`), prose and placeholders are not keys.
-    ('assignment', rb'(?i)(?:password|passwd|secret|token|api[_-]?key)(?:\\?["\'])?\s*[=:]\s*(?:\\?["\'])?'
-                   rb'([A-Za-z0-9_+/=-]{16,})(?![A-Za-z0-9_+/=.-])'),
+    # DB_PASSWORD=x, "token": "x", SECRET_KEY=x, also JSON-escaped. The value (8+ chars) passes is_key_value:
+    # code (`token = data.accessToken`), prose, counters and placeholders are not keys.
+    ('assignment', rb'(?i)(?:password|passwd|secret|token|api[_-]?key)[A-Za-z0-9_]*(?:\\?["\'])?\s*[=:]\s*'
+                   rb'(?:\\?["\'])?([^\s"\'\\`,;{}()<>\[\]]{8,})'),
 ]
-# A change of the rules rescans the whole copy, not only new files.
-RULES = hashlib.sha256(repr(SECRETS).encode()).hexdigest()[:16]
-SECRETS = [(kind, re.compile(rx)) for kind, rx in SECRETS]
 NO_SCAN = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.mp4', '.webm', '.mov', '.zip', '.gz', '.pdf',
            '.woff', '.woff2', '.ttf', '.bundle'}
+SCAN_LOGIC = 2  # bump when is_key_value or scan_secrets change what counts
+# A change of the rules rescans the whole copy, not only new files.
+RULES = hashlib.sha256(repr((SECRETS, sorted(NO_SCAN), SCAN_LOGIC)).encode()).hexdigest()[:16]
+SECRETS = [(kind, re.compile(rx)) for kind, rx in SECRETS]
+CODE_PATH = re.compile(rb'^[A-Za-z_$][\w$]*(?:\.[\w$]+)+$')  # data.accessToken, os.environ.get, config.v2.x
+
+
+def is_key_value(v):
+    v = v.rstrip(b'.')
+    return (len(v) >= 8 and not v.startswith((b'$', b'%', b'*')) and not CODE_PATH.match(v)
+            and re.search(rb'[0-9]', v) is not None and re.search(rb'[A-Za-z]', v) is not None)
 
 
 def die(msg):
@@ -93,7 +102,8 @@ def walk(base, rel_root):
         yield rel_root, base
         return
     failed = []
-    for d, dirs, names in os.walk(base, onerror=failed.append):
+    # A folder removed between listing and reading (a live session cleaning up) is gone, not unreadable.
+    for d, dirs, names in os.walk(base, onerror=lambda e: e.errno == errno.ENOENT or failed.append(e)):
         yield from ((rel(e.filename), e) for e in failed)
         failed.clear()
         dirs.sort()
@@ -184,12 +194,13 @@ def sync_area(name, title, root, files, dest, state, tmpdir):
     area = state['areas'].setdefault(name, {'root': str(root), 'files': {}})
     area['root'] = str(root)
     known = area['files']
+    secrets = state.setdefault('secrets', {})
     out = dest / name
     new, changed, seen, errors, unread = [], [], set(), [], []
     for rel, src in files:
         if isinstance(src, OSError):
             errors.append(f'{rel}: {src.strerror}')
-            unread.append(rel + '/')
+            unread.append('' if rel == '.' else rel + '/')  # '.': the area's root itself, every file under it
             continue
         seen.add(rel)
         dst = out / rel
@@ -207,6 +218,12 @@ def sync_area(name, title, root, files, dest, state, tmpdir):
         elif prev[2] != digest:
             changed.append(rel)
         known[rel] = [st.st_size, st.st_mtime_ns, digest]
+        # Scanned together with the copy: a run interrupted later never leaves a copied file unscanned.
+        found = scan_secrets(dst)
+        if found:
+            secrets[f'{name}/{rel}'] = found
+        else:
+            secrets.pop(f'{name}/{rel}', None)
     out.mkdir(parents=True, exist_ok=True)
     write_atomic(out / MANIFEST, ''.join(f'{known[rel][2]}  {rel}\n' for rel in sorted(known)))
     # Files under an unreadable folder are not «gone»: the error above already names the folder.
@@ -298,7 +315,7 @@ def scan_secrets(path):
     found = {}
     for kind, rx in SECRETS:
         if kind == 'assignment':
-            n = sum(1 for v in rx.findall(data) if re.search(rb'[0-9]', v) and re.search(rb'[A-Za-z]', v))
+            n = sum(1 for v in rx.findall(data) if is_key_value(v))
         else:
             n = len(rx.findall(data))
         if n:
@@ -363,6 +380,8 @@ def snapshot(dest, journals, hub):
     shutil.rmtree(tmpdir, ignore_errors=True)
     tmpdir.mkdir()
     state = load_state(dest)
+    if not state['areas']:  # a fresh copy is scanned file by file as it is copied: no second pass
+        state['secret_rules'] = RULES
     repo_list = repos(hub)
     before = statuses(repo_list)
 
@@ -370,7 +389,9 @@ def snapshot(dest, journals, hub):
     for name, title, root, files in (('journals', 'журналы', journals, journal_files(journals)),
                                      ('hub', 'хаб', hub, hub_files(hub))):
         areas.append(sync_area(name, title, root, files, dest, state, tmpdir))
-        save_state(dest, state)  # an interrupted run keeps what it has copied
+        save_state(dest, state)  # an interrupted run keeps what it has copied (and scanned)
+    if os.environ.get('HUB_DATA_INTERRUPT') == 'after-copy':  # tests: Ctrl-C between the copy and the bundles
+        raise KeyboardInterrupt
 
     bundles = dest / 'bundles'
     bundles.mkdir(exist_ok=True)
@@ -382,26 +403,30 @@ def snapshot(dest, journals, hub):
             infos.append({'name': name, 'path': str(path), 'ok': False, 'error': str(e), 'stash': [],
                           'no_upstream': [], 'ahead': [], 'worktrees': []})
     state['bundles'] = sorted(set(state.get('bundles', [])) | {i['name'] for i in infos if i['ok']})
-    # git bundle verify reads the header only: the checksum is what catches a bundle damaged inside.
-    write_atomic(bundles / MANIFEST, ''.join(f'{sha_of(bundles / f"{n}.bundle")}  {n}.bundle\n'
-                                             for n in state['bundles'] if (bundles / f'{n}.bundle').is_file()))
+    # git bundle verify reads the header only: the checksum is what catches a bundle damaged inside. Only a bundle
+    # made in this run gets a new sum; an old one (its repo gone) keeps the sum it was made with.
+    try:
+        sums = read_manifest(bundles / MANIFEST)
+    except (OSError, ValueError):
+        sums = {}
+    for n in state['bundles']:
+        f = bundles / f'{n}.bundle'
+        if f.is_file() and (n in {i['name'] for i in infos if i['ok']} or f.name not in sums):
+            sums[f.name] = sha_of(f)
+    write_atomic(bundles / MANIFEST, ''.join(f'{sums[k]}  {k}\n' for k in sorted(sums)))
     after = statuses(repo_list)
     moved = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
 
     secrets = state.setdefault('secrets', {})
     if state.get('secret_rules') != RULES:  # new rules: every file of the copy is scanned again
         secrets.clear()
+        for area_name, area in state['areas'].items():
+            for rel in area['files']:
+                key = f'{area_name}/{rel}'
+                found = scan_secrets(dest / key) if (dest / key).is_file() else {}
+                if found:
+                    secrets[key] = found
         state['secret_rules'] = RULES
-        targets = [(name, rel) for name, area in state['areas'].items() for rel in area['files']]
-    else:
-        targets = [(s['name'], rel) for s in areas for rel in s['new'] + s['changed']]
-    for area_name, rel in targets:
-        key = f'{area_name}/{rel}'
-        found = scan_secrets(dest / key) if (dest / key).is_file() else {}
-        if found:
-            secrets[key] = found
-        else:
-            secrets.pop(key, None)
     save_state(dest, state)
     shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -461,7 +486,7 @@ def verify_area(dest, name, title, area):
     rows, errors = [], []
     try:
         listed = read_manifest(out / MANIFEST)
-    except OSError:
+    except (OSError, ValueError):  # missing or broken: a line without «sha  path»
         return [f'{title}: нет манифеста {out / MANIFEST}'], True
     good = 0
     later, gone, same = [], [], 0
@@ -517,7 +542,7 @@ def verify(dest):
     names = state.get('bundles', [])
     try:
         sums = read_manifest(dest / 'bundles' / MANIFEST)
-    except OSError:
+    except (OSError, ValueError):
         sums = {}
     bad_b = []
     for n in names:
@@ -525,7 +550,7 @@ def verify(dest):
         if not p.is_file():
             bad_b.append(f'  ! {n}: нет файла')
         elif f'{n}.bundle' not in sums:
-            bad_b.append(f'  ! {n}: нет в манифесте бандлов')
+            bad_b.append(f'  ! {n}: нет в манифесте бандлов (копия старой версии скрипта — перезапусти снимок)')
         elif sha_of(p) != sums[f'{n}.bundle']:
             bad_b.append(f'  ! {n}: бандл не совпадает с манифестом')
         elif (res := bundle_verify(p)).returncode != 0:
