@@ -104,7 +104,7 @@ def main():
     stale = []
     for i in range(10):  # a lesson changed → the next search rebuilds
         lesson.write_text(lesson.read_text() + f'edit {i}\n')
-        stale.append(hook(mem, qs[i]))
+        stale.append(hook(mem, qs[i % len(qs)]))
     expect = hook(mem, 'heredoc node кавычки')['probe'].get('hits')
     par = parallel_rebuilds(mem, n, a.rounds, 'heredoc node кавычки', expect)
 
