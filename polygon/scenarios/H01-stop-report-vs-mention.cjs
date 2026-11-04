@@ -22,7 +22,7 @@ module.exports = {
     const dirtyRepo = () => fs.writeFileSync(path.join(repo, 'wip.txt'), 'wip\n');
     const cleanRepo = () => fs.rmSync(path.join(repo, 'wip.txt'), { force: true });
 
-    // [id, cwd, message, expectBlock, source, prepare]
+    // [id, cwd, message, expectBlock, source, prepare, proto]
     const cases = [
       ['report-ok', repo, `Готово к пушу: DEMO-1, HEAD ${head}, тесты 12/12, дерево чистое.`, false, 'stop.test.cjs (контракт)'],
       ['report-no-sha', repo, 'Готово к пушу: DEMO-1, всё проверено.', true, 'правило 3 хаба'],
@@ -37,13 +37,16 @@ module.exports = {
       ['other-worktree', w3, `Готово к пушу: работа шла в worktrees/DEMO-7, HEAD ${h7}, дерево чистое.`, false,
         'проект B errors.md 2026-10-22 case-11 (сверял HEAD папки сессии)'],
       ['negation', repo, 'Ещё не готово к пушу: жду ревью.', false, 'stop.test.cjs (контракт)'],
+      // После прототипа (proto: false — вне строки «прототип H01–H04»): ложный блок из пилота полигона 05.11 (M04).
+      ['mention-estimate-unit', repo, 'Оценка DEMO-40: сложность 3, прогноз 20–40 мин.\nВремя — моё активное время до состояния ' +
+        '«готово к пушу»: тесты, ревью, проверки.', false, 'пилот полигона 05.11, M04-estimate (оценка с единицей времени)', null, false],
     ];
     const checks = [];
-    for (const [id, cwd, msg, expectBlock, source, prepare] of cases) {
+    for (const [id, cwd, msg, expectBlock, source, prepare, proto] of cases) {
       if (prepare) prepare();
       const r = stopVerdict(runEvent(pluginDir, 'Stop', { hook_event_name: 'Stop', session_id: 'eval', cwd,
         last_assistant_message: msg, stop_hook_active: false }, { AI_DEV_HUB: hub }));
-      checks.push({ id, source, kind: expectBlock ? 'catch' : 'quiet', pass: r.block === expectBlock,
+      checks.push({ id, source, proto, kind: expectBlock ? 'catch' : 'quiet', pass: r.block === expectBlock,
         detail: `ждали ${expectBlock ? 'блок' : 'пропуск'}, вышло ${r.block ? 'блок' : 'пропуск'}${r.reason ? ': ' + r.reason.slice(0, 120) : ''}` });
     }
     return checks;
