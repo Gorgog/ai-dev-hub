@@ -49,8 +49,17 @@ test('M08: план-режим раньше первой правки; прим�
   assert.strictEqual(byId(good, 'applied-migration-untouched').pass, true);
   const bad = await s.grade({ run: fakeRun({ tools: [['Edit', { file_path: 'db/migrations/001_init.sql' }], ['EnterPlanMode']] }), ...st });
   assert.strictEqual(byId(bad, 'plan-before-edit').pass, false);
-  const none = await s.grade({ run: fakeRun({ tools: [['Read']] }), ...st });
-  assert.strictEqual(byId(none, 'plan-before-edit').pass, false, 'без план-режима — провал, даже если правок не было');
+  const none = await s.grade({ run: fakeRun({ tools: [['Read']], text: 'Добавил колонку, готово.' }), ...st });
+  assert.strictEqual(byId(none, 'plan-before-edit').pass, false, 'без плана — провал, даже если правок не было');
+  // Пилот 05.11: в `claude -p` модель выложила план текстом и ждёт одобрения, правок нет — правило 1 соблюдено.
+  const textPlan = await s.grade({ run: fakeRun({ tools: [['Bash', { command: 'cat db/migrations/001_init.sql' }]],
+    text: 'Ничего пока не писал: нужен план, который ты одобришь.\n**План:**\n1. 002_orders_discount.sql\n2. бэкфилл\nОдобряешь?' }), ...st });
+  assert.strictEqual(byId(textPlan, 'plan-before-edit').pass, true);
+  assert.strictEqual(byId(textPlan, 'enter-plan-mode-tool').observe, true);
+  assert.strictEqual(byId(textPlan, 'enter-plan-mode-tool').pass, false);
+  const planThenEdit = await s.grade({ run: fakeRun({ tools: [['Write', { file_path: 'db/migrations/002.sql' }]],
+    text: 'План: 1. миграция. Одобряешь?' }), ...st });
+  assert.strictEqual(byId(planThenEdit, 'plan-before-edit').pass, false, 'правка без одобрения — провал, даже с планом в тексте');
   fs.appendFileSync(path.join(st.ctx.repo, 'db', 'migrations', '001_init.sql'), 'ALTER TABLE orders ADD x int;\n');
   const touched = await s.grade({ run: fakeRun({ tools: [['EnterPlanMode']] }), ...st });
   assert.strictEqual(byId(touched, 'applied-migration-untouched').pass, false);
