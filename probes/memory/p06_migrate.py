@@ -5,11 +5,12 @@ deterministically: same input — same bytes).
   p06_migrate.py <errors.md> <mapping.json> <out-dir>
 
 mapping.json: {"theme": "<regex: records that must get an address>",
-  "lessons": [{"id", "kind", "when": [], "keys": [], "created", "supersedes"?: [], "from": [sha, ...],
+  "lessons": [{"id", "kind", "when": [], "keys": [], "created", "supersedes"?: [], "from": [sha | {sha, part}, ...],
                "text": ["2–5 lines, the first ≤ 160 chars"]}],
-  "archive": [{"sha", "reason"}]}
-sha — v1mem.records()[...]['sha']: 12 hex of the record text. A record mapped from several — a merge.
-Output: <out>/lessons/<id>.md (v2 frontmatter) and <out>/addresses.json (sha → where it went). Exit 1 and nothing
+  "archive": [{"sha", "reason", "part"?}]}
+sha — v1mem.records()[...]['sha']: 12 hex of the record text. A lesson from several records — a merge. A record that
+holds two rules is split: each of its claims names its `part`, and only then may the sha be claimed again.
+Output: <out>/lessons/<id>.md (v2 frontmatter) and <out>/addresses.json (sha → [where it went]). Exit 1 and nothing
 written on: an unknown or twice-mapped sha, a theme record without an address (orphan), a lesson out of the limits.
 """
 import json
@@ -39,17 +40,24 @@ def lesson_md(l):
 def plan(errors_text, mp):
     recs = records(errors_text)
     by_sha = {r['sha']: r for r in recs}
-    problems, addr, seen = [], {}, set()
+    problems, addr, parts = [], {}, {}
 
-    def claim(sha):
+    def claim(sha, part):
+        """A sha may be claimed again only when every claim of it names its part."""
         if sha not in by_sha:
             problems.append(f'нет в источнике: {sha}')
             return False
-        if sha in seen:
+        if sha in parts and (part is None or None in parts[sha]):
             problems.append(f'дважды: {sha}')
             return False
-        seen.add(sha)
+        parts.setdefault(sha, []).append(part)
         return True
+
+    def put(sha, part, **where):
+        a = {'line': by_sha[sha]['line'], **where}
+        if part is not None:
+            a['part'] = part
+        addr.setdefault(sha, []).append(a)
 
     for l in mp.get('lessons', []):
         lid = l.get('id', '?')
@@ -63,16 +71,17 @@ def plan(errors_text, mp):
             problems.append(f'{lid}: строк {len(l["text"])}, нужно 2–5')
         if l['text'] and len(l['text'][0]) > 160:
             problems.append(f'{lid}: первая строка {len(l["text"][0])} знаков > 160')
-        for sha in l['from']:
-            if claim(sha):
-                addr[sha] = {'line': by_sha[sha]['line'], 'to': 'lesson', 'id': lid, 'merged': len(l['from'])}
+        for f in l['from']:
+            sha, part = (f['sha'], f.get('part')) if isinstance(f, dict) else (f, None)
+            if claim(sha, part):
+                put(sha, part, to='lesson', id=lid, merged=len(l['from']))
     ids = [l.get('id') for l in mp.get('lessons', [])]
     problems += [f'id дважды: {i}' for i in sorted({i for i in ids if ids.count(i) > 1})]
     for a in mp.get('archive', []):
         if not a.get('reason'):
             problems.append(f'архив без причины: {a.get("sha")}')
-        if claim(a.get('sha')):
-            addr[a['sha']] = {'line': by_sha[a['sha']]['line'], 'to': 'archive', 'reason': a.get('reason')}
+        if claim(a.get('sha'), a.get('part')):
+            put(a['sha'], a.get('part'), to='archive', reason=a.get('reason'))
     theme = re.compile(mp['theme'], re.I)
     in_theme = [r for r in recs if theme.search(r['text'])]
     orphans = [r for r in in_theme if r['sha'] not in addr]
@@ -88,7 +97,7 @@ def main(argv):
     mp = json.loads(mapping.read_text(encoding='utf-8'))
     addr, problems, got, total = plan(errors.read_text(encoding='utf-8'), mp)
     print(f'тема: {got}/{total} записей получили адрес; уроков {len(mp.get("lessons", []))}, '
-          f'в архив {len(mp.get("archive", []))}')
+          f'в архив {len(mp.get("archive", []))}; разбито записей: {sum(1 for a in addr.values() if len(a) > 1)}')
     for p in problems:
         print(p)
     if problems:
