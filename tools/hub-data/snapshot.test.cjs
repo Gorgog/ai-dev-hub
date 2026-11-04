@@ -228,8 +228,8 @@ test('snapshot: an unreadable source folder is an error that names it, not a sil
   const fx = fixture(t);
   const locked = path.join(fx.journals, 'proj-a', 's1');
   fs.chmodSync(locked, 0o000);
-  t.after(() => fs.chmodSync(locked, 0o755));
-  const r = run(fx);
+  let r;
+  try { r = run(fx); } finally { fs.chmodSync(locked, 0o755); } // before the fixture's own cleanup
   assert.strictEqual(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /^ {2}! proj-a\/s1: /m);
   assert.match(r.stdout, /^хаб: файлов 21/m);
@@ -265,4 +265,14 @@ test('snapshot: an empty journals folder is a valid (empty) area', (t) => {
   fs.mkdirSync(fx.journals);
   assert.match(ok(run(fx)), /^журналы: 0 новых, 0 изменённых \(файлов 0/m);
   assert.match(ok(verify(fx)), /^журналы: манифест сходится 0 из 0 \(100%\)/m);
+});
+
+test('snapshot: a file name the manifest cannot hold (newline) is an error; the rest is copied and verifies', (t) => {
+  const fx = fixture(t);
+  write(path.join(fx.journals, 'proj-a', 'bad\nname.jsonl'), '{}\n');
+  const r = run(fx);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^ {2}! 'proj-a\/bad\\nname\.jsonl': /m);
+  assert.match(r.stdout, /^журналы: файлов 3, новых 3/m);
+  assert.match(ok(verify(fx)), /манифест сходится 3 из 3 \(100%\)/);
 });
