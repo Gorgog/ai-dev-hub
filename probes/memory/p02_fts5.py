@@ -14,17 +14,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from common import HERE, NODE, node_version, pct, save, workdir
+from common import HERE, NODE, biggest_errors_md, node_version, pct, save, workdir
 from v1mem import records
 
 HOOK = HERE / 'p02_index.cjs'
-HUB_COPY = Path.home() / 'hub-data' / 'hub' / 'projects'
-
-
-def biggest_errors_md():
-    return max(HUB_COPY.glob('*/memory/errors.md'), key=lambda p: p.stat().st_size)
-
-
 def write_corpus(mem, src):
     lessons = mem / 'lessons'
     lessons.mkdir(parents=True)

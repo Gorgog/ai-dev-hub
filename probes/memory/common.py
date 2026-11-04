@@ -24,6 +24,11 @@ def platform_common():
     return mod
 
 
+def biggest_errors_md():
+    """errors.md of project A (the multi-session one) in the hub-data copy: the largest of them."""
+    return max((Path.home() / 'hub-data' / 'hub' / 'projects').glob('*/memory/errors.md'), key=lambda p: p.stat().st_size)
+
+
 def node_version(node=NODE):
     return subprocess.run([node, '--version'], capture_output=True, text=True).stdout.strip()
 
