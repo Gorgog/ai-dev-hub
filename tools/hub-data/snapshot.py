@@ -100,8 +100,20 @@ def walk(base, rel_root):
         for n in sorted(names):
             p = Path(d, n)
             if p.is_file() and not p.is_symlink():
-                yield rel(p), p
+                yield (rel(p), p) if fits(rel(p)) else (repr(rel(p)), BAD_NAME)
     yield from ((rel(e.filename), e) for e in failed)
+
+
+# A name with a newline or not in UTF-8 cannot be one line of MANIFEST.sha256: such a file is an error, not a copy.
+BAD_NAME = OSError(0, 'имя файла с переводом строки или не в UTF-8')
+
+
+def fits(rel):
+    try:
+        rel.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return '\n' not in rel and '\r' not in rel
 
 
 def is_repo(d):
