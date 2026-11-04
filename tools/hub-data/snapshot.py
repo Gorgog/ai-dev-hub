@@ -20,6 +20,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -49,10 +50,13 @@ SECRETS = [
     ('slack-token', rb'\bxox[abposr]-[A-Za-z0-9-]{10,}'),
     ('google-key', rb'\bAIza[0-9A-Za-z_-]{35}'),
     ('jwt', rb'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'),
-    # NAME=value, "name": "value", also JSON-escaped; placeholders ($X, <x>, {x}, %x, ***) are skipped.
+    # NAME=value, "name": "value", also JSON-escaped. The value is one whole token of 16+ key characters with a
+    # letter and a digit (checked in scan_secrets): code (`token = data.token`), prose and placeholders are not keys.
     ('assignment', rb'(?i)(?:password|passwd|secret|token|api[_-]?key)(?:\\?["\'])?\s*[=:]\s*(?:\\?["\'])?'
-                   rb'(?![$<{%*])[^\s"\'\\,;{}()<>]{8,}'),
+                   rb'([A-Za-z0-9_+/=-]{16,})(?![A-Za-z0-9_+/=.-])'),
 ]
+# A change of the rules rescans the whole copy, not only new files.
+RULES = hashlib.sha256(repr(SECRETS).encode()).hexdigest()[:16]
 SECRETS = [(kind, re.compile(rx)) for kind, rx in SECRETS]
 NO_SCAN = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.mp4', '.webm', '.mov', '.zip', '.gz', '.pdf',
            '.woff', '.woff2', '.ttf', '.bundle'}
@@ -79,23 +83,36 @@ def sha_of(path):
 
 
 def walk(base, rel_root):
-    """Regular files under base as (rel, abs); rel is rel_root/... with '/'. Symlinks are not followed."""
+    """Regular files under base as (rel, abs); rel is rel_root/... with '/'. Symlinks are not followed.
+    A folder that cannot be read comes out as (rel, OSError): an error of the snapshot, not a silent skip."""
     base = Path(base)
+    rel = lambda p: Path(rel_root, Path(p).relative_to(base)).as_posix()
     if base.is_symlink():
         return
     if base.is_file():
         yield rel_root, base
         return
-    for d, dirs, names in os.walk(base):
+    failed = []
+    for d, dirs, names in os.walk(base, onerror=failed.append):
+        yield from ((rel(e.filename), e) for e in failed)
+        failed.clear()
         dirs.sort()
         for n in sorted(names):
             p = Path(d, n)
             if p.is_file() and not p.is_symlink():
-                yield (Path(rel_root, p.relative_to(base)).as_posix() if rel_root else p.relative_to(base).as_posix()), p
+                yield rel(p), p
+    yield from ((rel(e.filename), e) for e in failed)
 
 
 def is_repo(d):
     return (d / '.git').is_dir()
+
+
+def listdir(d, rel):
+    try:
+        return sorted(d.iterdir()), None
+    except OSError as e:
+        return [], (rel, e)
 
 
 def journal_files(root):
@@ -108,11 +125,14 @@ def hub_files(hub):
     for extra in HUB_EXTRAS:
         if (hub / extra).exists():
             yield from walk(hub / extra, extra)
-    projects = hub / 'projects'
-    for proj in sorted(projects.iterdir()) if projects.is_dir() else []:
+    projects, err = listdir(hub / 'projects', 'projects')
+    yield from [err] if err else []
+    for proj in projects:
         if not proj.is_dir() or proj.is_symlink():
             continue
-        for entry in sorted(proj.iterdir()):
+        entries, err = listdir(proj, f'projects/{proj.name}')
+        yield from [err] if err else []
+        for entry in entries:
             if entry.name in CHECKOUTS or (entry.is_dir() and is_repo(entry) and entry.name != 'memory'):
                 continue
             yield from walk(entry, f'projects/{proj.name}/{entry.name}')
@@ -121,11 +141,10 @@ def hub_files(hub):
 def repos(hub):
     """(bundle name, path): the hub repo and every repo directly inside a project folder."""
     out = [('hub', hub)] if is_repo(hub) else []
-    projects = hub / 'projects'
-    for proj in sorted(projects.iterdir()) if projects.is_dir() else []:
+    for proj in listdir(hub / 'projects', '')[0]:
         if proj.is_dir():
             # A linked worktree has a .git file, not a dir: it is in its repo's bundle already.
-            out += [(f'{proj.name}--{d.name}', d) for d in sorted(proj.iterdir()) if d.is_dir() and is_repo(d)]
+            out += [(f'{proj.name}--{d.name}', d) for d in listdir(proj, '')[0] if d.is_dir() and is_repo(d)]
     return out
 
 
@@ -154,8 +173,12 @@ def sync_area(name, title, root, files, dest, state, tmpdir):
     area['root'] = str(root)
     known = area['files']
     out = dest / name
-    new, changed, seen, errors = [], [], set(), []
+    new, changed, seen, errors, unread = [], [], set(), [], []
     for rel, src in files:
+        if isinstance(src, OSError):
+            errors.append(f'{rel}: {src.strerror}')
+            unread.append(rel + '/')
+            continue
         seen.add(rel)
         dst = out / rel
         try:
@@ -172,9 +195,10 @@ def sync_area(name, title, root, files, dest, state, tmpdir):
         elif prev[2] != digest:
             changed.append(rel)
         known[rel] = [st.st_size, st.st_mtime_ns, digest]
-    with open(out / MANIFEST, 'w') as f:
-        f.writelines(f'{known[rel][2]}  {rel}\n' for rel in sorted(known))
-    gone = sorted(set(known) - seen)
+    out.mkdir(parents=True, exist_ok=True)
+    write_atomic(out / MANIFEST, ''.join(f'{known[rel][2]}  {rel}\n' for rel in sorted(known)))
+    # Files under an unreadable folder are not «gone»: the error above already names the folder.
+    gone = sorted(r for r in set(known) - seen if not r.startswith(tuple(unread)))
     return {'name': name, 'title': title, 'total': len(known), 'new': new, 'changed': changed, 'gone': gone,
             'errors': errors}
 
@@ -234,8 +258,11 @@ def snapshot_repo(name, path, bundles, tmpdir):
     refs = git(path, 'for-each-ref', '--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)',
                'refs/heads').stdout.splitlines()
     info['stash'] = stash
-    info['no_upstream'] = [r.split('\t')[0] for r in refs if not r.split('\t')[1]]
-    info['ahead'] = [f"{r.split(chr(9))[0]} {r.split(chr(9))[2]}" for r in refs if 'ahead' in r.split('\t')[2]]
+    refs = [r.split('\t') for r in refs]
+    # [gone]: the upstream branch was deleted on the remote (squash-merged, removed) - the commits are local only.
+    info['no_upstream'] = ([b for b, up, _ in refs if not up] +
+                           [f'{b} (upstream удалён)' for b, up, track in refs if up and track == '[gone]'])
+    info['ahead'] = [f'{b} {track}' for b, _, track in refs if 'ahead' in track]
     info['worktrees'] = [(str(wt), br, git_status(wt)) for wt, br in worktrees(path)]
     tmp = Path(tmpdir, f'{name}.bundle')
     r = git(path, 'bundle', 'create', '-q', str(tmp), '--all', check=False)
@@ -256,8 +283,15 @@ def scan_secrets(path):
     if path.suffix.lower() in NO_SCAN:
         return {}
     data = path.read_bytes()
-    found = {kind: len(rx.findall(data)) for kind, rx in SECRETS}
-    return {k: n for k, n in found.items() if n}
+    found = {}
+    for kind, rx in SECRETS:
+        if kind == 'assignment':
+            n = sum(1 for v in rx.findall(data) if re.search(rb'[0-9]', v) and re.search(rb'[A-Za-z]', v))
+        else:
+            n = len(rx.findall(data))
+        if n:
+            found[kind] = n
+    return found
 
 
 def load_state(dest):
@@ -267,10 +301,19 @@ def load_state(dest):
         return {'version': 1, 'areas': {}, 'secrets': {}, 'bundles': []}
 
 
+def write_atomic(path, text):
+    tmp = path.with_name(f'.{path.name}.tmp')
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def save_state(dest, state):
-    tmp = dest / f'{STATE}.tmp'
-    tmp.write_text(json.dumps(state))
-    os.replace(tmp, dest / STATE)
+    write_atomic(dest / STATE, json.dumps(state))
+
+
+def read_manifest(path):
+    """{rel: sha256} of a MANIFEST.sha256 written by this script."""
+    return {rel: digest for digest, rel in (line.split('  ', 1) for line in path.read_text().splitlines())}
 
 
 def default_hub():
@@ -311,8 +354,11 @@ def snapshot(dest, journals, hub):
     repo_list = repos(hub)
     before = statuses(repo_list)
 
-    areas = [sync_area('journals', 'журналы', journals, journal_files(journals), dest, state, tmpdir),
-             sync_area('hub', 'хаб', hub, hub_files(hub), dest, state, tmpdir)]
+    areas = []
+    for name, title, root, files in (('journals', 'журналы', journals, journal_files(journals)),
+                                     ('hub', 'хаб', hub, hub_files(hub))):
+        areas.append(sync_area(name, title, root, files, dest, state, tmpdir))
+        save_state(dest, state)  # an interrupted run keeps what it has copied
 
     bundles = dest / 'bundles'
     bundles.mkdir(exist_ok=True)
@@ -324,18 +370,26 @@ def snapshot(dest, journals, hub):
             infos.append({'name': name, 'path': str(path), 'ok': False, 'error': str(e), 'stash': [],
                           'no_upstream': [], 'ahead': [], 'worktrees': []})
     state['bundles'] = sorted(set(state.get('bundles', [])) | {i['name'] for i in infos if i['ok']})
+    # git bundle verify reads the header only: the checksum is what catches a bundle damaged inside.
+    write_atomic(bundles / MANIFEST, ''.join(f'{sha_of(bundles / f"{n}.bundle")}  {n}.bundle\n'
+                                             for n in state['bundles'] if (bundles / f'{n}.bundle').is_file()))
     after = statuses(repo_list)
     moved = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
 
     secrets = state.setdefault('secrets', {})
-    for s in areas:
-        for rel in s['new'] + s['changed']:
-            key = f"{s['name']}/{rel}"
-            found = scan_secrets(dest / key)
-            if found:
-                secrets[key] = found
-            else:
-                secrets.pop(key, None)
+    if state.get('secret_rules') != RULES:  # new rules: every file of the copy is scanned again
+        secrets.clear()
+        state['secret_rules'] = RULES
+        targets = [(name, rel) for name, area in state['areas'].items() for rel in area['files']]
+    else:
+        targets = [(s['name'], rel) for s in areas for rel in s['new'] + s['changed']]
+    for area_name, rel in targets:
+        key = f'{area_name}/{rel}'
+        found = scan_secrets(dest / key) if (dest / key).is_file() else {}
+        if found:
+            secrets[key] = found
+        else:
+            secrets.pop(key, None)
     save_state(dest, state)
     shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -385,14 +439,16 @@ def snapshot(dest, journals, hub):
     return 1 if failed else 0
 
 
+def percent(good, total):
+    """Rounded down to 0.1: 3199 of 3200 is 99.9%, never 100%."""
+    return f'{math.floor(1000 * good / total) / 10:g}' if total else '100'
+
+
 def verify_area(dest, name, title, area):
     out = dest / name
     rows, errors = [], []
-    listed = {}
     try:
-        for line in (out / MANIFEST).read_text().splitlines():
-            digest, rel = line.split('  ', 1)
-            listed[rel] = digest
+        listed = read_manifest(out / MANIFEST)
     except OSError:
         return [f'{title}: нет манифеста {out / MANIFEST}'], True
     good = 0
@@ -424,8 +480,7 @@ def verify_area(dest, name, title, area):
             same += 1
     on_disk = {p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file()} - {MANIFEST}
     errors += [f'  ! {rel}: лишний файл в копии, нет в манифесте' for rel in sorted(on_disk - set(listed))]
-    pct = 100 * good / len(listed) if listed else 100
-    rows.append(f'{title}: манифест сходится {good} из {len(listed)} ({pct:.3g}%)')
+    rows.append(f'{title}: манифест сходится {good} из {len(listed)} ({percent(good, len(listed))}%)')
     if root is not None:
         rows.append(f'{title}: с источником совпадает {same}, изменено в источнике после снимка {len(later)}, '
                     f'пропало в источнике {len(gone)}')
@@ -436,6 +491,11 @@ def verify_area(dest, name, title, area):
 def verify(dest):
     if not dest.is_dir():
         die(f'нет копии {dest}')
+    lock = open(dest / '.lock', 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        die(f'в {dest} идёт снимок: сверка после него')
     state = load_state(dest)
     rows, failed = [], False
     for name, title in (('journals', 'журналы'), ('hub', 'хаб')):
@@ -443,12 +503,21 @@ def verify(dest):
         rows += r
         failed |= bad
     names = state.get('bundles', [])
+    try:
+        sums = read_manifest(dest / 'bundles' / MANIFEST)
+    except OSError:
+        sums = {}
     bad_b = []
     for n in names:
         p = dest / 'bundles' / f'{n}.bundle'
-        res = bundle_verify(p) if p.is_file() else None
-        if res is None or res.returncode != 0:
-            bad_b.append(f'  ! {n}: ' + ('нет файла' if res is None else res.stderr.strip()))
+        if not p.is_file():
+            bad_b.append(f'  ! {n}: нет файла')
+        elif f'{n}.bundle' not in sums:
+            bad_b.append(f'  ! {n}: нет в манифесте бандлов')
+        elif sha_of(p) != sums[f'{n}.bundle']:
+            bad_b.append(f'  ! {n}: бандл не совпадает с манифестом')
+        elif (res := bundle_verify(p)).returncode != 0:
+            bad_b.append(f'  ! {n}: {res.stderr.strip()}')
     rows.append(f'бандлы: verify ok {len(names) - len(bad_b)} из {len(names)}')
     rows += bad_b
     failed |= bool(bad_b)
