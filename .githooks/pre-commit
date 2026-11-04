@@ -11,7 +11,8 @@ failed=""
 # NUL-separated, byte-sorted names: a name with spaces stays one name, the order does not follow the locale.
 while IFS= read -r -d '' check; do
   [ -f "$check" ] && [ -x "$check" ] || continue
-  "$check"
+  # stdin is the list of checks: a check reading stdin would eat it and the later checks would silently not run.
+  "$check" </dev/null
   code=$?
   if [ "$code" != 0 ]; then
     echo "pre-commit: check $(basename "$check") failed (exit $code)" >&2

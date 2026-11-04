@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Blocks a commit whose added lines match a private pattern: names of work projects, task keys, studio names.
-# Patterns live in .githooks/private-patterns of the MAIN copy (untracked, one extended regex per line,
-# case-insensitive, '#' starts a comment): a worktree has no copy of it, so the main copy is found through
-# git-common-dir. No list or an empty one -> a line on stderr that the check is skipped, never silence. ASCII only.
+# Patterns live in .githooks/private-patterns of the main copy (untracked, one extended regex per line,
+# case-insensitive, '#' starts a comment). Looked for in this working tree first (the main copy, whatever its .git
+# layout), then beside git-common-dir (a worktree: no copy of the list, the main copy holds it). No list or an
+# empty one -> a line on stderr that the check is skipped, never silence. ASCII only.
 export LC_ALL=C.UTF-8
+top=$(git rev-parse --show-toplevel) || exit 0
 common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 0
-src="$(dirname "$common")/.githooks/private-patterns"
-if [ ! -f "$src" ]; then
-  echo "private-patterns: list not found ($src), check skipped" >&2
+src=""
+for f in "$top/.githooks/private-patterns" "$(dirname "$common")/.githooks/private-patterns"; do
+  if [ -f "$f" ]; then src=$f; break; fi
+done
+if [ -z "$src" ]; then
+  echo "private-patterns: list not found ($top/.githooks or $(dirname "$common")/.githooks), check skipped" >&2
   exit 0
 fi
 pat=$(mktemp)
