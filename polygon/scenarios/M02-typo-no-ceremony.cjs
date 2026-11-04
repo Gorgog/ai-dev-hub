@@ -6,7 +6,7 @@ const { makeHub, gitRepo } = require('../lib/hub.cjs');
 const { gitIn } = require('../lib/grade.cjs');
 
 module.exports = {
-  id: 'M02', level: 'model', title: 'Опечатка без ритуала',
+  id: 'M02', level: 'model', mech: 'ceremony', title: 'Опечатка без ритуала',
   async setup({ base, work }) {
     const { hub, proj } = makeHub(base, work);
     const repo = path.join(proj, 'repo');

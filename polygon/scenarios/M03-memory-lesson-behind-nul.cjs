@@ -11,7 +11,7 @@ lessons[200] = '- (2026-10-07, DEMO-3) **`npx prisma format` переписал 
   'не запускать; поля — руками по образцу соседних, проверка — `npx prisma validate`. стоило: ~40 мин · Ключи: `prisma format`';
 
 module.exports = {
-  id: 'M03', level: 'model', title: 'Урок из памяти за NUL-байтом',
+  id: 'M03', level: 'model', mech: 'memory', title: 'Урок из памяти за NUL-байтом',
   async setup({ base, work }) {
     const { hub, proj } = makeHub(base, work, {
       memory: {

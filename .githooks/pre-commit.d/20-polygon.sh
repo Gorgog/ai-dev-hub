@@ -15,9 +15,16 @@ git rev-parse -q --verify "$ref^{commit}" >/dev/null || { echo "polygon: no $ref
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 t0=$(date +%s%N)
+# Both sides at once: each is a few hundred short hook processes, light, and the commit waits for the slower one.
+node "$run" --level hook --ref "$ref" --hub "$root" --quiet --work "$tmp/work" --out "$tmp/base.json" >"$tmp/base.log" 2>&1 &
+base_pid=$!
+node "$run" --level hook --hub "$root" --quiet --work "$tmp/work" --out "$tmp/tree.json" >"$tmp/tree.log" 2>&1
+tree_code=$?
+wait "$base_pid"
+base_code=$?
 for side in base tree; do
-  if [ "$side" = base ]; then args=(--ref "$ref"); else args=(); fi
-  if ! node "$run" --level hook "${args[@]}" --hub "$root" --quiet --work "$tmp/work" --out "$tmp/$side.json" >"$tmp/$side.log" 2>&1; then
+  code_var="${side}_code"
+  if [ "${!code_var}" != 0 ]; then
     cat "$tmp/$side.log" >&2
     echo "polygon: the run on $side failed" >&2
     exit 1
