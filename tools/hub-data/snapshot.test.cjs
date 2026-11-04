@@ -343,3 +343,20 @@ test('snapshot: a bundle whose repo is gone keeps its old checksum — later dam
   assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
   assert.match(bad.stdout, /^ {2}! p2--site: бандл не совпадает с манифестом/m);
 });
+
+test('snapshot: a broken or lost bundle manifest does not bless a damaged old bundle either', (t) => {
+  for (const spoil of [(m) => fs.writeFileSync(m, fs.readFileSync(m, 'utf8').replace(/ {2}/g, '\t')), (m) => fs.rmSync(m)]) {
+    const fx = fixture(t);
+    ok(run(fx));
+    fs.rmSync(path.join(fx.hub, 'projects', 'p2', 'site'), { recursive: true });
+    const b = path.join(fx.dest, 'bundles', 'p2--site.bundle');
+    const buf = fs.readFileSync(b);
+    buf[buf.length - 30] ^= 0xff;
+    fs.writeFileSync(b, buf);
+    spoil(path.join(fx.dest, 'bundles', 'MANIFEST.sha256'));
+    ok(run(fx));
+    const bad = verify(fx);
+    assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /^ {2}! p2--site: бандл не совпадает с манифестом/m);
+  }
+});
