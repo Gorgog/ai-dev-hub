@@ -10,7 +10,7 @@ from pathlib import Path
 mode, cfg_file = sys.argv[1], sys.argv[2]
 cfg = json.loads(Path(cfg_file).read_text())
 d = json.load(sys.stdin)
-target = Path(d.get('cwd') or '.') / cfg['file']
+target = Path(cfg['file'])  # absolute: the input's cwd follows a `cd` in Bash, and a miss would read as «fixed»
 text = target.read_text() if target.exists() else ''
 violation = bool(re.search(cfg['violation'], text))
 log = Path(cfg['log'])

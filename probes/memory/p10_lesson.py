@@ -107,7 +107,7 @@ def fixture(root, sid, mode):
     git(proj, 'add', '-A')
     git(proj, 'commit', '-q', '-m', 'init')
     cfg = root / 'scenario.json'
-    cfg.write_text(json.dumps({'file': sc['file'], 'violation': sc['violation'], 'lesson': sc['lesson'],
+    cfg.write_text(json.dumps({'file': str(proj / sc['file']), 'violation': sc['violation'], 'lesson': sc['lesson'],
                                'log': str(root / 'hook.jsonl')}, ensure_ascii=False))
     (proj / '.claude').mkdir()
     (proj / '.claude' / 'settings.json').write_text(json.dumps({'hooks': {'PostToolUse': [{'hooks': [
@@ -146,8 +146,12 @@ def run_claude(proj, prompt, model, log, sandbox=None):
         env = sandbox.env()
         sandbox.trust(proj)
     t0 = time.time()
-    p = subprocess.run(args, cwd=proj, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                       timeout=900)
+    try:
+        p = subprocess.run(args, cwd=proj, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=900)
+    except subprocess.TimeoutExpired as e:  # one hung run must not lose the paid ones: it counts as a run
+        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or '')
+        p = subprocess.CompletedProcess(args, 'timeout', out, 'timeout 900 s')
     log.write_text(p.stdout)
     events = [json.loads(l) for l in p.stdout.splitlines() if l.startswith('{')]
     init = next((e for e in events if e.get('type') == 'system' and e.get('subtype') == 'init'), {})
@@ -231,6 +235,7 @@ def main():
             continue
         for mode in ('lesson', 'control'):
             runs += arm(root, sid, mode, a)
+            (root / 'runs.json').write_text(json.dumps(runs, ensure_ascii=False, indent=1))  # survives a crash
             print(sid, mode, [(x['violated'], x.get('fixed_next')) for x in runs if x['scenario'] == sid
                               and x['mode'] == mode], flush=True)
     report(root, runs, a)
