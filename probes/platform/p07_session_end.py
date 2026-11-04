@@ -3,7 +3,7 @@
 Interactive `claude` runs in a pseudo-terminal of the sandbox; it is closed three ways — `/exit`, Ctrl+C twice,
 terminal hang-up (SIGHUP) — and its SessionEnd hook writes a stub at once and a second line after a delay
 (0 / 1.0 / 1.4 / 2.5 s) to find how long a handler may take. The Desktop part (archiving) needs the app —
-Georgy archives 3 sessions opened in ~/hub-data/probes/platform/p7-desktop (hooks there log
+3 Desktop sessions are opened and archived in ~/hub-data/probes/platform/p7-desktop (hooks there log
 events.jsonl); merged by `--desktop <events.jsonl>`."""
 import json
 import os
@@ -131,7 +131,7 @@ def main():
     save('P7', verdict, numbers, '3/3 случая — событие пришло, заглушка записана',
          {'cases': cases, 'desktop': desktop, 'handler_budget_s': budget, 'work': str(root)},
          method='CLI: интерактивный claude в pty песочницы, закрытие /exit, Ctrl+C×2, SIGHUP; хук SessionEnd пишет '
-                'заглушку сразу и строку после задержки 0/1/1,4/2,5 с. Desktop: 3 сессии в песочнице p7-desktop с хуками SessionStart/SessionEnd, Georgy архивирует')
+                'заглушку сразу и строку после задержки 0/1/1,4/2,5 с. Desktop: 3 сессии в песочнице p7-desktop с хуками SessionStart/SessionEnd, их архивируют')
 
 
 if __name__ == '__main__':
