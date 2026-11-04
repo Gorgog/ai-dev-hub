@@ -104,7 +104,7 @@ test('dispatch: the split loses no line of SKILL.md and adds only table-of-conte
   let split;
   try {
     git(['cat-file', '-e', `${BEFORE}^{commit}`]);
-    split = git(['log', '--reverse', '--format=%H', `${BEFORE}..HEAD`, '--', `${DISPATCH}/SKILL.md`]).split('\n')[0];
+    split = git(['log', '--reverse', '--format=%H', `${BEFORE}..HEAD`, '--', `:/${DISPATCH}/SKILL.md`]).split('\n')[0];
   } catch {
     t.skip(`нет git или коммита ${BEFORE} (мелкий клон)`);
     return;
