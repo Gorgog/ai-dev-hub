@@ -88,6 +88,37 @@ test('pre-commit: a check in pre-commit.d exiting 1 blocks the commit with its n
   assert.ok(!fs.existsSync(path.join(main, '.githooks', 'pre-commit.d', '50-always-fails.sh')));
 });
 
+// Regression (review, round 1): the runner fed its list of checks on stdin, a check that read stdin ate the rest
+// of it, and the later checks silently did not run.
+test('pre-commit: a check reading stdin does not stop the checks after it', (t) => {
+  const { wt } = setup(t);
+  const d = path.join(wt, '.githooks', 'pre-commit.d');
+  write(path.join(d, '20-reads-stdin.sh'), '#!/usr/bin/env bash\ncat >/dev/null\n');
+  write(path.join(d, '30-fails.sh'), '#!/usr/bin/env bash\necho ran-30 >&2\nexit 1\n');
+  for (const n of ['20-reads-stdin.sh', '30-fails.sh']) fs.chmodSync(path.join(d, n), 0o755);
+  const r = commit(wt, 'a.md', 'clean\n');
+  assert.notStrictEqual(r.status, 0, r.err);
+  assert.match(r.err, /ran-30/);
+  assert.match(r.err, /30-fails\.sh/);
+});
+
+// Regression (review, round 1): with .git a file (--separate-git-dir) the common dir is not inside the main copy;
+// the main copy's own list must still block, as the old hook did through --show-toplevel.
+test('pre-commit: a main copy with a separate git dir still blocks a line from its list', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pre-commit-sep-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const main = path.join(tmp, 'main');
+  git(tmp, 'init', '-q', '-b', 'main', '--separate-git-dir', path.join(tmp, 'store.git'), main);
+  git(main, 'config', 'user.email', 't@t'); git(main, 'config', 'user.name', 't');
+  fs.cpSync(path.join(HOOKS, 'pre-commit'), path.join(main, '.githooks', 'pre-commit'));
+  fs.cpSync(path.join(HOOKS, 'pre-commit.d'), path.join(main, '.githooks', 'pre-commit.d'), { recursive: true });
+  git(main, 'config', 'core.hooksPath', '.githooks');
+  write(path.join(main, '.githooks', 'private-patterns'), 'secretclient\n');
+  const r = commit(main, 'a.md', 'secretclient\n');
+  assert.notStrictEqual(r.status, 0, r.err);
+  assert.match(r.err, /private pattern in a\.md/);
+});
+
 test('pre-commit: checks run in name order; a non-executable file is not a check', (t) => {
   const { wt } = setup(t);
   const d = path.join(wt, '.githooks', 'pre-commit.d');
