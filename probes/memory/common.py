@@ -1,0 +1,43 @@
+"""Shared bits of the memory probes: where data goes, the verdict file, the node the hooks run on."""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DATA = Path(os.environ.get('HUB_PROBES', Path.home() / 'hub-data' / 'probes')) / 'memory'
+WORK = Path(os.environ.get('PROBE_WORK', '/tmp/hub-probes')) / 'memory'
+# Hooks run `node` from PATH, and ~/.local/bin leads it (P2 asks about exactly this node).
+NODE = os.environ.get('PROBE_NODE', str(Path.home() / '.local' / 'bin' / 'node'))
+sys.path.insert(0, str(HERE.parent / 'platform'))  # the sandbox and mock API of slice 04
+
+
+def node_version(node=NODE):
+    return subprocess.run([node, '--version'], capture_output=True, text=True).stdout.strip()
+
+
+def workdir(probe, fresh=True):
+    d = WORK / probe
+    if fresh and d.exists():
+        shutil.rmtree(d)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def pct(values, q):
+    """Nearest-rank percentile (q in 0..100) of a non-empty list."""
+    s = sorted(values)
+    return s[min(len(s) - 1, max(0, -(-len(s) * q // 100) - 1))]
+
+
+def save(probe, verdict, numbers, criterion, path, details=None, method=''):
+    """path — what the plan does with this verdict (the «при провале» branch or the passed one)."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    out = {'probe': probe, 'verdict': verdict, 'numbers': numbers, 'criterion': criterion, 'path': path,
+           'method': method, 'details': details or {}, 'date': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
+    (DATA / f'{probe}.json').write_text(json.dumps(out, ensure_ascii=False, indent=2) + '\n')
+    print(f'{probe}: {verdict} — ' + ', '.join(f'{k}={v}' for k, v in numbers.items()))
+    return out
