@@ -15,7 +15,10 @@ const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs
 const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 // Fake secrets are assembled at run time: no token-shaped literal sits in the public repo.
 const FAKE_GH = 'gh' + 'p_' + 'Q'.repeat(36);
-const FAKE_ENV = 'SHOP_API_TOKEN=' + 'fake-eval-token';
+const FAKE_ENV = 'SHOP_API_TOKEN=' + 'fake-eval-token-' + '9f8e7d6c5b4a3210';
+// Code and prose that only look like assignments: the real journals are full of them (snapshot 05.11: 312 files).
+const NOT_SECRETS = ['const token = data.accessToken;', 'password: \'Неверный пароль\'', 'token: `${prefix}-x`',
+  'api_key = os.environ.get("API_KEY")', 'secret: process.env.SESSION_SECRET', 'token=abcdefghijklmnopqrstu'].join('\n');
 
 const initRepo = (dir) => {
   fs.mkdirSync(dir, { recursive: true });
@@ -61,6 +64,7 @@ function fixture(t) {
   write(path.join(p1, 'memory', 'dispatch-grants.json'), '{}\n');
   write(path.join(p1, 'memory', 'task-1', 'shot.png'), Buffer.from([137, 80, 78, 71, 0, 0, 7]));
   write(path.join(p1, 'memory', 'task-1', '.env.example'), FAKE_ENV + '\n');
+  write(path.join(p1, 'memory', 'task-1', 'code-notes.md'), NOT_SECRETS + '\n');
   const repo = path.join(p1, 'repo');
   initRepo(repo);
   commit(repo, 'a.txt', 'a\n');
@@ -141,6 +145,7 @@ test('verify: a damaged or missing copy fails and is named; a source changed aft
   fs.rmSync(path.join(fx.dest, 'hub', 'projects', 'p1', 'memory', 'errors.md'));
   const bad = verify(fx);
   assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /^журналы: манифест сходится 2 из 3 \(66\.6%\)/m);
   assert.match(bad.stdout, /proj-b\/s2\.jsonl/);
   assert.match(bad.stdout, /projects\/p1\/memory\/errors\.md/);
 });
@@ -154,13 +159,14 @@ test('snapshot: memory, configs, logs, plan and research copied byte for byte; r
     'projects/p1/.claude/launch.json', 'projects/p1/CLAUDE.md', 'projects/p1/brief.json', 'projects/p1/checks.json',
     'projects/p1/dispatch-profile.md', 'projects/p1/dispatch-rules.json', 'projects/p1/memory/dispatch-grants.json',
     'projects/p1/memory/dispatch-guard.log', 'projects/p1/memory/errors.md', 'projects/p1/memory/rules-guard.log',
-    'projects/p1/memory/task-1/.env.example', 'projects/p1/memory/task-1/shot.png', 'projects/p1/plan/plan.md',
+    'projects/p1/memory/task-1/.env.example', 'projects/p1/memory/task-1/code-notes.md',
+    'projects/p1/memory/task-1/shot.png', 'projects/p1/plan/plan.md',
     'projects/p1/rules.json', 'projects/p2/memory/sessions/n.md',
   ].sort();
   assert.deepStrictEqual(files(copy).filter((f) => f !== 'MANIFEST.sha256'), expected);
   for (const f of expected) assert.ok(fs.readFileSync(path.join(copy, f)).equals(fs.readFileSync(path.join(fx.hub, f))), f);
   assert.deepStrictEqual(Object.keys(manifest(path.join(copy, 'MANIFEST.sha256'))).sort(), expected);
-  assert.match(ok(verify(fx)), /^хаб: манифест сходится 20 из 20 \(100%\)/m);
+  assert.match(ok(verify(fx)), /^хаб: манифест сходится 21 из 21 \(100%\)/m);
 });
 
 test('snapshot: repos bundled with --all and pass git bundle verify; report lists stash, local branches, dirty worktrees', (t) => {
@@ -204,4 +210,59 @@ test('snapshot: secret scan lists files and kinds, never the values', (t) => {
   const everything = [out, reportOf(out), tsv].join('\n');
   assert.ok(!everything.includes(FAKE_GH), 'token value leaked');
   assert.ok(!everything.includes('fake-eval-token'), 'assignment value leaked');
+  assert.doesNotMatch(tsv, /code-notes\.md/);
+});
+
+test('verify: never rounds a partial match up to 100%', (t) => {
+  const fx = fixture(t);
+  for (let i = 0; i < 2000; i++) write(path.join(fx.journals, 'many', `${i}.jsonl`), `{"n":${i}}\n`);
+  ok(run(fx));
+  fs.writeFileSync(path.join(fx.dest, 'journals', 'many', '7.jsonl'), 'broken\n');
+  const bad = verify(fx);
+  assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /^журналы: манифест сходится 2002 из 2003 \(99\.9%\)/m);
+});
+
+test('snapshot: an unreadable source folder is an error that names it, not a silent skip', (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('root reads everything');
+  const fx = fixture(t);
+  const locked = path.join(fx.journals, 'proj-a', 's1');
+  fs.chmodSync(locked, 0o000);
+  t.after(() => fs.chmodSync(locked, 0o755));
+  const r = run(fx);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^ {2}! proj-a\/s1: /m);
+  assert.match(r.stdout, /^хаб: файлов 21/m);
+});
+
+test('verify: a bundle damaged inside (git bundle verify still passes) fails by its manifest checksum', (t) => {
+  const fx = fixture(t);
+  ok(run(fx));
+  const b = path.join(fx.dest, 'bundles', 'p2--site.bundle');
+  assert.match(fs.readFileSync(path.join(fx.dest, 'bundles', 'MANIFEST.sha256'), 'utf8'), /^[0-9a-f]{64} {2}p2--site\.bundle$/m);
+  const buf = fs.readFileSync(b);
+  buf[buf.length - 30] ^= 0xff;
+  fs.writeFileSync(b, buf);
+  const bad = verify(fx);
+  assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /^ {2}! p2--site: /m);
+});
+
+test('snapshot: a branch whose upstream is gone is reported as local-only', (t) => {
+  const fx = fixture(t);
+  const repo = path.join(fx.hub, 'projects', 'p1', 'repo');
+  git(repo, 'branch', 'merged-away');
+  git(repo, 'remote', 'add', 'origin', path.join(fx.root, 'no-such-remote.git'));
+  git(repo, 'config', 'branch.merged-away.remote', 'origin');
+  git(repo, 'config', 'branch.merged-away.merge', 'refs/heads/merged-away');
+  const rep = reportOf(ok(run(fx)));
+  assert.match(rep, /ветки без upstream: [^\n]*merged-away \(upstream удалён\)/);
+});
+
+test('snapshot: an empty journals folder is a valid (empty) area', (t) => {
+  const fx = fixture(t);
+  fs.rmSync(fx.journals, { recursive: true });
+  fs.mkdirSync(fx.journals);
+  assert.match(ok(run(fx)), /^журналы: 0 новых, 0 изменённых \(файлов 0/m);
+  assert.match(ok(verify(fx)), /^журналы: манифест сходится 0 из 0 \(100%\)/m);
 });
