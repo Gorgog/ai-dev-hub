@@ -85,6 +85,11 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn('P7: файл не читается', r.stdout)
         self.assertNotIn('Traceback', r.stderr)
+        (self.data / 'platform' / 'P7.json').write_text('[]')
+        r = run(self.data, home=self.home)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('P7: файл не читается', r.stdout)
+        self.assertNotIn('Traceback', r.stderr)
 
     def test_changed_settings_fail_with_the_file_named(self):
         for p in EXPECTED:

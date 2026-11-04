@@ -27,12 +27,16 @@ ENV = 'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR'
 HERE = Path(__file__).resolve().parent
 
 
-BARE_CD = re.compile(r'(^|&&|;|\|\|)\s*cd\s')
+BARE_CD = re.compile(r'(^|&&|;|\|\||\n)\s*cd\s', re.M)
+SUBSHELL = re.compile(r'\([^()]*\)')
 
 
 def bare_cd(cmd):
-    """A `cd` that is not inside a subshell: `cd x && …`, `a; cd x` — but not `( cd x && … )`."""
-    return bool(BARE_CD.search(cmd or '')) and not (cmd or '').lstrip().startswith('(')
+    """A `cd` outside a subshell: `cd x && …`, `a; cd x`, a cd on its own line — not `( cd x && … )`."""
+    s = cmd or ''
+    while SUBSHELL.search(s):  # drop (…) groups, innermost first
+        s = SUBSHELL.sub(' ', s)
+    return bool(BARE_CD.search(s))
 
 
 def cd_pwd(tag, sub):

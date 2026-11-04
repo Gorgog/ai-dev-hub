@@ -39,6 +39,8 @@ def report(data):
         if re.fullmatch(r'P\d+', f.stem):
             try:
                 probes[f.stem] = json.loads(f.read_text())
+                if not isinstance(probes[f.stem], dict):
+                    raise ValueError(f'не объект, а {type(probes[f.stem]).__name__}')
             except ValueError as e:
                 problems.append(f'{f.stem}: файл не читается ({e})')
                 probes[f.stem] = {}
