@@ -18,6 +18,7 @@ SAMPLE = '''# Правила из ошибок
 ## Раздел
 - Третье
 \tс табом.
+
   отступ после пустой строки — уже не запись
 
 - Четвёртое
@@ -28,7 +29,7 @@ class RecordsTest(unittest.TestCase):
     def test_bullets_with_continuations_are_records(self):
         from v1mem import records
         rs = records(SAMPLE)
-        self.assertEqual([r['line'] for r in rs], [6, 8, 11, 15])
+        self.assertEqual([r['line'] for r in rs], [6, 8, 11, 16])
         self.assertEqual(rs[0]['text'], 'НЕ пиши скрипт heredoc-ом: кавычки ломаются. (2026-10-01)')
         self.assertEqual(rs[1]['text'], 'Второе правило. (2026-10-02)')
         self.assertEqual(rs[2]['text'], 'Третье с табом.')
