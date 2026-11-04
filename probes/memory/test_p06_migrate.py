@@ -75,8 +75,8 @@ class MigrateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         addr = json.loads((self.out / 'a' / 'addresses.json').read_text())
         s = shas()
-        self.assertEqual(addr[s[0]], {'line': 3, 'to': 'lesson', 'id': 'shell-inline-scripts', 'merged': 3})
-        self.assertEqual(addr[s[4]], {'line': 7, 'to': 'archive', 'reason': 'остаток Windows'})
+        self.assertEqual(addr[s[0]], [{'line': 3, 'to': 'lesson', 'id': 'shell-inline-scripts', 'merged': 3}])
+        self.assertEqual(addr[s[4]], [{'line': 7, 'to': 'archive', 'reason': 'остаток Windows'}])
         self.assertNotIn(s[3], addr)  # not in the theme, not mapped
         self.assertIn('тема: 4/4 записей получили адрес', r.stdout)
 
@@ -100,6 +100,30 @@ class MigrateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn('нет в источнике: deadbeef0000', r.stdout)
         self.assertIn(f'дважды: {shas()[0]}', r.stdout)
+
+    def test_record_with_two_rules_is_split_by_parts(self):
+        s = shas()
+        mp = mapping(s)
+        mp['lessons'][0]['from'][2] = {'sha': s[2], 'part': 'node -e и бэктики'}
+        mp['lessons'].append({'id': 'shell-substitution', 'kind': 'rule', 'when': ['PreToolUse:Bash'],
+                              'keys': ['$('], 'created': '2026-09-07',
+                              'from': [{'sha': s[2], 'part': 'подстановка команд'}],
+                              'text': ['Бэктики в двойных кавычках Bash — подстановка команд.', 'Проверяй вывод.']})
+        r = run(ERRORS, mp, self.out / 'a')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        addr = json.loads((self.out / 'a' / 'addresses.json').read_text())
+        self.assertEqual(addr[s[2]], [
+            {'line': 5, 'to': 'lesson', 'id': 'shell-inline-scripts', 'merged': 3, 'part': 'node -e и бэктики'},
+            {'line': 5, 'to': 'lesson', 'id': 'shell-substitution', 'merged': 1, 'part': 'подстановка команд'}])
+        self.assertIn('разбито записей: 1', r.stdout)
+
+    def test_split_needs_a_part_on_every_claim(self):
+        s = shas()
+        mp = mapping(s)
+        mp['archive'].append({'sha': s[2], 'reason': 'x', 'part': 'хвост'})
+        r = run(ERRORS, mp, self.out / 'a')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f'дважды: {s[2]}', r.stdout)
 
     def test_lesson_text_limits(self):
         mp = mapping(shas())
