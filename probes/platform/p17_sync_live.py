@@ -7,7 +7,8 @@ All in the sandbox config dir: the hub plugin of `main` is installed from a loca
 repo, so the cache dir is named by commit), each version carries a logger hook that records its
 CLAUDE_PLUGIN_ROOT and version. A live session (`claude -p`, mock API) runs a few tool calls, sleeps while the
 sync happens, then makes 20 more; a new session started after the sync reports its version.
-Passed (3/3 rounds): the live session — 0 hook errors in 20 calls after sync; the new one — version = new HEAD.
+Passed (3/3 rounds): the live session — 0 hook errors in 20 calls after sync and still the OLD version (the
+question's premise); the new one — version = new HEAD.
 Extra rounds (not in the criterion): `dirty` — a file of the marketplace dir changed with no commit and no sync;
 `rename` — a new version moves a hook script to another file (as a rewrite of the hooks would), committed and
 synced while the session is live. Both engines: the CLI and the one bundled with Desktop."""
@@ -116,6 +117,7 @@ def one_engine(root, binary):
             new_sha = change(m, kind, n)
             sync = [cli('plugin', 'marketplace', 'update', 'hub'), cli('plugin', 'update', 'hub@hub')] \
                 if new_sha else []
+            t_synced = time.time() * 1000
             live.join()
             new = sb.claude_p('P17-NEW check', proj, PROBE_LOG=plog)
             installed = json.loads((sb.config / 'plugins' / 'installed_plugins.json').read_text())
@@ -132,6 +134,7 @@ def one_engine(root, binary):
                 'round': n, 'kind': kind, 'want': want, 'old_path': old_path, 'new_path': new_path,
                 'new_sha': (new_sha or '')[:12], 'old_cache_kept': Path(old_path).exists(),
                 'live_calls_after_change': len(live_after),
+                'live_calls_after_sync_done': sum(1 for x in live_after if x['t'] > t_synced),
                 'live_versions_after_change': sorted({x['version'] for x in live_after}),
                 'live_hook_errors': len(errs), 'live_errors': errs[:3], 'live_exit': box['code'],
                 'live_script_dirs': sorted({x['dir'] for x in logs if x['sid'] == lsid}),
@@ -151,15 +154,19 @@ def main():
     numbers, ok = {}, True
     for label, res in per.items():
         sync = [r for r in res['rounds'] if r['kind'] == 'sync']
+        # the question is whether live sessions stay on the OLD copy: running the new code counts as failed
         good = [r for r in sync if r['live_calls_after_change'] == AFTER and r['live_hook_errors'] == 0
-                and r['new_versions'] == [r['want']]]
+                and r['live_versions_after_change'] == [f"v{r['round'] - 1}"] and r['new_versions'] == [r['want']]]
         ok = ok and len(good) == 3
         live_code = sorted({v for r in sync for v in r['live_versions_after_change']})
         extra = {r['kind']: r for r in res['rounds'] if r['kind'] != 'sync'}
         numbers.update({
             f'{label}:rounds_ok': f'{len(good)}/3',
             f'{label}:live_errors_after_sync': ','.join(str(r['live_hook_errors']) for r in sync),
-            f'{label}:live_runs_version': ','.join(live_code) + ' (новая — код читается из каталога маркетплейса)',
+            f'{label}:live_runs_version': ','.join(live_code) + ' (ждали старую v1,v2,v3)',
+            f'{label}:hook_files_from': ','.join(sorted({'кэш' if '/plugins/cache/' in d else 'каталог маркетплейса'
+                                                         for r in res['rounds'] for d in r['live_script_dirs']})),
+            f'{label}:live_calls_after_sync_done': ','.join(str(r['live_calls_after_sync_done']) for r in sync),
             f'{label}:new_session_versions': ','.join(','.join(r['new_versions']) for r in sync),
             f'{label}:dirty_no_commit_live_sees': ','.join(extra['dirty']['live_versions_after_change']) or '—',
             f'{label}:rename_live_errors': extra['rename']['live_hook_errors'],

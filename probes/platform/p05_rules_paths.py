@@ -8,7 +8,7 @@ has it too), in projects/<name>/ (ancestor of both), in the hub root and in the 
 on touching src/** — in the worktree and in repo/ — and not on touching a non-matching file."""
 import json
 
-from common import engines, save, workdir
+from common import claude_version, engines, save, workdir
 from sandbox import Sandbox, git, git_repo, hook_logger, read_jsonl
 
 RULE = '---\npaths:\n  - "src/**/*.js"\n---\n# {name}\nRULE-MARKER-{name}: probe rule for src.\n'
@@ -47,7 +47,7 @@ def main():
     res_all, numbers, ok = {}, {}, True
     for label, binary in engines():
         res, nums, good = one_engine(top / label, binary)
-        res_all[label] = res
+        res_all[label] = {**res, 'engine': claude_version(binary)}
         numbers.update({f'{label}:{k}': v for k, v in nums.items()})
         ok = ok and good
     save('P5', 'прошла' if ok else 'не прошла', numbers,

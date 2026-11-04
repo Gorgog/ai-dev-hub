@@ -34,11 +34,15 @@ def numbers_text(n):
 
 def report(data):
     plat = Path(data) / 'platform'
-    probes = {}
+    probes, problems = {}, []
     for f in plat.glob('P*.json'):
         if re.fullmatch(r'P\d+', f.stem):
-            probes[f.stem] = json.loads(f.read_text())
-    problems = [f'нет пробы: {p}' for p in EXPECTED if p not in probes]
+            try:
+                probes[f.stem] = json.loads(f.read_text())
+            except ValueError as e:
+                problems.append(f'{f.stem}: файл не читается ({e})')
+                probes[f.stem] = {}
+    problems += [f'нет пробы: {p}' for p in EXPECTED if p not in probes]
     rows = ['| P | вердикт | цифры | критерий |', '|---|---|---|---|']
     for p in sorted(probes, key=lambda s: int(s[1:])):
         d = probes[p]

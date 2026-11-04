@@ -85,7 +85,13 @@ def main():
                'pretool_per_call': ','.join('+'.join(v) for v in both['pretool_per_call'].values()),
                'plugin_data': ' vs '.join(Path(d).name for d in alone['plugin_data'] + both['plugin_data']),
                'hub_in_init': ','.join(f"{p.get('source')}" for p in both['plugins'] or [] if p.get('name') == 'hub')}
-    verdict = 'прошла' if only_branch and separate and both['code'] == 0 else 'не прошла'
+    # the control must show the installed copy alive on its own, else «only the branch fires» proves nothing
+    installed_ok = all(x['code'] == 0 for x in setup) and alone['code'] == 0 and set(alone['logger_by_copy']) == {'installed'}
+    numbers['control_installed_only'] = ','.join(sorted(alone['logger_by_copy'])) or '—'
+    if not installed_ok:
+        verdict = 'не решена'
+    else:
+        verdict = 'прошла' if only_branch and separate and both['code'] == 0 else 'не прошла'
     save('P3', verdict, numbers,
          'в сессии v2 срабатывают только хуки v2 или явно видно, чьи; данные плагина раздельны',
          {'setup': [{'code': s['code'], 'out': (s['stdout'] + s['stderr'])[-300:]} for s in setup], 'runs': runs,

@@ -91,27 +91,32 @@ def transcript_epochs(config, sid):
 
 
 def real_sessions(projects=Path.home() / '.claude' / 'projects'):
-    """Auto compaction on real journals: per session with SessionStart hooks, boundaries vs SessionStart:compact."""
-    out = {'sessions': 0, 'boundaries': 0, 'auto': 0, 'followed': 0, 'stray_starts': 0, 'max_per_session': 0}
+    """Auto compaction on real journals: per session with SessionStart hooks, boundaries vs SessionStart:compact.
+    Entries are matched by JSON fields (system/compact_boundary, attachment.hookName), never by substring: the
+    journals hold source code and talk that mention the same strings."""
+    out = {'sessions': 0, 'boundaries': 0, 'auto': 0, 'followed': 0, 'starts_without_boundary': 0,
+           'max_per_session': 0}
     for f in projects.glob('*/*.jsonl'):
         seq, auto, hooked = [], 0, False
         with open(f, errors='replace') as fh:
             for line in fh:
-                if 'SessionStart:' in line:
-                    hooked = True
-                if 'compact_boundary' not in line and 'SessionStart:compact' not in line:
+                if 'compact_boundary' not in line and 'SessionStart:' not in line:
                     continue
                 try:
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if e.get('subtype') == 'compact_boundary':
+                hook = (e.get('attachment') or {}).get('hookName') if e.get('type') == 'attachment' else None
+                if hook and hook.startswith('SessionStart:'):
+                    hooked = True
+                if e.get('type') == 'system' and e.get('subtype') == 'compact_boundary':
                     seq.append('B')
                     auto += (e.get('compactMetadata') or {}).get('trigger') == 'auto'
-                elif 'SessionStart:compact' in line and seq:
-                    seq.append('S')
-                elif 'SessionStart:compact' in line:
-                    out['stray_starts'] += 1
+                elif hook == 'SessionStart:compact':
+                    if seq and seq[-1] in ('B', 'S'):
+                        seq.append('S')
+                    else:
+                        out['starts_without_boundary'] += 1
         if not hooked or 'B' not in seq:
             continue
         chunks = ''.join(seq).split('B')[1:]
@@ -142,7 +147,7 @@ def main():
         extra = ['--resume', resume] if resume else []
         r = sb.claude_p(prompt, proj, extra)
         init = next((e for e in r['events'] if e.get('subtype') == 'init'), {})
-        runs.append({'prompt': prompt, 'code': r['code'], 'session_id': init.get('session_id'),
+        runs.append({'prompt': prompt, 'code': r['code'], 'session_id': init.get('session_id'), 'resumes': resume,
                      'stderr': r['stderr'][-300:]})
         return init.get('session_id')
 
@@ -176,14 +181,16 @@ def main():
                           'disagree': [h for h in calls if h not in agree][:5]}
     real = real_sessions() if os.environ.get('P16_REAL', '1') == '1' else None
     ok = all(s['calls'] and s['agree'] == s['calls'] == s['in_transcript'] and s['compactions'] >= 1
-             for s in sessions.values()) and (real is None or real['followed'] == real['boundaries'] > 0)
+             for s in sessions.values()) and (real is None or (real['followed'] == real['boundaries'] > 0
+                                                               and real['starts_without_boundary'] == 0))
     numbers = {k: f"{s['agree']}/{s['calls']} (компакций {s['compactions']})" for k, s in sessions.items()}
     if real:
         numbers['real_auto'] = (f"{real['followed']}/{real['boundaries']} границ с SessionStart:compact, "
-                                f"{real['sessions']} сессий, авто {real['auto']}, до {real['max_per_session']} на сессию")
-    numbers['resume_same_sid'] = all(len({r['session_id'] for r in runs if r['session_id'] == s['sid']}) == 1
-                                      for s in sessions.values())
-    save('P16', 'прошла' if ok else 'не прошла', numbers,
+                                f"{real['sessions']} сессий, авто {real['auto']}, до {real['max_per_session']} на сессию, "
+                                f"SessionStart:compact без границы {real['starts_without_boundary']}")
+    # every `--resume <sid>` run must come back with that same session_id (a fork would get a new one)
+    numbers['resume_same_sid'] = all(r['session_id'] == r['resumes'] for r in runs if r['resumes'])
+    save('P16', 'прошла' if ok and numbers['resume_same_sid'] else 'не прошла', numbers,
          'на 3 длинных сессиях с компакцией — совпадение границ эпох с транскриптом',
          {'sessions': sessions, 'runs': runs, 'real_sessions': real, 'work': str(root)},
          method='настоящий claude в песочнице, мок API, /compact между resume (3 сессии, одна с субагентами до и '
