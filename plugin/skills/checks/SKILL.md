@@ -9,9 +9,9 @@ description: Быстрые проверки по своим файлам вет
 итоговом HEAD, перед докладом «готово к пушу» (правило 3 хаба: цифры — оттуда).
 
 ```bash
-node <хаб>/plugin/skills/checks/scripts/checks.cjs                    # по ходу: свои файлы
-node <хаб>/plugin/skills/checks/scripts/checks.cjs --full             # перед докладом
-node <хаб>/plugin/skills/checks/scripts/checks.cjs --record-baseline  # фон ошибок: на чистой базе
+node ${CLAUDE_SKILL_DIR}/scripts/checks.cjs                    # по ходу: свои файлы
+node ${CLAUDE_SKILL_DIR}/scripts/checks.cjs --full             # перед докладом
+node ${CLAUDE_SKILL_DIR}/scripts/checks.cjs --record-baseline  # фон ошибок: на чистой базе
 ```
 
 Запускать из рабочей папки проекта (`repo/` или `worktrees/<ветка>`). Скрипт сам находит
@@ -21,8 +21,8 @@ node <хаб>/plugin/skills/checks/scripts/checks.cjs --record-baseline  # фо�
 `<проект>-repo`; `$XDG_CACHE_HOME`, если задан), в контекст его не тащить. Логи на диске, не в `/tmp` (там RAM), и у
 каждого worktree свои.
 
-**Каждый шаг — в своей cgroup** через `dispatch/scripts/hub-run.sh` (unit `hub-<worktree>-checks-<шаг>-<pid>`):
-таймаут или потолок памяти гасит всё дерево — `sh`, `npx`, node, воркеры jest, — а не только оболочку. Погасить
+**Каждый шаг — в своей cgroup** через `${CLAUDE_SKILL_DIR}/../dispatch/scripts/hub-run.sh`
+(unit `hub-<worktree>-checks-<шаг>-<pid>`): таймаут или потолок памяти гасит всё дерево — `sh`, `npx`, node, воркеры jest, — а не только оболочку. Погасить
 прогон снаружи — `hub-run.sh --stop <worktree>`. Убитый шаг — FAIL с причиной: `таймаут N с` или
 `убит: MemoryMax 6G (пик …)`; это не вердикт проверки, а повод поднять `memory` или искать утечку. Пик памяти
 шага — последней строкой его лога.
@@ -64,7 +64,7 @@ node <хаб>/plugin/skills/checks/scripts/checks.cjs --record-baseline  # фо�
 Доказать, что тест ловит именно тот риск, ради которого написан (права, гарды, гонки, счётчики): 5–15 мутантов,
 не полный прогон, без вопроса пользователю; для задач S — не нужны (`fast-lane`).
 ```bash
-node <хаб>/plugin/skills/checks/scripts/mutants.cjs <папка>/mutants.json
+node ${CLAUDE_SKILL_DIR}/scripts/mutants.cjs <папка>/mutants.json
 ```
 `mutants.json`: `{"cwd": "<от файла>", "cmd": "<узкий прогон тестов>", "okOn"?, "failOn"?, "mutants": [{"id",
 "file", "find", "replace"}]}`. Сначала зелёный прогон без мутантов; файл с незакоммиченными правками — SKIP;
