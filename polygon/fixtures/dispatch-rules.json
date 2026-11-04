@@ -1,0 +1,17 @@
+{
+  "_comment": "Синтетика полигона: правила templates/project/dispatch-rules.example.json плюс три вида правил, на которых корпус H02 ловит ложные блоки по тексту команды (playwright и пробы из snippets/, скрипт пачек тестов, kubb). Не копия правил живого проекта.",
+  "heavy": [
+    { "name": "дев-серверы", "tools": "^mcp__Claude_Browser__preview_start$", "input": "\"name\"\\s*:" },
+    { "name": "дев-серверы", "tools": "^Bash$", "commands": "npm\\s+run\\s+(dev|start)\\b" },
+    { "name": "проверка в браузере", "tools": "^mcp__(Claude_Browser|claude-in-chrome)__", "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]" },
+    { "name": "playwright и пробы", "tools": "^Bash$", "commands": "npx\\s+playwright\\b|\\bnode\\s+\\S*snippets[\\\\/]+\\S+\\.(c|m)?js\\b|\\bnode\\s+\\S*(proof|shots|probe|repro)\\S*\\.(c|m)?js\\b" },
+    { "name": "тесты с общей базой", "tools": "^Bash$", "commands": "npx\\s+jest\\b|node_modules[\\\\/]+\\.bin[\\\\/]+jest\\b|test-all-batches" },
+    { "name": "миграции и общая БД", "tools": "^Bash$", "commands": "prisma\\s+(migrate|db\\s+(push|seed|execute|pull))\\b|\\bpsql\\b" }
+  ],
+  "medium": [
+    { "name": "установка зависимостей", "tools": "^Bash$", "commands": "\\bnpm\\s+(ci|install|i)(\\s|$)" },
+    { "name": "полная сборка", "tools": "^Bash$", "commands": "npx\\s+tsc\\b|npm\\s+run\\s+build\\b" },
+    { "name": "полный vitest", "tools": "^Bash$", "commands": "vitest\\s+run(\\s+--project\\s+\\S+)?\\s*($|[;&|)>]|\\d>)" },
+    { "name": "kubb", "tools": "^Bash$", "commands": "kubb\\s+generate" }
+  ]
+}
