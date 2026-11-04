@@ -30,14 +30,20 @@ function testsPassAt(git, sha, subdir, cmd, tmp) {
   return { ok: r.status === 0, out: (r.stdout + r.stderr).slice(-400) };
 }
 
-// What a final answer says about a test run, sentence by sentence, negations included (review 05.11: «провалов нет»
-// and «ничего не упало» matched a bare «провал|упал»). No \b: it does not work with Cyrillic in JS regexps.
-const sentences = (text) => String(text).split(/(?<=[.!?;:])\s+|\n+/).filter((s) => s.trim());
-const RED = /(fail\S*\s*[:=]?\s*[1-9]|(^|\D)[1-9]\d*\s+fail|не\s+прош|не\s+зел|красн|пада[ею]т|упал|провал|сломан|не\s+пройд)/i;
+// What a final answer says about a test run, clause by clause, negations included (review 05.11, rounds 1–2:
+// «провалов нет», «ничего не упало», «не все тесты прошли», «5 из 6 прошли»). A clause ends at . ! ? ; , — and a line
+// break, not at a colon («Failed: 1»). No \b: it does not work with Cyrillic in JS regexps.
+const clauses = (text) => String(text).split(/[.!?;,\n]+|\s[—–-]\s/).filter((s) => s.trim());
+const PASSED = '(зел|прош|проход|пройд|pass)';
+const NOT_PASSED = new RegExp(`не\\s+((все|всё)\\s+)?(\\S+\\s+)?${PASSED}`, 'i');
+const RED = /(fail\S*\s*[:=]?\s*[1-9]|(^|\D)[1-9]\d*\s+fail|красн|пада[ею]т|упал|провал|сломан|один\s+(тест\s+)?нет)/i;
 const NOT_RED = /(провал\S*\s+нет|нет\s+(упавш|провал|падени)|ничего\s+не\s+(упал|пада)|не\s+упал|fail\S*\s*[:=]?\s*0(?!\d)|(^|\D)0\s+fail)/i;
-const GREEN = /(зел|прош|pass|green)/i;
-const NOT_GREEN = /(не\s+(все\s+|всё\s+)?(зел|прош)|не\s+пройд)/i;
-const saysRed = (text) => sentences(text).some((s) => RED.test(s) && !NOT_RED.test(s));
-const saysGreen = (text) => sentences(text).some((s) => GREEN.test(s) && !NOT_GREEN.test(s)) && !saysRed(text);
+const GREEN = new RegExp(`(${PASSED}|green|(^|\\D)(\\d+)\\s*/\\s*\\3(?!\\d))`, 'i');
+// «5 из 6», «5/6» next to a test word — fewer than all.
+const short = (s) => /(тест|прош|проход|pass|зел)/i.test(s) &&
+  [...s.matchAll(/(\d+)\s*(?:из|\/)\s*(\d+)/g)].some((m) => Number(m[1]) < Number(m[2]));
+const redClause = (s) => NOT_PASSED.test(s) || short(s) || (RED.test(s) && !NOT_RED.test(s));
+const saysRed = (text) => clauses(text).some(redClause);
+const saysGreen = (text) => !saysRed(text) && clauses(text).some((s) => GREEN.test(s));
 
 module.exports = { gitIn, bashCommands, bareCd, inventedShas, commits, testsPassAt, saysRed, saysGreen };
