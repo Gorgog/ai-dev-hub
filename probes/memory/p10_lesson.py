@@ -150,10 +150,15 @@ def run_claude(proj, prompt, model, log, sandbox=None):
         p = subprocess.run(args, cwd=proj, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            timeout=900)
     except subprocess.TimeoutExpired as e:  # one hung run must not lose the paid ones: it counts as a run
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or '')
+        out = e.stdout.decode(errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
         p = subprocess.CompletedProcess(args, 'timeout', out, 'timeout 900 s')
     log.write_text(p.stdout)
-    events = [json.loads(l) for l in p.stdout.splitlines() if l.startswith('{')]
+    events = []
+    for l in p.stdout.splitlines():
+        try:
+            events.append(json.loads(l))
+        except ValueError:  # a line cut by the timeout, or not JSON at all
+            continue
     init = next((e for e in events if e.get('type') == 'system' and e.get('subtype') == 'init'), {})
     res = next((e for e in reversed(events) if e.get('type') == 'result'), {})
     return {'code': p.returncode, 'wall_s': round(time.time() - t0, 1), 'model': init.get('model'),

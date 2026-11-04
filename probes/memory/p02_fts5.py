@@ -134,7 +134,8 @@ def main():
          'запрос < 5 мс, хук целиком < 50 мс, без ExperimentalWarning в выводе хука, 7 параллельных пересборок — '
          'индекс цел',
          'индекс памяти (срез 14) — FTS5 в node:sqlite, пересборка во временный файл + rename; порог 50 мс — '
-         'только без пересборки (с ней p95 выше порога): пересборку держать вне горячего пути хука' if passed else
+         'только без пересборки' + (f' (с ней p95 {numbers["rebuild_hook_p95_ms"]} мс): пересборку держать вне '
+                                    'горячего пути хука' if numbers['rebuild_hook_p95_ms'] >= 50 else '') if passed else
          'BM25 на JS по .triggers.json для recall; горячий путь не меняется',
          {'corpus': f'{n} записей errors.md проекта A (копия hub-data)', 'warm_rebuilt': rebuilt_warm,
           'stale_rebuilt': sum(1 for r in stale if r['probe'].get('rebuilt')), 'stderr': stderr_any[:3],

@@ -66,6 +66,10 @@ def check(path, events):
             'missing': len(missing), 'dups': dups, 'bytes': len(data)}
 
 
+def fs_type(d):
+    return subprocess.run(['stat', '-f', '-c', '%T', str(d)], capture_output=True, text=True).stdout.strip()
+
+
 def run_arm(path, mode, events, gap_ms, a, rnd):
     """Writers of one arm until each has `events`; kills at random lifetimes. → check() + kill counts."""
     path.unlink(missing_ok=True)
@@ -121,7 +125,6 @@ def main():
     arms = {mode: run_arm(a.dir / f'{mode}.jsonl', mode, a.large_events if mode == 'large' else a.events,
                           0 if mode == 'large' else a.gap_ms, a, rnd)
             for mode in ('one', 'split', 'large')}
-    a.dir.rmdir()
     one, ctl, big = arms['one'], arms['split'], arms['large']
     numbers = {'node': node_version(a.node), 'events': f'{one["unique"]}/{W * a.events}', 'torn': one['torn'],
                'kills': one['kills'], 'kills_mid_stream': one['kills_mid_stream'], 'missing': one['missing'],
@@ -135,13 +138,17 @@ def main():
          ('журнал событий — дозапись O_APPEND строкой за один вызов (срезы 08, 12)' +
           ('' if big['torn'] == 0 else '; событие — небольшое: строки ~256 КБ рвались при kill -9')) if verdict == 'прошла'
          else 'запись через временный файл + rename на процесс, слияние при чтении',
-         {'arms': arms, 'dir': str(a.dir), 'fs': 'ext4 (~/hub-data)'},
+         {'arms': arms, 'dir': str(a.dir), 'fs': fs_type(a.dir)},
          method=f'7 процессов node (p15_writer.cjs) дописывают события appendFileSync, пауза {a.gap_ms:g} мс между '
                 f'событиями; каждый процесс живёт случайно {a.life_ms[0]:g}–{a.life_ms[1]:g} мс, получает kill -9 и '
                 'перезапускается с последнего целого события; плечи: one — событие одним write (размеры 150–600 Б, '
                 'каждое 25-е ~6 КБ, каждое 200-е ~70 КБ; критерий), split — контроль: событие двумя write с паузой '
                 'между половинами, large — прицельно: каждое событие ~256 КБ одним write без пауз (убийство посреди потока — внутри write); проверка — каждая строка '
-                'файла разбирается как JSON, все 7 × N событий есть; файлы на ext4, не tmpfs')
+                'файла разбирается как JSON, все 7 × N событий есть; файлы — на диске памяти, не tmpfs')
+    try:
+        a.dir.rmdir()
+    except OSError:
+        pass  # not empty: someone else's files — leave them
 
 
 if __name__ == '__main__':
