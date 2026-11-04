@@ -29,6 +29,14 @@ test('summary: «ловит» и «не шумит» раздельно; наб�
   assert.deepStrictEqual(s.byMech.stop.quiet, { pass: 1, n: 2 });
 });
 
+test('summary: строка корпуса, добавленная после прототипа (proto: false), — в воротах, но не в строке прототипа', () => {
+  const { summary } = need();
+  const s = summary([hook('H02', [ck('old', true, { kind: 'catch' }), ck('fn-new', false, { kind: 'catch', proto: false })],
+    { mech: 'lock', proto: true })]);
+  assert.deepStrictEqual(s.proto, { pass: 1, n: 1 });
+  assert.deepStrictEqual(s.gate.all, { pass: 1, n: 2 });
+});
+
 test('summary: многократный прогон — проверка засчитана, только если прошла во всех (pass^k)', () => {
   const { summary } = need();
   const sc = { id: 'M01', level: 'model', title: 'M01', mech: 'flow', runs: [
