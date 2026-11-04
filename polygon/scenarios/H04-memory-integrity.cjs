@@ -7,7 +7,7 @@ const { makeHub, gitRepo } = require('../lib/hub.cjs');
 const { runEvent } = require('../lib/hooks.cjs');
 
 module.exports = {
-  id: 'H04', level: 'hook', title: 'Память: целостность и лимиты на старте',
+  id: 'H04', level: 'hook', mech: 'memory-brief', proto: true, title: 'Память: целостность и лимиты на старте',
   async run({ base, pluginDir, work }) {
     const lessons = Array.from({ length: 300 }, (_, i) => `- (2026-10-${String(1 + (i % 28)).padStart(2, '0')}) урок ${i}: синтетика.`);
     lessons[120] = `- (2026-10-12) урок с мусором ${'\u0000'} после вставки.`; // как в errors.md проекта A

@@ -6,7 +6,7 @@ const { makeHub, gitRepo } = require('../lib/hub.cjs');
 const { runEvent, stopVerdict } = require('../lib/hooks.cjs');
 
 module.exports = {
-  id: 'H01', level: 'hook', title: 'Стоп-хук: доклад «готово к пушу» против упоминания',
+  id: 'H01', level: 'hook', mech: 'done-gate', proto: true, title: 'Стоп-хук: доклад «готово к пушу» против упоминания',
   async run({ base, pluginDir, work }) {
     const { hub, proj } = makeHub(base, work);
     const repo = path.join(proj, 'repo');
@@ -43,7 +43,7 @@ module.exports = {
       if (prepare) prepare();
       const r = stopVerdict(runEvent(pluginDir, 'Stop', { hook_event_name: 'Stop', session_id: 'eval', cwd,
         last_assistant_message: msg, stop_hook_active: false }, { AI_DEV_HUB: hub }));
-      checks.push({ id, source, pass: r.block === expectBlock,
+      checks.push({ id, source, kind: expectBlock ? 'catch' : 'quiet', pass: r.block === expectBlock,
         detail: `ждали ${expectBlock ? 'блок' : 'пропуск'}, вышло ${r.block ? 'блок' : 'пропуск'}${r.reason ? ': ' + r.reason.slice(0, 120) : ''}` });
     }
     return checks;

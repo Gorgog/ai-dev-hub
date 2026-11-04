@@ -3,6 +3,7 @@
 'use strict';
 const path = require('path');
 const { makeHub } = require('../lib/hub.cjs');
+const { realCorpus } = require('../lib/corpus.cjs');
 const { runEvent, preToolVerdict } = require('../lib/hooks.cjs');
 
 const RG = 'rules-guard.log проекта A';
@@ -25,16 +26,17 @@ const CORPUS = [
 ];
 
 module.exports = {
-  id: 'H03', level: 'hook', title: 'rules-guard: попадание напоминаний', CORPUS,
+  id: 'H03', level: 'hook', mech: 'rules-guard', proto: true, title: 'rules-guard: попадание напоминаний', CORPUS,
   async run({ base, pluginDir, work }) {
     const { hub, proj } = makeHub(base, work);
     const cwd = path.join(proj, 'repo');
     require('fs').mkdirSync(cwd, { recursive: true });
-    return CORPUS.map(([id, command, expect, source]) => {
+    const cases = CORPUS.map(([id, command, expect, source]) => ({ id, command, expect, source })).concat(realCorpus('H03') || []);
+    return cases.map(({ id, command, expect, source, real }) => {
       const { verdict, reasons } = preToolVerdict(runEvent(pluginDir, 'PreToolUse', { hook_event_name: 'PreToolUse',
         session_id: 'eval', cwd, tool_name: 'Bash', tool_input: { command } }, { AI_DEV_HUB: hub }));
       const flagged = verdict !== 'allow';
-      return { id, source, pass: flagged === expect,
+      return { id, source, real, kind: expect ? 'catch' : 'quiet', pass: flagged === expect,
         detail: `ждали ${expect ? 'флаг' : 'тишину'}, вышло ${verdict}${reasons[0] ? ': ' + reasons[0].slice(0, 90) : ''}` };
     });
   },

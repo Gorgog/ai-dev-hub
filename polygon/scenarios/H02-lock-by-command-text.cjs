@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { makeHub } = require('../lib/hub.cjs');
+const { realCorpus, realFile } = require('../lib/corpus.cjs');
 const { runEvent, preToolVerdict } = require('../lib/hooks.cjs');
 
 const LOG = 'dispatch-guard.log проекта A';
@@ -33,20 +34,32 @@ const CORPUS = [
 ];
 
 module.exports = {
-  id: 'H02', level: 'hook', title: 'Замок диспетчера: блок по тексту команды', CORPUS,
+  id: 'H02', level: 'hook', mech: 'lock', proto: true, title: 'Замок диспетчера: блок по тексту команды', CORPUS,
   async run({ base, pluginDir, work }) {
-    const { hub, proj } = makeHub(base, work);
-    fs.copyFileSync(path.join(__dirname, '..', 'fixtures', 'dispatch-rules.json'), path.join(proj, 'dispatch-rules.json'));
-    fs.writeFileSync(path.join(proj, 'memory', 'dispatch-grants.json'), '{}\n');
-    const cwd = path.join(proj, 'worktrees', 'DEMO-5');
-    fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true });
-    fs.writeFileSync(path.join(cwd, 'scripts', 'test-batch.sh'), '#!/bin/sh\nnpx jest "$@"\n');
-    return CORPUS.map(([id, tool, input, expect, source]) => {
-      const { verdict, reasons } = preToolVerdict(runEvent(pluginDir, 'PreToolUse', { hook_event_name: 'PreToolUse',
-        session_id: 'eval', cwd, tool_name: tool, tool_input: input }, { AI_DEV_HUB: hub }));
-      const blocked = verdict === 'deny';
-      return { id, source, pass: blocked === expect,
-        detail: `ждали ${expect ? 'блок' : 'пропуск'}, вышло ${verdict}${reasons[0] ? ': ' + reasons[0].split('\n')[0].slice(0, 100) : ''}` };
-    });
+    const checks = judge(base, pluginDir, path.join(work, 'syn'), path.join(__dirname, '..', 'fixtures', 'dispatch-rules.json'),
+      CORPUS.map(([id, tool, input, expect, source]) => ({ id, tool, input, expect, source })));
+    // Реальный корпус — со своими правилами живого проекта, если они лежат рядом (H02-rules.json), иначе с синтетикой.
+    const real = realCorpus('H02');
+    if (real) checks.push(...judge(base, pluginDir, path.join(work, 'real'),
+      realFile('H02-rules.json') || path.join(__dirname, '..', 'fixtures', 'dispatch-rules.json'), real));
+    return checks;
   },
 };
+
+// One mini-hub with the given lock rules, no grants; every case is one PreToolUse event.
+function judge(base, pluginDir, work, rules, cases) {
+  fs.mkdirSync(work, { recursive: true });
+  const { hub, proj } = makeHub(base, work);
+  fs.copyFileSync(rules, path.join(proj, 'dispatch-rules.json'));
+  fs.writeFileSync(path.join(proj, 'memory', 'dispatch-grants.json'), '{}\n');
+  const cwd = path.join(proj, 'worktrees', 'DEMO-5');
+  fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'scripts', 'test-batch.sh'), '#!/bin/sh\nnpx jest "$@"\n');
+  return cases.map(({ id, tool, input, expect, source, real }) => {
+    const { verdict, reasons } = preToolVerdict(runEvent(pluginDir, 'PreToolUse', { hook_event_name: 'PreToolUse',
+      session_id: 'eval', cwd, tool_name: tool, tool_input: input }, { AI_DEV_HUB: hub }));
+    const blocked = verdict === 'deny';
+    return { id, source, real, kind: expect ? 'catch' : 'quiet', pass: blocked === expect,
+      detail: `ждали ${expect ? 'блок' : 'пропуск'}, вышло ${verdict}${reasons[0] ? ': ' + reasons[0].split('\n')[0].slice(0, 100) : ''}` };
+  });
+}
