@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
-# Blocks a commit whose added lines match a private pattern: names of work projects, task keys, studio names.
-# Patterns live in .githooks/private-patterns (untracked, one extended regex per line, case-insensitive,
-# '#' starts a comment). No patterns file -> no check. Enabled by sync-claude.sh (core.hooksPath .githooks).
-# ASCII only.
+# Runner: every executable file in .githooks/pre-commit.d/ is one check, run in name order (byte order, so
+# '10-' before '20-'). A check that exits non-zero blocks the commit; the runner names it. A new check is a new
+# file there - this file is not edited for it. Enabled by sync-claude.sh (core.hooksPath .githooks, shared by
+# worktrees; each worktree runs its own checked-out .githooks). ASCII only.
 # The same matching whatever the user's locale; C.UTF-8, not C: -i must still fold Cyrillic case in patterns.
 export LC_ALL=C.UTF-8
-root=$(git rev-parse --show-toplevel) || exit 0
-src="$root/.githooks/private-patterns"
-[ -f "$src" ] || exit 0
-pat=$(mktemp)
-trap 'rm -f "$pat"' EXIT
-tr -d '\r' < "$src" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' > "$pat"
-[ -s "$pat" ] || exit 0
-found=0
-# NUL-separated names: a path with spaces or newlines stays one path.
-while IFS= read -r -d '' f; do
-  hits=$(git diff --cached -U0 --no-color -- "$f" | grep '^+' | grep -v '^+++' | grep -i -E -f "$pat")
-  if [ -n "$hits" ]; then
-    found=1
-    echo "private pattern in $f:" >&2
-    echo "$hits" | head -5 >&2
+dir="$(dirname "$0")/pre-commit.d"
+[ -d "$dir" ] || exit 0
+failed=""
+# NUL-separated, byte-sorted names: a name with spaces stays one name, the order does not follow the locale.
+while IFS= read -r -d '' check; do
+  [ -f "$check" ] && [ -x "$check" ] || continue
+  "$check"
+  code=$?
+  if [ "$code" != 0 ]; then
+    echo "pre-commit: check $(basename "$check") failed (exit $code)" >&2
+    failed="$failed $(basename "$check")"
   fi
-done < <(git diff --cached --name-only -z --diff-filter=ACMR)
-if [ "$found" = 1 ]; then
-  echo "Commit blocked: remove private names (see .githooks/private-patterns) or move the text out of the hub." >&2
+done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
+if [ -n "$failed" ]; then
+  echo "Commit blocked by:$failed" >&2
   exit 1
 fi
 exit 0
