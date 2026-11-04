@@ -13,7 +13,8 @@ FAKE_KEY = 'sk-ant-api03-probe-' + 'x' * 60 + '-mockAA'
 
 
 class Sandbox:
-    def __init__(self, root, settings=None, trust=()):
+    def __init__(self, root, settings=None, trust=(), binary='claude'):
+        self.binary = binary
         self.root = Path(root).resolve()
         if self.root.exists():
             shutil.rmtree(self.root)
@@ -67,7 +68,8 @@ class Sandbox:
 
     def claude(self, args, cwd, timeout=120, **extra):
         t0 = time.time()
-        r = subprocess.run(['claude', *args], cwd=cwd, env=self.env(**extra), capture_output=True, text=True,
+        r = subprocess.run([self.binary, *args], cwd=cwd, env=self.env(**extra), capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL,
                            timeout=timeout)
         return {'code': r.returncode, 'stdout': r.stdout, 'stderr': r.stderr, 'wall_s': round(time.time() - t0, 2)}
 

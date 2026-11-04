@@ -7,11 +7,16 @@ Hook rule under test (what slice 08/12 would do): SessionStart startup|clear|com
 sees with tool_use_id. Truth: the transcript — epoch of a main-thread tool call = 1 + compact boundaries before
 it; of a subagent call = 1 (+ its own boundaries). Passed: every logged call agrees, on 3 sessions with compaction.
 
-Sessions (mock API — compaction is forced by reporting a near-full context):
-  A: auto-compaction mid-turn, then resume, then more calls;
-  B: manual /compact between resumes, twice;
-  C: a subagent with its own calls around a compaction of the main thread."""
+Sessions (mock API; compaction — `/compact` between resumes: the mock cannot make Claude Code auto-compact,
+a reported 990k-token context is ignored by the engine):
+  A: calls, /compact, resume, calls;
+  B: /compact twice between resumes;
+  C: a subagent before and another after a compaction of the main thread.
+Auto-compaction is checked on the real journals instead (`real_sessions`, counts only): every compact_boundary of a
+session that has SessionStart hooks must be followed by SessionStart:compact before the next boundary, and none
+without one — so «epoch + 1 on SessionStart compact» holds for auto compaction too."""
 import json
+import os
 from pathlib import Path
 
 from common import save, workdir
@@ -37,14 +42,8 @@ with open(st+".lock","a") as lk:
     open(log,"a").write(json.dumps(rec)+"\n")
 '''
 
-FULL = 190000  # reported input tokens: above the auto-compact threshold of a 200k window
-
-
-def bash(tag, usage=None):
-    s = {'tool': 'Bash', 'input': {'command': f'echo {tag}', 'description': tag}}
-    if usage:
-        s['usage_input'] = usage
-    return s
+def bash(tag):
+    return {'tool': 'Bash', 'input': {'command': f'echo {tag}', 'description': tag}}
 
 
 def scenario():
@@ -53,8 +52,7 @@ def scenario():
         'compact': '<summary>P16-SUMMARY earlier probe calls ran.</summary>',
         'scripts': [
             {'match': 'P16-SUMMARY', 'steps': after},
-            {'match': 'P16-A1', 'steps': [bash('a1-0'), bash('a1-1'), bash('a1-2', FULL), bash('a1-3'),
-                                          {'text': 'a1 done'}]},
+            {'match': 'P16-A1', 'steps': [bash('a1-0'), bash('a1-1'), bash('a1-2'), {'text': 'a1 done'}]},
             {'match': 'P16-A2', 'steps': [bash('a2-0'), bash('a2-1'), {'text': 'a2 done'}]},
             {'match': 'P16-B1', 'steps': [bash('b1-0'), bash('b1-1'), {'text': 'b1 done'}]},
             {'match': 'P16-B2', 'steps': [bash('b2-0'), {'text': 'b2 done'}]},
@@ -63,9 +61,13 @@ def scenario():
                                           {'tool': 'Agent', 'input': {'subagent_type': 'general-purpose',
                                                                       'description': 'probe sub',
                                                                       'prompt': 'P16-SUB run two commands'}},
-                                          bash('c1-1', FULL), bash('c1-2'), {'text': 'c1 done'}]},
+                                          bash('c1-1'), {'text': 'c1 done'}]},
             {'match': 'P16-SUB', 'steps': [bash('sub-0'), bash('sub-1'), {'text': 'sub done'}]},
-            {'match': 'P16-C2', 'steps': [bash('c2-0'), {'text': 'c2 done'}]},
+            {'match': 'P16-C2', 'steps': [bash('c2-0'),
+                                          {'tool': 'Agent', 'input': {'subagent_type': 'general-purpose',
+                                                                      'description': 'probe sub 2',
+                                                                      'prompt': 'P16-SUB run again'}},
+                                          bash('c2-1'), {'text': 'c2 done'}]},
         ]}
 
 
@@ -86,6 +88,39 @@ def transcript_epochs(config, sid):
                     if b.get('type') == 'tool_use':
                         out[b['id']] = (agent, epoch)
     return out, [str(f) for f in files]
+
+
+def real_sessions(projects=Path.home() / '.claude' / 'projects'):
+    """Auto compaction on real journals: per session with SessionStart hooks, boundaries vs SessionStart:compact."""
+    out = {'sessions': 0, 'boundaries': 0, 'auto': 0, 'followed': 0, 'stray_starts': 0, 'max_per_session': 0}
+    for f in projects.glob('*/*.jsonl'):
+        seq, auto, hooked = [], 0, False
+        with open(f, errors='replace') as fh:
+            for line in fh:
+                if 'SessionStart:' in line:
+                    hooked = True
+                if 'compact_boundary' not in line and 'SessionStart:compact' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get('subtype') == 'compact_boundary':
+                    seq.append('B')
+                    auto += (e.get('compactMetadata') or {}).get('trigger') == 'auto'
+                elif 'SessionStart:compact' in line and seq:
+                    seq.append('S')
+                elif 'SessionStart:compact' in line:
+                    out['stray_starts'] += 1
+        if not hooked or 'B' not in seq:
+            continue
+        chunks = ''.join(seq).split('B')[1:]
+        out['sessions'] += 1
+        out['boundaries'] += len(chunks)
+        out['auto'] += auto
+        out['followed'] += sum(1 for c in chunks if c.startswith('S'))
+        out['max_per_session'] = max(out['max_per_session'], len(chunks))
+    return out
 
 
 def main():
@@ -113,6 +148,7 @@ def main():
 
     try:
         a = p('P16-A1 work')
+        p('/compact', a)
         p('P16-A2 more', a)
         b = p('P16-B1 work')
         p('/compact', b)
@@ -120,6 +156,7 @@ def main():
         p('/compact', b)
         p('P16-B3 more', b)
         c = p('P16-C1 work')
+        p('/compact', c)
         p('P16-C2 more', c)
     finally:
         sb.stop_mock()
@@ -137,17 +174,22 @@ def main():
                           'compactions': boundaries, 'session_starts': starts, 'subagents': subs,
                           'transcripts': files,
                           'disagree': [h for h in calls if h not in agree][:5]}
+    real = real_sessions() if os.environ.get('P16_REAL', '1') == '1' else None
     ok = all(s['calls'] and s['agree'] == s['calls'] == s['in_transcript'] and s['compactions'] >= 1
-             for s in sessions.values())
+             for s in sessions.values()) and (real is None or real['followed'] == real['boundaries'] > 0)
     numbers = {k: f"{s['agree']}/{s['calls']} (компакций {s['compactions']})" for k, s in sessions.items()}
+    if real:
+        numbers['real_auto'] = (f"{real['followed']}/{real['boundaries']} границ с SessionStart:compact, "
+                                f"{real['sessions']} сессий, авто {real['auto']}, до {real['max_per_session']} на сессию")
     numbers['resume_same_sid'] = all(len({r['session_id'] for r in runs if r['session_id'] == s['sid']}) == 1
                                       for s in sessions.values())
     save('P16', 'прошла' if ok else 'не прошла', numbers,
          'на 3 длинных сессиях с компакцией — совпадение границ эпох с транскриптом',
-         {'sessions': sessions, 'runs': runs, 'work': str(root)},
-         method='настоящий claude в песочнице, мок API (компакция — авто по заявленному контексту 190k и /compact); '
-                'хук ведёт эпоху в файле по (session_id, agent_id), сверка — по tool_use_id с compact_boundary '
-                'в сохранённом транскрипте')
+         {'sessions': sessions, 'runs': runs, 'real_sessions': real, 'work': str(root)},
+         method='настоящий claude в песочнице, мок API, /compact между resume (3 сессии, одна с субагентами до и '
+                'после компакции); хук ведёт эпоху в файле по (session_id, agent_id), сверка — по tool_use_id с '
+                'compact_boundary в сохранённом транскрипте; авто-компакция — по реальным журналам ~/.claude/projects '
+                '(только счётчики): за каждой границей — SessionStart:compact')
 
 
 if __name__ == '__main__':

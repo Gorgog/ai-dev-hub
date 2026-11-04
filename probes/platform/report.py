@@ -11,7 +11,7 @@ import re
 import sys
 from pathlib import Path
 
-EXPECTED = ['P1', 'P3', 'P5', 'P7', 'P8', 'P11', 'P16', 'P17']
+EXPECTED = ['P1', 'P3', 'P5', 'P7', 'P8', 'P16', 'P17']  # P11 снята по решению пользователя (05.11)
 VERDICTS = {'прошла', 'не прошла', 'не решена'}
 WATCHED = ['settings.json', 'plugins/installed_plugins.json', 'plugins/known_marketplaces.json']
 

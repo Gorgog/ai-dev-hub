@@ -77,17 +77,15 @@ def main():
                 'stderr': r['stderr'][-300:]}
     finally:
         sb.stop_mock()
-    both = runs['installed+plugin-dir']
+    both, alone = runs['installed+plugin-dir'], runs['installed-only']
     copies = set(both['logger_by_copy'])
     only_branch = copies == {'branch'}
-    datas = [d for d in both['plugin_data'] if d]
-    separate = len(set(datas)) == len(copies)
+    separate = bool(both['plugin_data']) and not set(both['plugin_data']) & set(alone['plugin_data'])
     numbers = {'copies_firing': ','.join(sorted(copies)) or '—',
-               'pretool_echo_one': ','.join(both['pretool_per_call']['echo one']),
-               'plugin_data_dirs': len(set(datas)),
-               'plugins_in_init': ','.join(f"{p.get('name')}@{Path(p.get('path', '')).name}"
-                                           for p in both['plugins'] or [])}
-    verdict = 'прошла' if (only_branch or separate) and both['code'] == 0 else 'не прошла'
+               'pretool_per_call': ','.join('+'.join(v) for v in both['pretool_per_call'].values()),
+               'plugin_data': ' vs '.join(Path(d).name for d in alone['plugin_data'] + both['plugin_data']),
+               'hub_in_init': ','.join(f"{p.get('source')}" for p in both['plugins'] or [] if p.get('name') == 'hub')}
+    verdict = 'прошла' if only_branch and separate and both['code'] == 0 else 'не прошла'
     save('P3', verdict, numbers,
          'в сессии v2 срабатывают только хуки v2 или явно видно, чьи; данные плагина раздельны',
          {'setup': [{'code': s['code'], 'out': (s['stdout'] + s['stderr'])[-300:]} for s in setup], 'runs': runs,

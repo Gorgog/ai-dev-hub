@@ -5,7 +5,7 @@ without a model, so platform probes are deterministic, free and touch no account
 A scenario is JSON: {"scripts": [{"match": "<substring of the latest prompt (user text, not tool results)>",
 "steps": [step, ...]}, ...], "compact": "<summary text>", "fallback": "<text>"}. A step is
 {"tool": "Bash", "input": {...}} or {"text": "..."}; optional "usage_input" sets the reported input tokens (high
-values make Claude Code compact). The n-th assistant turn after that prompt gets steps[n]; past the end — "done".
+values make Claude Code compact); "delay": seconds before the answer — a slow model holding the session. The n-th assistant turn after that prompt gets steps[n]; past the end — "done".
 Every request is appended to <log> as one JSON line (path, which script, step, the request body).
 
 usage: mockapi.py <scenario.json> <log.jsonl> [--port N]   (prints the port on stdout when ready)
@@ -13,6 +13,7 @@ usage: mockapi.py <scenario.json> <log.jsonl> [--port N]   (prints the port on s
 import json
 import sys
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,10 +33,10 @@ def text_of(content):
 
 
 def is_compact_request(body):
-    """Claude Code asks for the summary as the last user turn; tools are usually absent."""
+    """Claude Code asks for the summary in the last user turn (tools may still be sent, for the prompt cache)."""
     msgs = body.get('messages') or []
     last = text_of(msgs[-1].get('content')) if msgs else ''
-    return 'summary' in last.lower() and ('conversation' in last.lower()) and not body.get('tools')
+    return 'summary of the conversation' in last.lower()
 
 
 def own_text(m):
@@ -90,6 +91,8 @@ class Handler(BaseHTTPRequestHandler):
             with open(self.log, 'a') as f:
                 f.write(json.dumps({'path': path, 'which': which, 'step': idx, 'model': body.get('model'),
                                     'body': body}, ensure_ascii=False) + '\n')
+        if step.get('delay'):  # a slow model: holds the session (e.g. while the probe changes the plugin)
+            time.sleep(float(step['delay']))
         blocks, stop = blocks_for(step)
         usage = {'input_tokens': int(step.get('usage_input', 1000)), 'output_tokens': 20,
                  'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0}
@@ -117,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                                                             'partial_json': json.dumps(b['input'])}})
             sse(self, 'content_block_stop', {'type': 'content_block_stop', 'index': i})
         sse(self, 'message_delta', {'type': 'message_delta', 'delta': {'stop_reason': stop, 'stop_sequence': None},
-                                    'usage': {'output_tokens': 20}})
+                                    'usage': usage})
         sse(self, 'message_stop', {'type': 'message_stop'})
         self.wfile.flush()
 

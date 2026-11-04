@@ -6,7 +6,7 @@ of how the hook answers and in which permission mode the session runs."""
 import json
 from pathlib import Path
 
-from common import save, workdir
+from common import claude_version, engines, save, workdir
 from sandbox import Sandbox, git_repo
 
 N = 10
@@ -27,19 +27,26 @@ VARIANTS = [
     ('bare+bypass', 'bare', ['--permission-mode', 'bypassPermissions']),
     ('allow+default', 'allow', ['--permission-mode', 'default']),
     ('bare+allowedTools', 'bare', ['--permission-mode', 'default', '--allowedTools', 'Bash']),
+    ('allow+subagent', 'allow', ['--permission-mode', 'default']),  # the 10 commands come from a subagent
 ]
 
 
-def run_variant(root, name, mode, perm):
+def run_variant(root, name, mode, perm, binary):
     proj = git_repo(root / name / 'proj', {'README.md': 'p8\n'})
     hook = root / name / 'rewrite.py'
     hook.write_text(HOOK)
     settings = {'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
         {'type': 'command', 'command': f'python3 -I {hook} {mode}'}]}]}}
-    sb = Sandbox(root / name / 'sb', settings, trust=[proj])
+    sb = Sandbox(root / name / 'sb', settings, trust=[proj], binary=binary)
     steps = [{'tool': 'Bash', 'input': {'command': f'echo ORIG-{i} >> orig.txt', 'description': f'probe {i}'}}
              for i in range(1, N + 1)] + [{'text': 'P8 done'}]
-    sb.start_mock({'scripts': [{'match': 'P8-PROBE', 'steps': steps}]}, root / name / 'mock.jsonl')
+    scripts = [{'match': 'P8-PROBE', 'steps': steps}]
+    if name.endswith('subagent'):
+        scripts = [{'match': 'P8-PROBE', 'steps': [
+            {'tool': 'Agent', 'input': {'subagent_type': 'general-purpose', 'description': 'p8 sub',
+                                        'prompt': 'P8-SUB run the commands'}}, {'text': 'P8 done'}]},
+                   {'match': 'P8-SUB', 'steps': steps}]
+    sb.start_mock({'scripts': scripts}, root / name / 'mock.jsonl')
     try:
         r = sb.claude(['-p', 'P8-PROBE run the commands', '--output-format', 'stream-json', '--verbose',
                        '--model', 'claude-sonnet-4-5', *perm], proj)
@@ -58,7 +65,11 @@ def run_variant(root, name, mode, perm):
 
 def main():
     root = workdir('P8')
-    res = [run_variant(root, *v) for v in VARIANTS]
+    res = []
+    for label, binary in engines():
+        for name, mode, perm in VARIANTS:
+            r = run_variant(root / label, name, mode, perm, binary)
+            res.append({**r, 'variant': f'{label}:{name}', 'engine': claude_version(binary)})
     for x in res:
         print(json.dumps(x, ensure_ascii=False))
     numbers = {v['variant']: f"{v['rewritten']}/{N}" + (f" (orig {v['orig']})" if v['orig'] else '') for v in res}
@@ -66,8 +77,8 @@ def main():
     save('P8', verdict, numbers, '10/10 переписанных команд выполнились как переписаны',
          {'variants': res, 'work': str(root)},
          method='настоящий claude в песочнице, мок API: 10 Bash-вызовов `echo ORIG-n`, хук PreToolUse отдаёт '
-                'updatedInput `echo REWRITTEN-n`; 4 варианта (ответ хука с allow / без; режим bypass / default / '
-                'allowedTools) — прошла, только если все 4 дали 10/10')
+                'updatedInput `echo REWRITTEN-n`; 5 вариантов (ответ хука с allow / без; режим bypass / default / '
+                'allowedTools; команды из субагента) на двух движках — CLI и встроенный в Desktop; прошла, только если все дали 10/10')
 
 
 if __name__ == '__main__':

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 REPORT = Path(__file__).resolve().parent / 'report.py'
-EXPECTED = ['P1', 'P3', 'P5', 'P7', 'P8', 'P11', 'P16', 'P17']
+EXPECTED = ['P1', 'P3', 'P5', 'P7', 'P8', 'P16', 'P17']  # P11 снята по решению пользователя (05.11)
 
 
 def run(*args, home=None):

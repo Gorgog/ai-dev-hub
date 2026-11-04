@@ -13,8 +13,10 @@ did `cd` (measured by where calls start, not by counting bare `cd`).
 Results merge into P1.json: verdict comes from --model; --mock alone gives «не решена»."""
 import json
 import os
+import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common import DATA, save, workdir
@@ -31,6 +33,7 @@ def cd_pwd(tag):
 
 def mock_run(root, keep):
     name = 'keep' if keep else 'nokeep'
+    shutil.rmtree(root / name, ignore_errors=True)
     proj = git_repo(root / name / 'proj', {'sub/README.md': 'x\n', 'README.md': 'p1\n'})
     log = root / name / 'hook.jsonl'
     log.unlink(missing_ok=True)
@@ -75,12 +78,17 @@ def mock_run(root, keep):
 
 
 def model_runs(root, evals, repeats):
+    """M01 × repeats in parallel (one process each, the real model, user auth from ~/.claude)."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDE', 'ANTHROPIC'))}
+
+    def one(n):
+        return n, subprocess.run(['node', str(HERE / 'p01_m01.cjs'), str(evals), str(HERE.parents[1]),
+                                  str(root / f'm01-r{n}'), ENV], env=env, capture_output=True, text=True,
+                                 timeout=2400)
+    with ThreadPoolExecutor(repeats) as pool:
+        done = list(pool.map(one, range(1, repeats + 1)))
     out = []
-    for n in range(1, repeats + 1):
-        work = root / f'm01-r{n}'
-        r = subprocess.run(['node', str(HERE / 'p01_m01.cjs'), str(evals), str(HERE.parents[1]), str(work), ENV],
-                           env=env, capture_output=True, text=True, timeout=2400)
+    for n, r in done:
         if r.returncode != 0:
             out.append({'run': n, 'error': (r.stdout + r.stderr)[-800:]})
             continue
@@ -101,7 +109,7 @@ def model_runs(root, evals, repeats):
 
 
 def main():
-    root = workdir('P1')
+    root = workdir('P1', fresh=False)
     prev = DATA / 'P1.json'
     details = json.loads(prev.read_text())['details'] if prev.exists() else {}
     if '--mock' in sys.argv:
@@ -118,7 +126,7 @@ def main():
     numbers = {}
     for m in details.get('mock', []):
         numbers[f"mock_{'env' if m['keep'] else 'no_env'}_drift"] = \
-            ','.join(f'{k.split()[0]}:{int(v)}' for k, v in m['drift'].items())
+            ','.join(f"{k.replace(' pwd', '').replace(' ', '')}:{int(v)}" for k, v in m['drift'].items())
     runs = [m for m in details.get('model', []) if 'by_agent' in m]
     verdict = 'не решена'
     if runs:
