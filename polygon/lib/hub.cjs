@@ -64,7 +64,7 @@ function makeHub(baseDir, root, { name = 'demo', claude, memory = {}, extra = {}
   const hub = path.join(root, 'hub');
   fs.cpSync(baseDir, hub, { recursive: true });
   fs.writeFileSync(path.join(hub, 'CLAUDE.local.md'),
-    '# Личное (синтетика полигона)\n\nПользователь хаба — Georgy. Отвечай по-русски.\n');
+    '# Личное (синтетика полигона)\n\nПользователь хаба — Алекс (имя синтетическое). Отвечай по-русски.\n');
   const proj = path.join(hub, 'projects', name);
   const tmpl = path.join(hub, 'templates', 'project');
   fs.mkdirSync(path.join(proj, 'memory', 'sessions'), { recursive: true });

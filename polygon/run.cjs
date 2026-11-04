@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Полигон хаба: прогон сценариев против версии хаба и сравнение двух прогонов.
 //   node polygon/run.cjs [--hub <dir>] [--ref <git-ref>] [--only <regex>] [--level hook|model] [--repeats 3] [-j 1]
-//                        [--model <m>] [--work <dir>] [--out <file.json>] [--quiet] [--strict]
+//                        [--model <m>] [--work <dir>] [--out <file.json>] [--quiet] [--strict] [--keep]
 //   node polygon/run.cjs compare <a.json> <b.json> [--all]   — код 1, если хоть одна проверка стала хуже
 //   node polygon/run.cjs regrade <results.json>   — пересчитать проверки по сохранённым транскриптам, без модели
 // --ref не задан — живое рабочее дерево хаба; задан — ревизия через git archive во временную папку (без checkout).
@@ -9,6 +9,11 @@
 // Код выхода прогона — 0, если прогон прошёл (красные проверки — это данные); --strict — 1 при красной проверке ворот.
 // Результат по умолчанию — $HUB_DATA/polygon/results/ (вне git). --quiet — без таблицы, только итоги.
 'use strict';
+// Called from a git hook, the runner inherits GIT_DIR / GIT_INDEX_FILE: every `git -C <fixture>` would then act on the
+// calling repository (review 05.11: a pre-commit in a worktree switched its branch and set core.bare). The hub itself
+// is always addressed by `git -C <hub>`, so none of them is needed.
+for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_PREFIX', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_NAMESPACE']) delete process.env[k];
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -19,7 +24,7 @@ const { hubDataDir, realCorporaStatus } = require('./lib/corpus.cjs');
 
 function parseArgs(argv) {
   const a = { hub: path.resolve(__dirname, '..'), ref: null, only: null, level: null, repeats: 3, j: 1,
-    model: null, work: path.join(os.tmpdir(), 'hub-polygon'), out: null, quiet: false, strict: false, all: false, _: [] };
+    model: null, work: path.join(os.tmpdir(), 'hub-polygon'), out: null, quiet: false, strict: false, all: false, keep: false, _: [] };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i], v = () => argv[++i];
     if (k === '--hub') a.hub = path.resolve(v());
@@ -34,6 +39,7 @@ function parseArgs(argv) {
     else if (k === '--quiet') a.quiet = true;
     else if (k === '--strict') a.strict = true;
     else if (k === '--all') a.all = true;
+    else if (k === '--keep') a.keep = true;
     else a._.push(k);
   }
   return a;
@@ -151,6 +157,8 @@ async function main() {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), hub, results }, null, 1));
   console.log(`результат: ${out}`);
+  // Фикстуры хук-прогона не нужны после него; у модельных — транскрипты для regrade, их оставляем.
+  if (!a.keep && !results.some((r) => r.level === 'model')) fs.rmSync(runRoot, { recursive: true, force: true });
   if (a.strict) {
     const red = results.some((sc) => aggregate(sc).checks.some((c) => group(sc, c) === 'gate' && c.pass < c.n));
     process.exitCode = red ? 1 : 0;

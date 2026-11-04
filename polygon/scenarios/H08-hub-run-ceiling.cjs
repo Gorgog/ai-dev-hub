@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
-const SKIP = 'нет systemd user-менеджера: у hub-run нет потолка';
+const SKIP = 'нет systemd user-менеджера или systemd-run: у hub-run нет потолка';
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 module.exports = {
@@ -13,7 +13,9 @@ module.exports = {
   async run({ base }) {
     const script = path.join(base, 'plugin', 'skills', 'dispatch', 'scripts', 'hub-run.sh');
     if (!fs.existsSync(script)) return [{ id: 'ceiling-kills-run', pass: false, detail: 'нет hub-run.sh' }];
-    const systemd = spawnSync('systemctl', ['--user', 'show-environment'], { stdio: 'ignore' }).status === 0;
+    // Как has_systemd в hub-run.sh: и менеджер, и systemd-run — иначе hub-run уходит в фоллбэк без потолка.
+    const systemd = spawnSync('systemctl', ['--user', 'show-environment'], { stdio: 'ignore' }).status === 0 &&
+      spawnSync('sh', ['-c', 'command -v systemd-run'], { stdio: 'ignore' }).status === 0;
     if (!systemd || process.env.HUB_RUN_NO_SYSTEMD === '1') {
       return ['ceiling-kills-run', 'neighbour-alive'].map((id) => ({ id, pass: false, skip: SKIP }));
     }

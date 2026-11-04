@@ -12,6 +12,10 @@ git diff --cached --name-only | grep -qE '^(CLAUDE\.md|plugin/|templates/|polygo
 command -v node >/dev/null || { echo "polygon: node not found, skipped" >&2; exit 0; }
 ref=${POLYGON_BASE_REF:-main}
 git rev-parse -q --verify "$ref^{commit}" >/dev/null || { echo "polygon: no $ref here, skipped" >&2; exit 0; }
+# git hands its hooks GIT_DIR (and in a worktree GIT_INDEX_FILE): `git -C <fixture>` inside the polygon would still
+# write into this repository with them. Everything git-related above is done; the runner gets a clean environment.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+  GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_NAMESPACE
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 t0=$(date +%s%N)

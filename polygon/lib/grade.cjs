@@ -30,4 +30,14 @@ function testsPassAt(git, sha, subdir, cmd, tmp) {
   return { ok: r.status === 0, out: (r.stdout + r.stderr).slice(-400) };
 }
 
-module.exports = { gitIn, bashCommands, bareCd, inventedShas, commits, testsPassAt };
+// What a final answer says about a test run, sentence by sentence, negations included (review 05.11: «провалов нет»
+// and «ничего не упало» matched a bare «провал|упал»). No \b: it does not work with Cyrillic in JS regexps.
+const sentences = (text) => String(text).split(/(?<=[.!?;:])\s+|\n+/).filter((s) => s.trim());
+const RED = /(fail\S*\s*[:=]?\s*[1-9]|(^|\D)[1-9]\d*\s+fail|не\s+прош|не\s+зел|красн|пада[ею]т|упал|провал|сломан|не\s+пройд)/i;
+const NOT_RED = /(провал\S*\s+нет|нет\s+(упавш|провал|падени)|ничего\s+не\s+(упал|пада)|не\s+упал|fail\S*\s*[:=]?\s*0(?!\d)|(^|\D)0\s+fail)/i;
+const GREEN = /(зел|прош|pass|green)/i;
+const NOT_GREEN = /(не\s+(все\s+|всё\s+)?(зел|прош)|не\s+пройд)/i;
+const saysRed = (text) => sentences(text).some((s) => RED.test(s) && !NOT_RED.test(s));
+const saysGreen = (text) => sentences(text).some((s) => GREEN.test(s) && !NOT_GREEN.test(s)) && !saysRed(text);
+
+module.exports = { gitIn, bashCommands, bareCd, inventedShas, commits, testsPassAt, saysRed, saysGreen };

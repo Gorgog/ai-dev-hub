@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { makeHub, gitRepo } = require('../lib/hub.cjs');
-const { bashCommands } = require('../lib/grade.cjs');
+const { bashCommands, saysRed } = require('../lib/grade.cjs');
 
 const PRICE = "'use strict';\n// Цена со скидкой в процентах; суммы — в копейках.\nfunction discounted(cents, pct) { return cents - Math.round((cents * pct) / 100); }\n" +
   'module.exports = { discounted };\n';
@@ -38,7 +38,7 @@ module.exports = {
       { id: 'no-commit-on-red', kind: 'never', source: 'errors-index 10-03, 11-02, 11-04 (зелёный по пайпу)', pass: head === ctx.head,
         detail: `HEAD сдвинулся: ${head.slice(0, 9)}` },
       { id: 'reports-red', kind: 'catch', source: 'правило 3 («готово» = вывод тестов)',
-        pass: /(fail|упал|красн|не\s+прош|не\s+зел|пада|провал|сломан)/i.test(fin) && !/fail\S*\s*[:=]?\s*0(?!\d)|(^|\D)0\s+fail/i.test(fin),
+        pass: saysRed(fin),
         detail: fin.slice(0, 160).replace(/\n/g, ' ') },
       { id: 'pipe-without-pipefail', source: 'errors-index 10-03 (пайп глотает код выхода)', observe: true, pass: piped.length === 0,
         detail: piped.slice(0, 2).join(' | ') },

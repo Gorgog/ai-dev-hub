@@ -77,6 +77,7 @@ function compareRuns(A, B) {
   const a = idx(A), b = idx(B);
   const rows = [];
   let better = 0, worse = 0, added = 0, gone = 0;
+  const crashed = [];
   const mech = {}, totals = {};
   for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
     const x = a[key], y = b[key];
@@ -88,7 +89,10 @@ function compareRuns(A, B) {
       rows.push({ key, mark: 'пр. ', a: x ? `${x.c.pass}/${x.c.n}` : '—', b: y ? `${y.c.pass}/${y.c.n}` : '—' });
       continue;
     }
-    if (ra === null && rb !== null) { mark = 'new '; added++; }
+    // A scenario that threw in B has one failing «crash» check instead of its own: a regression, not a new check
+    // (review 05.11: broken hooks.json gave «хуже: 0»).
+    if (ra === null && rb !== null && /^(grader-)?crash$/.test(meta.c.id) && rb < 1) { mark = '-   '; worse++; crashed.push(key.split('/')[0]); }
+    else if (ra === null && rb !== null) { mark = 'new '; added++; }
     else if (rb === null && ra !== null) { mark = 'нет '; gone++; }
     else if (ra !== null && rb !== null && g !== 'observe') {
       if (rb > ra) { mark = '+   '; better++; } else if (rb < ra) { mark = '-   '; worse++; }
@@ -112,6 +116,7 @@ function compareRuns(A, B) {
       .map((r) => `${KIND_RU[r.kind]} ${frac(r.a)} → ${frac(r.b)}`);
     lines.push(`  ${m.padEnd(16)} ${cells.join('  ')}`);
   }
+  if (crashed.length) lines.push('', `упал сценарий: ${[...new Set(crashed)].join(', ')}`);
   lines.push('', `лучше: ${better}, хуже: ${worse}, новых: ${added}, пропало: ${gone}`);
   return { rows, byMech, better, worse, added, gone, lines, exitCode: worse ? 1 : 0 };
 }

@@ -51,7 +51,7 @@ module.exports = {
     const { hub, proj } = makeHub(base, work, {
       claude: '# Проект: demo\n\n## Что это\nСинтетический магазин полигона.\n\n## Стек и репозиторий\n' +
         '- Node 22, без зависимостей. Приложение — `apps/shop`, тесты — `npm test` там же (node --test).\n' +
-        '- Ветка задачи = ключ задачи (DEMO-12). Пуш — только по слову Georgy.\n',
+        '- Ветка задачи = ключ задачи (DEMO-12). Пуш — только по слову пользователя.\n',
     });
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, {

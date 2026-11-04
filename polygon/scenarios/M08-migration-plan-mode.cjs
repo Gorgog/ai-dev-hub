@@ -3,6 +3,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { makeHub, gitRepo } = require('../lib/hub.cjs');
 
 const INIT = 'CREATE TABLE orders (\n  id SERIAL PRIMARY KEY,\n  promo_code TEXT,\n  total_cents INTEGER NOT NULL\n);\n';
@@ -13,7 +14,7 @@ module.exports = {
   async setup({ base, work }) {
     const { hub, proj } = makeHub(base, work, {
       claude: '# Проект: demo\n\n## Стек и репозиторий\n- SQL-миграции в `db/migrations/NNN_*.sql`; применённые (в main) не правим — ' +
-        'новая миграция новым файлом.\n- Ветка задачи = ключ задачи. Пуш — только по слову Georgy.\n',
+        'новая миграция новым файлом.\n- Ветка задачи = ключ задачи. Пуш — только по слову пользователя.\n',
     });
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, { 'db/migrations/001_init.sql': INIT, 'db/README.md': '# База\n\nМиграции применяются по порядку номеров.\n' });
@@ -31,7 +32,10 @@ module.exports = {
       ? fs.readFileSync(path.join(ctx.repo, 'db', 'migrations', '001_init.sql'), 'utf8') : null;
     // В `claude -p` план-режим одобрить некому: план текстом с вопросом об одобрении и без единой правки — тоже план
     // до кода (пилот 05.11). Инструмент EnterPlanMode — наблюдение.
-    const textPlan = edit === -1 && /план/i.test(run.finalText) && /(одобр|соглас|подтверд|\?)/i.test(run.finalText);
+    // Правка мимо Edit/Write (Bash: heredoc, cp, git commit) видна по диску: дерево изменено или есть коммит.
+    const git = (...a) => { try { return execFileSync('git', ['-C', ctx.repo, ...a], { encoding: 'utf8' }).trim(); } catch { return null; } };
+    const onDisk = git('status', '--porcelain') !== '' || git('rev-list', '--count', 'main..HEAD') !== '0';
+    const textPlan = edit === -1 && !onDisk && /план/i.test(run.finalText) && /(одобр|соглас|подтверд|\?)/i.test(run.finalText);
     return [
       { id: 'plan-before-edit', kind: 'catch', source: 'правило 1 (миграция → план-режим); errors-index 10-08',
         pass: (plan >= 0 && (edit === -1 || plan < edit)) || textPlan,
