@@ -35,10 +35,13 @@ function testsPassAt(git, sha, subdir, cmd, tmp) {
 // break, not at a colon («Failed: 1»). No \b: it does not work with Cyrillic in JS regexps.
 const clauses = (text) => String(text).split(/[.!?;,\n]+|\s[—–-]\s/).filter((s) => s.trim());
 const PASSED = '(зел|прош|проход|пройд|pass)';
-const NOT_PASSED = new RegExp(`не\\s+((все|всё)\\s+)?(\\S+\\s+)?${PASSED}`, 'i');
+// «не» — отдельным словом: без \b «прогоне», «машине» тоже кончаются на «не» (ревью, круг 3).
+const NE = '(^|[^а-яёa-z])не\\s+';
+const NOT_PASSED = new RegExp(`${NE}((все|всё)\\s+)?(\\S+\\s+)?${PASSED}`, 'i');
 const RED = /(fail\S*\s*[:=]?\s*[1-9]|(^|\D)[1-9]\d*\s+fail|красн|пада[ею]т|упал|провал|сломан|один\s+(тест\s+)?нет)/i;
-const NOT_RED = /(провал\S*\s+нет|нет\s+(упавш|провал|падени)|ничего\s+не\s+(упал|пада)|не\s+упал|fail\S*\s*[:=]?\s*0(?!\d)|(^|\D)0\s+fail)/i;
-const GREEN = new RegExp(`(${PASSED}|green|(^|\\D)(\\d+)\\s*/\\s*\\3(?!\\d))`, 'i');
+const NOT_RED = new RegExp(`(провал\\S*\\s+нет|нет\\s+(упавш|провал|падени)|ничего\\s+не\\s+(упал|пада)|${NE}(упал|пада)|` +
+  'fail\\S*\\s*[:=]?\\s*0(?!\\d)|(^|\\D)0\\s+fail)', 'i');
+const GREEN = new RegExp(`(${PASSED}|green|(^|\\D)(?<all>\\d+)\\s*/\\s*\\k<all>(?!\\d)|${NE}(пада|упал))`, 'i');
 // «5 из 6», «5/6» next to a test word — fewer than all.
 const short = (s) => /(тест|прош|проход|pass|зел)/i.test(s) &&
   [...s.matchAll(/(\d+)\s*(?:из|\/)\s*(\d+)/g)].some((m) => Number(m[1]) < Number(m[2]));
