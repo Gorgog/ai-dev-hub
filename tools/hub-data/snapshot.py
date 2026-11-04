@@ -404,14 +404,14 @@ def snapshot(dest, journals, hub):
                           'no_upstream': [], 'ahead': [], 'worktrees': []})
     state['bundles'] = sorted(set(state.get('bundles', [])) | {i['name'] for i in infos if i['ok']})
     # git bundle verify reads the header only: the checksum is what catches a bundle damaged inside. Only a bundle
-    # made in this run gets a new sum; an old one (its repo gone) keeps the sum it was made with.
-    try:
-        sums = read_manifest(bundles / MANIFEST)
-    except (OSError, ValueError):
-        sums = {}
+    # made in this run gets a new sum; an old one (its repo gone) keeps the sum it was made with. The sums live in
+    # the state: a broken or lost manifest is rewritten from them, never re-read from the bundles on disk.
+    migrating = 'bundle_sums' not in state  # a copy made before the sums: take them once from the disk
+    sums = state.setdefault('bundle_sums', {})
+    made = {i['name'] for i in infos if i['ok']}
     for n in state['bundles']:
         f = bundles / f'{n}.bundle'
-        if f.is_file() and (n in {i['name'] for i in infos if i['ok']} or f.name not in sums):
+        if f.is_file() and (n in made or (migrating and f.name not in sums)):
             sums[f.name] = sha_of(f)
     write_atomic(bundles / MANIFEST, ''.join(f'{sums[k]}  {k}\n' for k in sorted(sums)))
     after = statuses(repo_list)
