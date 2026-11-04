@@ -75,6 +75,17 @@ class ReportTest(unittest.TestCase):
         self.assertIn('P3: вердикт «ok»', r.stdout)
         self.assertIn('P5: нет цифр', r.stdout)
 
+    def test_broken_probe_file_is_named_not_a_traceback(self):
+        for p in EXPECTED:
+            self.put(p)
+        (self.data / 'platform' / 'P7.json').write_text('{"probe": "P7", ')
+        self.snap('global-before.json')
+        self.snap('global-after.json')
+        r = run(self.data, home=self.home)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('P7: файл не читается', r.stdout)
+        self.assertNotIn('Traceback', r.stderr)
+
     def test_changed_settings_fail_with_the_file_named(self):
         for p in EXPECTED:
             self.put(p)
