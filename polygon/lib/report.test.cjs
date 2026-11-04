@@ -90,6 +90,16 @@ test('compareRuns: вид и механизм берутся из B, если в
   assert.ok(c.byMech.some((r) => r.mech === 'rules-guard' && r.kind === 'quiet' && r.a.n === 1));
 });
 
+test('compareRuns: сценарий упал в B (crash вместо проверок) — регрессия, а не «новая проверка»', () => {
+  const { compareRuns } = need();
+  const A = run([hook('H01', [ck('a', true, { kind: 'catch' }), ck('b', true, { kind: 'quiet' })], { mech: 'done-gate' })]);
+  const B = run([hook('H01', [ck('crash', false, { kind: 'catch' })], { mech: 'done-gate' })]);
+  const c = compareRuns(A, B);
+  assert.strictEqual(c.exitCode, 1);
+  assert.ok(c.worse >= 1);
+  assert.match(c.lines.join('\n'), /упал/);
+});
+
 test('compareRuns: контракт, который был зелёным и покраснел, — регрессия', () => {
   const { compareRuns } = need();
   const A = run([hook('H09', [ck('x', true, { kind: 'catch' })], { contract: true })]);
