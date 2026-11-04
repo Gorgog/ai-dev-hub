@@ -1,4 +1,5 @@
 """Shared bits of the memory probes: where data goes, the verdict file, the node the hooks run on."""
+import importlib.util
 import json
 import os
 import shutil
@@ -12,7 +13,15 @@ DATA = Path(os.environ.get('HUB_PROBES', Path.home() / 'hub-data' / 'probes')) /
 WORK = Path(os.environ.get('PROBE_WORK', '/tmp/hub-probes')) / 'memory'
 # Hooks run `node` from PATH, and ~/.local/bin leads it (P2 asks about exactly this node).
 NODE = os.environ.get('PROBE_NODE', str(Path.home() / '.local' / 'bin' / 'node'))
-sys.path.insert(0, str(HERE.parent / 'platform'))  # the sandbox and mock API of slice 04
+sys.path.append(str(HERE.parent / 'platform'))  # the sandbox and mock API of slice 04 (after this dir: own common)
+
+
+def platform_common():
+    """probes/platform/common.py (engines, claude_version) — same module name as this one, so loaded by path."""
+    spec = importlib.util.spec_from_file_location('platform_common', HERE.parent / 'platform' / 'common.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def node_version(node=NODE):
