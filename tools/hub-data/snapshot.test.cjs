@@ -18,7 +18,11 @@ const FAKE_GH = 'gh' + 'p_' + 'Q'.repeat(36);
 const FAKE_ENV = 'SHOP_API_TOKEN=' + 'fake-eval-token-' + '9f8e7d6c5b4a3210';
 // Code and prose that only look like assignments: the real journals are full of them (snapshot 05.11: 312 files).
 const NOT_SECRETS = ['const token = data.accessToken;', 'password: \'Неверный пароль\'', 'token: `${prefix}-x`',
-  'api_key = os.environ.get("API_KEY")', 'secret: process.env.SESSION_SECRET', 'token=abcdefghijklmnopqrstu'].join('\n');
+  'api_key = os.environ.get("API_KEY")', 'secret: process.env.SESSION_SECRET', 'token=abcdefghijklmnopqrstu',
+  'token = config.v2.authToken', '"output_tokens":12345', 'token_count: 5000'].join('\n');
+// Plain passwords and keys must still be found: one per line, every line counts.
+const PASSWORDS = ['DB_PASSWORD=s3cr3tP@ss', 'password=Sup3r$ecretPass!2024', 'POSTGRES_PASSWORD=hunter2hunter2',
+  'password = "Tr0ub4dor&3horse"', 'API_TOKEN=Abcd1234Efgh5678IJKL.', 'SECRET_KEY=insecure-9x8y7z6w5v4u'].join('\n');
 
 const initRepo = (dir) => {
   fs.mkdirSync(dir, { recursive: true });
@@ -80,9 +84,14 @@ function fixture(t) {
   return { root, journals, hub, dest };
 }
 
+// No __pycache__ next to the script: it is not a part of the hub's git.
+const ENV = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' };
 const run = (fx, ...extra) => spawnSync('python3',
-  [SCRIPT, '--dest', fx.dest, '--journals', fx.journals, '--hub', fx.hub, ...extra], { encoding: 'utf8' });
-const verify = (fx) => spawnSync('python3', [SCRIPT, '--verify', fx.dest], { encoding: 'utf8' });
+  [SCRIPT, '--dest', fx.dest, '--journals', fx.journals, '--hub', fx.hub, ...extra], { encoding: 'utf8', env: ENV });
+const runInterrupted = (fx) => spawnSync('python3',
+  [SCRIPT, '--dest', fx.dest, '--journals', fx.journals, '--hub', fx.hub],
+  { encoding: 'utf8', env: { ...ENV, HUB_DATA_INTERRUPT: 'after-copy' } });
+const verify = (fx) => spawnSync('python3', [SCRIPT, '--verify', fx.dest], { encoding: 'utf8', env: ENV });
 const ok = (r) => { assert.strictEqual(r.status, 0, r.stdout + r.stderr); return r.stdout; };
 const reportOf = (out) => fs.readFileSync(out.match(/^отчёт: (.+)$/m)[1], 'utf8');
 const manifest = (f) => Object.fromEntries(fs.readFileSync(f, 'utf8').trim().split('\n')
@@ -275,4 +284,62 @@ test('snapshot: a file name the manifest cannot hold (newline) is an error; the 
   assert.match(r.stdout, /^ {2}! 'proj-a\/bad\\nname\.jsonl': /m);
   assert.match(r.stdout, /^журналы: файлов 3, новых 3/m);
   assert.match(ok(verify(fx)), /манифест сходится 3 из 3 \(100%\)/);
+});
+
+test('secret scan: plain passwords and keys are found, one per assignment', (t) => {
+  const fx = fixture(t);
+  write(path.join(fx.hub, 'projects', 'p2', 'memory', 'passwords.env'), PASSWORDS + '\n');
+  const out = ok(run(fx));
+  const tsv = fs.readFileSync(path.join(path.dirname(out.match(/^отчёт: (.+)$/m)[1]), 'secrets.tsv'), 'utf8');
+  assert.match(tsv, /^assignment\t6\thub\/projects\/p2\/memory\/passwords\.env$/m);
+  assert.ok(!out.includes('hunter2') && !tsv.includes('hunter2'), 'password value leaked');
+});
+
+test('secret scan: a run interrupted after the copy still scans what it copied, on the next run', (t) => {
+  const fx = fixture(t);
+  ok(run(fx));
+  write(path.join(fx.hub, 'projects', 'p1', 'memory', 'leak.md'), 'API_TOKEN=Abcd1234Efgh5678IJKL\n');
+  assert.notStrictEqual(runInterrupted(fx).status, 0);
+  const out = ok(run(fx));
+  const tsv = fs.readFileSync(path.join(path.dirname(out.match(/^отчёт: (.+)$/m)[1]), 'secrets.tsv'), 'utf8');
+  assert.match(tsv, /^assignment\t1\thub\/projects\/p1\/memory\/leak\.md$/m);
+});
+
+test('secret scan: new rules rescan the whole copy, not only new files', (t) => {
+  const fx = fixture(t);
+  ok(run(fx));
+  const statePath = path.join(fx.dest, '.state.json');
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  state.secret_rules = 'older-rules';
+  state.secrets = {};
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  const out = ok(run(fx));
+  assert.match(out, /^секреты: файлов 2/m);
+});
+
+test('snapshot: files under an unreadable folder are not counted as gone, the journals root included', (t) => {
+  if (process.getuid && process.getuid() === 0) return t.skip('root reads everything');
+  const fx = fixture(t);
+  ok(run(fx));
+  for (const dir of [path.join(fx.journals, 'proj-a', 's1'), fx.journals]) {
+    fs.chmodSync(dir, 0o000);
+    let r;
+    try { r = run(fx); } finally { fs.chmodSync(dir, 0o755); }
+    assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /^журналы: 0 новых, 0 изменённых \(файлов 3, пропало в источнике 0\)/m);
+  }
+});
+
+test('snapshot: a bundle whose repo is gone keeps its old checksum — later damage is not blessed', (t) => {
+  const fx = fixture(t);
+  ok(run(fx));
+  fs.rmSync(path.join(fx.hub, 'projects', 'p2', 'site'), { recursive: true });
+  const b = path.join(fx.dest, 'bundles', 'p2--site.bundle');
+  const buf = fs.readFileSync(b);
+  buf[buf.length - 30] ^= 0xff;
+  fs.writeFileSync(b, buf);
+  ok(run(fx));
+  const bad = verify(fx);
+  assert.strictEqual(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /^ {2}! p2--site: бандл не совпадает с манифестом/m);
 });
