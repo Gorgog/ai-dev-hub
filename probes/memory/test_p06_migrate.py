@@ -125,6 +125,21 @@ class MigrateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn(f'дважды: {s[2]}', r.stdout)
 
+    def test_lone_part_same_part_twice_and_empty_lesson_fail(self):
+        s = shas()
+        mp = mapping(s)
+        mp['lessons'][0]['from'][2] = {'sha': s[2], 'part': 'бэктики'}  # split, but its other rule went nowhere
+        mp['archive'].append({'sha': s[1], 'reason': 'x', 'part': 'хвост'})
+        mp['archive'].append({'sha': s[1], 'reason': 'y', 'part': 'хвост'})
+        mp['lessons'][0]['from'].remove(s[1])
+        mp['lessons'].append({'id': 'empty', 'kind': 'rule', 'when': [], 'keys': [], 'created': '2026-09-01',
+                              'from': [], 'text': ['Пусто.', 'Совсем.']})
+        r = run(ERRORS, mp, self.out / 'a')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f'одна часть: {s[2]} — разбитой записи нужны все её части', r.stdout)
+        self.assertIn(f'дважды: {s[1]} (часть «хвост»)', r.stdout)
+        self.assertIn('empty: урок ни из чего (from пуст)', r.stdout)
+
     def test_lesson_text_limits(self):
         mp = mapping(shas())
         mp['lessons'][0]['text'] = ['я' * 161]
