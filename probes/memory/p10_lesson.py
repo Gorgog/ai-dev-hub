@@ -9,7 +9,10 @@ gets up to `--max-runs` attempts to collect `--repeats` violating runs.
 Real model, real account: heavy (lock) — only under hub-run.sh with the dispatcher's permission.
 `--mock` checks the harness for free: the scripted mock API of slice 04 breaks the rule, then fixes it.
 
-usage: p10_lesson.py [--repeats 3] [--max-runs 5] [-j 2] [--model M] [--only S1] [--mock]"""
+Also reported, outside the verdict: fixed within 3 calls, and whether the next call looked at the file the lesson
+names. `--regrade` recounts the last run from its saved hook logs, without a model.
+
+usage: p10_lesson.py [--repeats 3] [--max-runs 5] [-j 2] [--model M] [--only S1] [--mock | --regrade]"""
 import argparse
 import json
 import os
@@ -38,6 +41,7 @@ SCENARIOS = {
                            'module.exports = { total };\n',
         },
         'file': 'src/discount.js',
+        'helper': 'src/log.js',
         'violation': r'console\.(log|info|warn|error|debug)\s*\(',
         'prompt': 'В src/discount.js добавь отладочный вывод: если скидка больше 50 %, выводи процент и сумму скидки. '
                   'Тесты не нужны, только эта правка.',
@@ -56,6 +60,7 @@ SCENARIOS = {
                             'module.exports = { save };\n',
         },
         'file': 'src/order.js',
+        'helper': 'src/clock.js',
         'violation': r'new Date\b|Date\.now\s*\(',
         'prompt': 'В src/order.js добавь заказу поле createdAt — время создания в миллисекундах. Тесты не нужны, '
                   'только эта правка.',
@@ -75,6 +80,7 @@ SCENARIOS = {
             'src/catalog.js': "'use strict';\nconst items = [{ id: 1, name: 'Чай', price: 25000 }];\nmodule.exports = { items };\n",
         },
         'file': 'src/receipt.js',
+        'helper': 'src/money.js',
         'violation': r'toFixed|/\s*100\b|\*\s*0?\.01\b',
         'prompt': 'В src/receipt.js добавь в строку чека сумму позиции в рублях (price × qty; price в копейках). '
                   'Тесты не нужны, только эта правка.',
@@ -109,8 +115,9 @@ def fixture(root, sid, mode):
     return proj
 
 
-def grade(hook_log):
-    """From the hook log: the first call that left the violation, and what the next call did."""
+def grade(hook_log, helper):
+    """From the hook log: the first call that left the violation, and what the next call did (helper — the file the
+    lesson names: a look at it is the lesson acted on, not yet the fix)."""
     calls = [json.loads(l) for l in hook_log.read_text().splitlines() if l.strip()] if hook_log.exists() else []
     calls = [c for c in calls if not c.get('agent')]  # the main agent only
     first = next((i for i, c in enumerate(calls) if c['violation']), None)
@@ -121,6 +128,7 @@ def grade(hook_log):
     return {'violated': True, 'calls': len(calls), 'shown': calls[first]['shown'],
             'fixed_next': bool(after) and not after[0]['violation'],
             'next_tool': after[0]['tool'] if after else None,
+            'next_reads_helper': bool(after) and helper in json.dumps(after[0].get('input'), ensure_ascii=False),
             'fixed_by_end': bool(after) and not after[-1]['violation'],
             'calls_to_fix': None if fixed_at is None else fixed_at + 1}
 
@@ -152,7 +160,7 @@ def one(root, sid, mode, k, model):
     d = root / sid / mode / f'r{k}'
     proj = fixture(d, sid, mode)
     r = run_claude(proj, SCENARIOS[sid]['prompt'], model, d / 'transcript.jsonl')
-    g = grade(d / 'hook.jsonl')
+    g = grade(d / 'hook.jsonl', SCENARIOS[sid]['helper'])
     diff = subprocess.run(['git', '-C', str(proj), 'diff'], capture_output=True, text=True).stdout
     (d / 'final.diff').write_text(diff)
     return {'scenario': sid, 'mode': mode, 'run': k, **r, **g}
@@ -191,7 +199,7 @@ def mock_check(root):
             sb.stop_mock()
         bodies = [json.loads(l)['body'] for l in (d / 'mock.jsonl').read_text().splitlines()]
         reached = any(sc['lesson'] in json.dumps(b, ensure_ascii=False) for b in bodies)
-        res[mode] = {**r, **grade(d / 'r0' / 'hook.jsonl'), 'lesson_in_request': reached}
+        res[mode] = {**r, **grade(d / 'r0' / 'hook.jsonl', sc['helper']), 'lesson_in_request': reached}
     ok = (res['lesson']['lesson_in_request'] and not res['control']['lesson_in_request']
           and res['lesson']['fixed_next'] and res['lesson']['shown'] and not res['control'].get('shown'))
     print(json.dumps(res, ensure_ascii=False, indent=1))
@@ -207,10 +215,16 @@ def main():
     ap.add_argument('--model', default=None)
     ap.add_argument('--only', default=None)
     ap.add_argument('--mock', action='store_true')
+    ap.add_argument('--regrade', action='store_true')
     a = ap.parse_args()
-    root = workdir('P10-mock' if a.mock else 'P10')
+    root = workdir('P10-mock' if a.mock else 'P10', fresh=not a.regrade)
     if a.mock:
         raise SystemExit(0 if mock_check(root) else 1)
+    if a.regrade:
+        runs = [{**x, **grade(root / x['scenario'] / x['mode'] / f"r{x['run']}" / 'hook.jsonl',
+                              SCENARIOS[x['scenario']]['helper'])}
+                for x in json.loads((root / 'runs.json').read_text())]
+        return report(root, runs, a)
     runs = []
     for sid in SCENARIOS:
         if a.only and sid != a.only:
@@ -219,6 +233,10 @@ def main():
             runs += arm(root, sid, mode, a)
             print(sid, mode, [(x['violated'], x.get('fixed_next')) for x in runs if x['scenario'] == sid
                               and x['mode'] == mode], flush=True)
+    report(root, runs, a)
+
+
+def report(root, runs, a):
     (root / 'runs.json').write_text(json.dumps(runs, ensure_ascii=False, indent=1))
     per, numbers = {}, {}
     for sid in sorted({x['scenario'] for x in runs}):
@@ -227,14 +245,18 @@ def main():
             v = [x for x in runs if x['scenario'] == sid and x['mode'] == mode and x['violated']]
             row[mode] = {'violated': len(v), 'runs': sum(1 for x in runs if x['scenario'] == sid and x['mode'] == mode),
                          'fixed_next': sum(1 for x in v if x['fixed_next']),
-                         'fixed_by_end': sum(1 for x in v if x['fixed_by_end'])}
+                         'fixed_by_end': sum(1 for x in v if x['fixed_by_end']),
+                         'fixed_within_3': sum(1 for x in v if x['calls_to_fix'] and x['calls_to_fix'] <= 3),
+                         'next_reads_helper': sum(1 for x in v if x.get('next_reads_helper'))}
         L, C = row['lesson'], row['control']
         enough = L['violated'] >= a.repeats and C['violated'] >= a.repeats
         row['ok'] = enough and L['fixed_next'] * 3 >= 2 * L['violated'] and C['fixed_next'] * 3 < 2 * C['violated']
         row['enough'] = enough
         per[sid] = row
-        numbers[sid] = (f"урок {L['fixed_next']}/{L['violated']} (к концу {L['fixed_by_end']}), "
-                        f"контроль {C['fixed_next']}/{C['violated']}; нарушений {L['violated']}/{L['runs']} и "
+        numbers[sid] = (f"следующим вызовом: урок {L['fixed_next']}/{L['violated']}, контроль "
+                        f"{C['fixed_next']}/{C['violated']}; за ≤ 3 вызова: урок {L['fixed_within_3']}/{L['violated']}, "
+                        f"контроль {C['fixed_within_3']}/{C['violated']}; следующий вызов смотрит файл из урока "
+                        f"{L['next_reads_helper']}/{L['violated']}; нарушений {L['violated']}/{L['runs']} и "
                         f"{C['violated']}/{C['runs']}")
     decided = [s for s in per.values() if s['enough']]
     if len(decided) < 2:
