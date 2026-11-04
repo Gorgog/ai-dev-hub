@@ -9,7 +9,8 @@ mapping.json: {"theme": "<regex: records that must get an address>",
                "text": ["2–5 lines, the first ≤ 160 chars"]}],
   "archive": [{"sha", "reason", "part"?}]}
 sha — v1mem.records()[...]['sha']: 12 hex of the record text. A lesson from several records — a merge. A record that
-holds two rules is split: each of its claims names its `part`, and only then may the sha be claimed again.
+holds two rules is split: each of its claims names its own `part`, and only then may the sha be claimed again; a lone
+part is an error (the record's other rule went nowhere).
 Output: <out>/lessons/<id>.md (v2 frontmatter) and <out>/addresses.json (sha → [where it went]). Exit 1 and nothing
 written on: an unknown or twice-mapped sha, a theme record without an address (orphan), a lesson out of the limits.
 """
@@ -50,6 +51,9 @@ def plan(errors_text, mp):
         if sha in parts and (part is None or None in parts[sha]):
             problems.append(f'дважды: {sha}')
             return False
+        if part is not None and part in parts.get(sha, []):
+            problems.append(f'дважды: {sha} (часть «{part}»)')
+            return False
         parts.setdefault(sha, []).append(part)
         return True
 
@@ -69,6 +73,8 @@ def plan(errors_text, mp):
             problems.append(f'{lid}: id — латиница, цифры и дефис')
         if not 2 <= len(l['text']) <= 5:
             problems.append(f'{lid}: строк {len(l["text"])}, нужно 2–5')
+        if not l['from']:
+            problems.append(f'{lid}: урок ни из чего (from пуст)')
         if l['text'] and len(l['text'][0]) > 160:
             problems.append(f'{lid}: первая строка {len(l["text"][0])} знаков > 160')
         for f in l['from']:
@@ -82,6 +88,9 @@ def plan(errors_text, mp):
             problems.append(f'архив без причины: {a.get("sha")}')
         if claim(a.get('sha'), a.get('part')):
             put(a['sha'], a.get('part'), to='archive', reason=a.get('reason'))
+    # A part implies a split: a record with a single named part lost its other rule somewhere.
+    problems += [f'одна часть: {sha} — разбитой записи нужны все её части'
+                 for sha, ps in sorted(parts.items()) if len(ps) == 1 and ps[0] is not None]
     theme = re.compile(mp['theme'], re.I)
     in_theme = [r for r in recs if theme.search(r['text'])]
     orphans = [r for r in in_theme if r['sha'] not in addr]
