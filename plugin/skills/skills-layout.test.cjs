@@ -31,7 +31,8 @@ function scriptPathProblems(text, skillDir) {
   const runRe = /\b(?:node(?:\s+--test)?|bash)\s+([^\s`'"]+\.(?:c?js|mjs|sh))\b/g;
   const paths = [...[...text.matchAll(scriptRe)].map((m) => m[0]), ...[...text.matchAll(runRe)].map((m) => m[1])];
   for (const p of paths) {
-    if (seen.has(p) || !HUB_SCRIPTS.has(path.basename(p))) continue;
+    // A ${CLAUDE_SKILL_DIR} path is checked whatever its name: a typo in the file name is what it must catch.
+    if (seen.has(p) || (!p.startsWith(DIR_VAR + '/') && !HUB_SCRIPTS.has(path.basename(p)))) continue;
     seen.add(p);
     if (p.startsWith('<хаб>/')) continue; // already reported above
     if (!p.startsWith(DIR_VAR + '/')) { out.push(`скрипт мимо ${DIR_VAR}: ${p}`); continue; }
@@ -49,12 +50,14 @@ test('script paths: hub-root, bare and folderless script paths are problems; ${C
     'node ${CLAUDE_SKILL_DIR}/scripts/checks.cjs',
     'node ${CLAUDE_SKILL_DIR}/../nope/scripts/checks.cjs',
     'node ${CLAUDE_SKILL_DIR}/../../hooks/journal-summary.cjs',
+    'node ${CLAUDE_SKILL_DIR}/../../hooks/journal-sumary.cjs x',
     '`hub-run.sh --stop <worktree>`, папка `scripts/` рядом, сниппет проекта `node {project}/memory/snippets/x.cjs`',
   ].join('\n');
   assert.deepStrictEqual(scriptPathProblems(text, dir), [
     'путь от корня хаба: <хаб>/plugin/skills/checks/scripts/checks.cjs',
     'скрипт мимо ${CLAUDE_SKILL_DIR}: dispatch/scripts/hub-run.sh',
     'нет файла: ${CLAUDE_SKILL_DIR}/../nope/scripts/checks.cjs',
+    'нет файла: ${CLAUDE_SKILL_DIR}/../../hooks/journal-sumary.cjs',
     'скрипт мимо ${CLAUDE_SKILL_DIR}: checks.test.cjs',
   ]);
 });
@@ -95,7 +98,7 @@ function git(args) {
   return execFileSync('git', args, { cwd: SKILLS, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
-// The check is about the split commit itself — the first commit after BEFORE that touches dispatch/SKILL.md — so
+// The check is about the split commit itself — the commit that added dispatch/state.md — so
 // later slices may edit the topic files freely. Lines are compared trimmed: a moved list item may lose its indent.
 // The one rewritten line is the scripts path (`<хаб>/plugin/skills/dispatch/scripts/` → `${CLAUDE_SKILL_DIR}/scripts/`).
 // New lines are allowed only in the table of contents: the «when to read what» block of SKILL.md, the title of a
@@ -104,7 +107,8 @@ test('dispatch: the split loses no line of SKILL.md and adds only table-of-conte
   let split;
   try {
     git(['cat-file', '-e', `${BEFORE}^{commit}`]);
-    split = git(['log', '--reverse', '--format=%H', `${BEFORE}..HEAD`, '--', `:/${DISPATCH}/SKILL.md`]).split('\n')[0];
+    split = git(['log', '--reverse', '--diff-filter=A', '--format=%H', `${BEFORE}..HEAD`, '--', `:/${DISPATCH}/state.md`])
+      .split('\n')[0];
   } catch {
     t.skip(`нет git или коммита ${BEFORE} (мелкий клон)`);
     return;
