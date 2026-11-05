@@ -55,13 +55,14 @@ const NET = {
   exec: /\b(exec|execSync|execFile|execFileSync|execa|execaSync|spawn|spawnSync|system|popen|Popen|run|call|check_call|check_output|getoutput|getstatusoutput)\s*\(/,
 };
 // A line of code without its leading closed comments, or null when the rest is a comment: //, an open /*, a JSDoc
-// line « * …» (not a generator method «*items()» or «* items() {»); a line opening with «*/» is read after it.
+// line « * …» (not a generator method: «*items()», «* items(…) {», «* [Symbol.iterator]() {», «* #f<T>(): T {»); a line
+// opening with «*/» is read after it.
 function codeLine(file, s) {
   if (NET.hash.test(file) && /^\s*#/.test(s)) return null;
   if (!NET.slash.test(file)) return s;
   let t = s.replace(/^\s*\*\//, '');
   for (let m; (m = /^\s*\/\*.*?\*\//.exec(t));) t = t.slice(m[0].length);
-  const jsdoc = /^\s*\*(\s|$)/.test(t) && !/^\s*\*\s*[\w$[\]]+\s*\([^)]*\)\s*\{/.test(t);
+  const jsdoc = /^\s*\*(\s|$)/.test(t) && !/^\s*\*\s*(#?[\w$]+|\[[^\]]*\])\s*(<[^>]*>)?\s*\(.*\)\s*(:[^{]*)?\{/.test(t);
   return /^\s*(\/\/|\/\*)/.test(t) || jsdoc ? null : t;
 }
 function netCall(file, s) {
@@ -172,14 +173,17 @@ function confirm(repo, c, sha, dir) {
     if (!text.includes(String(c.head).slice(0, 7))) return `output: в ${val} нет HEAD ${short(c.head)}`;
     // Red: FAIL/FAILED, TAP «not ok», ✖, «N failed/failing/error(s)», pytest ERROR and «Interrupted»; a line of a
     // passed test (✔, ✓, TAP «ok») is not a summary, whatever its name says. A counter is judged by its number: a zero
-    // one («FAIL: 0», «fail 0 ·», «pass 6 fail 0», «Errors: 0,») is dropped before the check when the zero ends the
-    // counter: «1 failed 0 passed», «FAIL 0 of 2», «FAIL 0 x.test.js», «FAIL 0,5» stay; a non-zero one («ℹ fail 2»,
-    // «# fail 1», «Errors: 1», «Failures: 1.», bun « 1 fail») is red. «N fail» counts only from the line start: in
-    // «pass 6 fail 0 skip 1» the 6 is the neighbour's.
+    // one («FAIL: 0», «failures=0», «fail 0 ·», «pass 6 fail 0», «Errors: 0,») is dropped before the check. A zero after
+    // a space, or after «:»/«=» with a number in front of the word, must end the counter (end of line or · | ; ) ] ,):
+    // «1 failed 0 passed», «2 errors: 0 warnings», «FAIL 0 of 2», «FAIL 0 x.test.js», «FAIL 0,5» stay. A non-zero one is
+    // red: «ℹ fail 2», «# fail 1», «Errors: 1», «Failures: 1.», «3 failures», « 1 fail»; «N fail» followed by a number
+    // of its own («pass 6 fail 0 skip 1») is the neighbour's number, not a count. Known trade-off: «3 errors 0» at the
+    // end reads as «3 · errors 0» (green), the same shape as «warnings 2 errors 0».
     const red = text.split('\n').find((raw) => {
       if (/^\s*(✔|✓|ok\b)/.test(raw)) return false;
-      const l = raw.replace(/\b(fail(ed|ures?|ing)?|errors?)\b(\s*[:=]\s*0+(?![\w.\-/]|,\d)|\s+0+(?=\s*($|[·|;)\]]|,(?!\d))))/gi, '');
-      return /(^|[\s·|=])FAIL(ED|URES)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(failed|failing|errors?)\b|^\s*[1-9]\d*\s+fail(ures?)?\b|^ERROR\b|\bInterrupted:/.test(l) ||
+      const l = raw.replace(/(\d\s*)?\b(fail(ed|ures?|ing)?|errors?)\b(\s*[:=]\s*|\s+)0+(?![\w.\-/]|,\d)/gi, (m, num, _w, _x, sep, off, str) =>
+        (num || !/[:=]/.test(sep)) && !/^\s*($|[·|;)\]]|,(?!\d))/.test(str.slice(off + m.length)) ? m : (num || ''));
+      return /(^|[\s·|=])FAIL(ED|URES)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(failed|failing|errors?)\b|(^|[^\d])[1-9]\d*\s+fail(ures?)?\b(?!\s*[:=]?\s*\d)|^ERROR\b|\bInterrupted:/.test(l) ||
         /\bfail(ed|ures?|ing)?\b\s*[:=]?\s*[1-9]\d*(?!\w|\.\d)/i.test(l) || /\berrors?\b\s*[:=]\s*[1-9]/i.test(l);
     });
     return red ? `output: в ${val} прогон не зелёный — «${red.trim().slice(0, 80)}»` : null;
