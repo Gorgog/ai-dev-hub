@@ -120,8 +120,9 @@ function compileWhen(when) {
 // Lessons are facts, not orders: text that would act (push, send, delete) or points outside (URL) is refused.
 // `git` may carry global options before the subcommand (`git -C <dir> push` is the hub's own form); `rm` flags may
 // come split or long (`rm -r -f`, `--recursive --force`). The alternatives never overlap — `-{1,2}(?!-)` reads a
-// flag one way only — so a long run of flags without a subcommand fails in linear time, not 2^n (review 05.11).
-const GIT = String.raw`\bgit(?:[ \t]+(?:-[cC][ \t]+(?:"[^"\n]*"|'[^'\n]*'|[^\s"']\S*)|-{1,2}(?!-)[\w-]+(?:=\S+)?))*[ \t]+`;
+// flag one way only, an option argument never starts with `-` — so a long run of flags without a subcommand fails
+// in linear time, not 2^n (review 05.11, rounds 2 and 3).
+const GIT = String.raw`\bgit(?:[ \t]+(?:-[cC][ \t]+(?:"[^"\n]*"|'[^'\n]*'|[^\s"'-]\S*)|-{1,2}(?!-)[\w-]+(?:=\S+)?))*[ \t]+`;
 const DANGER = [
   [new RegExp(`${GIT}push\\b`, 'i'), 'git push'],
   [new RegExp(`${GIT}reset\\s+--hard\\b`, 'i'), 'git reset --hard'],
