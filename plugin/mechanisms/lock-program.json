@@ -1,0 +1,14 @@
+{
+  "id": "lock-program",
+  "event": "PreToolUse",
+  "file": "pretool.d/11-lock-program.cjs",
+  "handler": "lock",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "worktree",
+  "state": ["memory/dispatch-grants.json", "memory/dispatch-guard.log"],
+  "reads": ["dispatch-rules.json", "canary.json"],
+  "polygon": ["H02"],
+  "replaces": "lock (10-lock.cjs) по тексту команды: где lock-program включён, 10-lock уступает ему",
+  "review": "2027-02-05"
+}

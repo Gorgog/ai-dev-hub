@@ -74,3 +74,18 @@ test('compare: строки «ловит» и «не шумит», регрес�
   assert.match(r.stdout, /lock\s+ловит 1\/1 → 1\/1\s+не шумит 1\/1 → 0\/1/);
   assert.match(r.stdout, /хуже: 1/);
 });
+
+test('run: незнакомый флаг, лишнее слово или флаг без значения — usage и код 2, без прогона', () => {
+  const d = tmp();
+  // --hub — пустая папка: раннер, принявший флаг за «прогон всего», падает на materialize раньше любого сценария,
+  // модельные (тяжёлое) не стартуют даже на старом коде.
+  const empty = tmp();
+  for (const args of [['--help'], ['-h'], ['--level', 'hook', '--bogus'], ['H02'], ['--level', 'modle'],
+    ['compare', 'a.json'], ['--level', 'hook', '--repeats', 'x'], ['--level', 'hook', '--only']]) {
+    const r = run(['--hub', empty, '--work', d, ...args], { HUB_DATA: path.join(d, 'none') });
+    assert.strictEqual(r.status, 2, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /usage: node polygon\/run\.cjs/, args.join(' '));
+    assert.doesNotMatch(r.stderr, /сценариев \d+/, `${args.join(' ')}: прогон не начался`);
+  }
+  assert.deepStrictEqual(fs.readdirSync(d), [], 'папка работы пуста — прогона не было');
+});

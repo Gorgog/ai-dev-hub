@@ -88,4 +88,6 @@ if (require.main === module) {
   process.exit(0);
 }
 
-module.exports = { decide, locate };
+function programLockActive() { return false; }
+
+module.exports = { decide, locate, programLockActive };
