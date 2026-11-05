@@ -5,9 +5,9 @@
 module.exports = {
   id: 'memory-bash-write',
   run(ev, ctx = {}) {
-    // The library is loaded only for a command that names lessons/ or decisions/: a cold require costs ≈ 4 ms a call.
+    // The library is loaded only for a command that names lessons/, decisions/ or memory: a cold require costs ≈ 4 ms a call.
     const cmd = ev.tool_name === 'Bash' && ev.tool_input && ev.tool_input.command;
-    if (typeof cmd !== 'string' || !/lessons|decisions/.test(cmd)) return null;
+    if (typeof cmd !== 'string' || !/lessons|decisions|memory/.test(cmd)) return null;
     return require('../memory-hooks.cjs').bashWrite(ev, ctx);
   },
 };

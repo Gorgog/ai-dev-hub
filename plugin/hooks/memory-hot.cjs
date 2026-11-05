@@ -9,6 +9,16 @@ const path = require('path');
 const CAP = 4000; // characters of a field the triggers see: cmd/body/path from the head, out from the tail
 const WHEN_FIELDS = ['tool', 'cmd', 'path', 'body', 'out'];
 
+// The guard against a `when` that backtracks catastrophically (review 05.11: `(\w|\d)+@` on a sha, `(.|\s)*`,
+// `\s*\s*\s*`): after 10 000 backtracks V8 reruns the regex on its linear engine. The linear engine takes no `i` flag,
+// so the triggers run case-folded by hand: the pattern's literal letters and the field both through toLowerCase. It
+// cannot run backreferences and lookaround either — such a source is judged statically (whenProblem) instead.
+try {
+  const v8 = require('v8');
+  v8.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
+  v8.setFlagsFromString('--regexp-backtracks-before-fallback=10000');
+} catch { /* an older node: the static check below still holds */ }
+
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
 // A path that may not exist yet (a lesson being written): realpath of its nearest existing folder + the rest.
 function realish(p) {
@@ -69,6 +79,18 @@ function nestedQuantifier(src) {
   return false;
 }
 
+// Why a `when` source is not used by the hot path, or null. Without backreferences and lookaround V8's fallback to the
+// linear engine bounds any backtracking; with them it cannot, so the forms that blow up are refused — a quantified
+// group holding a quantifier or an alternation, three quantified atoms in a row.
+const LINEAR_UNSUPPORTED = /\\[1-9]|\\k<|\(\?<?[=!]/;
+const ADJACENT = /(?:(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\\()[\]|^$])(?:[*+]|\{\d+,\d*\})\??){3,}/;
+function whenProblem(src) {
+  try { new RegExp(src, 'i'); } catch (e) { return `регэксп не компилируется — ${e.message}`; }
+  if (!LINEAR_UNSUPPORTED.test(src)) return null;
+  const risky = nestedQuantifier(src) || /\((?:\?:)?[^()]*\|[^()]*\)(?:[*+]|\{\d+,)/.test(src) || ADJACENT.test(src);
+  return risky ? `«${src.slice(0, 60)}»: обратная ссылка или просмотр вместе с повтором — откат без предела, хук его не берёт` : null;
+}
+
 // One `when` item → {rx: {field: RegExp}} or {error}: the check the write hook names (syntax, nested repetition).
 function compileItem(w) {
   if (!w || typeof w !== 'object' || Array.isArray(w)) return { error: 'не блок полей' };
@@ -77,8 +99,9 @@ function compileItem(w) {
   if (!keys.length) return { error: 'пустой элемент' };
   for (const k of keys) {
     if (!WHEN_FIELDS.includes(k) || typeof w[k] !== 'string') return { error: `поле ${k}` };
-    if (nestedQuantifier(w[k])) return { error: `${k}: вложенный повтор «${w[k].slice(0, 60)}» — экспоненциальный откат на длинном вводе` };
-    try { out[k] = new RegExp(w[k], 'i'); } catch (e) { return { error: `${k}: ${e.message}` }; }
+    const why = whenProblem(w[k]);
+    if (why) return { error: `${k}: ${why}` };
+    out[k] = new RegExp(w[k], 'i');
   }
   return { rx: out };
 }
@@ -89,6 +112,7 @@ function compileItem(w) {
 // groups and classes break a run, a character made optional or repeated by `?`, `*`, `{` leaves it.
 function literalOf(src) {
   let best = '', cur = '', depth = 0, inClass = false;
+  const quant = (j) => src[j] === '{' && /^\{\d+(?:,\d*)?\}/.test(src.slice(j, j + 24));
   const flush = () => { if (cur.length > best.length) best = cur; cur = ''; };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
@@ -102,23 +126,25 @@ function literalOf(src) {
       const n = src[i + 1] || '';
       i++;
       if (/[A-Za-z0-9]/.test(n)) {
+        // Only a well-formed escape is stepped over; an incomplete \x, \u, \c is a plain letter without the u flag —
+        // the run just breaks there, and whatever follows (a top-level `|` too) is read as usual.
         flush();
-        if (n === 'x') i += 2;
-        else if (n === 'u') i = src[i + 1] === '{' ? Math.max(i, src.indexOf('}', i)) : i + 4;
-        else if (n === 'c') i += 1;
-        else if ((n === 'p' || n === 'P' || n === 'k') && /[{<]/.test(src[i + 1] || '')) i = Math.max(i, src.indexOf(src[i + 1] === '{' ? '}' : '>', i));
+        if (n === 'x' && /^[0-9a-fA-F]{2}/.test(src.slice(i + 1, i + 3))) i += 2;
+        else if (n === 'u' && /^[0-9a-fA-F]{4}/.test(src.slice(i + 1, i + 5))) i += 4;
+        else if (n === 'c' && /^[A-Za-z]/.test(src[i + 1] || '')) i += 1;
+        else if (n === 'k' && src[i + 1] === '<' && src.indexOf('>', i) > i) i = src.indexOf('>', i);
         continue;
       }
       cur += n;
-    } else if (c === '?' || c === '*' || c === '{') {
+    } else if (c === '?' || c === '*' || quant(i)) {
       cur = cur.slice(0, -1);
       flush();
-      if (c === '{') { const e = src.indexOf('}', i); if (e > i) i = e; }
+      if (c === '{') i = src.indexOf('}', i);
       continue;
     } else if (c === '+' || c === '^' || c === '$' || c === '.') { flush(); continue; }
-    else cur += c;
+    else cur += c; // a `{` that is no quantifier is a literal brace
     const nx = src[i + 1];
-    if (nx === '?' || nx === '*' || nx === '{') { cur = cur.slice(0, -1); flush(); }
+    if (nx === '?' || nx === '*' || quant(i + 1)) { cur = cur.slice(0, -1); flush(); }
   }
   flush();
   return best.length >= 2 ? best.toLowerCase() : '';
@@ -127,16 +153,35 @@ function literalOf(src) {
 // What the hot path knows of a regex source, computed on first use and shared by every item with that source: the
 // literal, whether it is safe (no nested repetition — such a condition never matches) and the compiled regex (only
 // past the literal; a source that does not compile never matches).
+// The source with its literal letters through toLowerCase — escapes as written (\S stays \S), a well-formed \xHH or
+// \uHHHH re-escaped as its lower-case letter. Run without `i` on a lower-cased field it matches what the `i` regex
+// matched, up to the few letters whose case folding differs from toLowerCase (σ/ς, µ/μ).
+function lowerPattern(src) {
+  let out = '';
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c !== '\\') { out += c.toLowerCase(); continue; }
+    const n = src[i + 1] || '';
+    const hex = n === 'x' ? src.slice(i + 2, i + 4) : n === 'u' ? src.slice(i + 2, i + 6) : '';
+    if (hex && /^[0-9a-fA-F]+$/.test(hex) && hex.length === (n === 'x' ? 2 : 4)) {
+      const ch = String.fromCharCode(parseInt(hex, 16)).toLowerCase();
+      out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      i += 1 + hex.length;
+    } else { out += c + n; i++; }
+  }
+  return out;
+}
+
 const srcCache = new Map();
 function condOf(src) {
   let c = srcCache.get(src);
-  if (!c) { c = { lit: literalOf(src), re: undefined }; srcCache.set(src, c); }
+  if (!c) { const pat = lowerPattern(src); c = { pat, lit: literalOf(pat), re: undefined }; srcCache.set(src, c); }
   return c;
 }
 function rxOf(src, c = condOf(src)) {
   if (c.re === undefined) {
     c.re = null;
-    if (!nestedQuantifier(src)) { try { c.re = new RegExp(src, 'i'); } catch { c.re = null; } }
+    if (!whenProblem(src)) { try { c.re = new RegExp(c.pat); } catch { c.re = null; } }
   }
   return c.re;
 }
@@ -196,7 +241,7 @@ function match(triggers, f) {
     const c = condOf(src);
     if (c.lit && !lower(k).includes(c.lit)) return false;
     const re = rxOf(src, c);
-    return Boolean(re) && re.test(f[k]);
+    return Boolean(re) && re.test(lower(k));
   };
   // An item fires when every field it names holds; `tool` is tried first (few sources, most items stop there).
   const fires = (w) => {
@@ -259,5 +304,5 @@ function repeatBefore(ev, ctx) {
       + `${framed(lessonText(t))}\nЕсли урок здесь не к месту — повтори вызов как есть: второй раз он пройдёт.` };
 }
 
-module.exports = { memoryOf, memoryRel, realish, real, nestedQuantifier, compileItem, literalOf, loadTriggers, fieldsOf, match,
+module.exports = { memoryOf, memoryRel, realish, real, nestedQuantifier, whenProblem, lowerPattern, compileItem, literalOf, loadTriggers, fieldsOf, match,
   lessonsAfter, repeatBefore, CAP, WHEN_FIELDS };

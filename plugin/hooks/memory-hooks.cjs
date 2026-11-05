@@ -46,40 +46,136 @@ function checkWrite(ev, ctx) {
 
 // ---------- Bash into the memory ----------
 
-const WRITE_ALL = new Set(['tee', 'touch', 'truncate', 'rm', 'unlink', 'shred', 'mv']);
+const DESTROY = new Set(['rm', 'unlink', 'shred', 'rmdir']);
+const WRITE_ALL = new Set(['tee', 'touch', 'truncate']);
 const WRITE_TARGET = new Set(['cp', 'install', 'ln', 'rsync']);
 const INTERP = new Set(['node', 'nodejs', 'python', 'python3', 'perl', 'ruby', 'deno', 'bun', 'php']);
 const CODE_FLAGS = /^-(?:e|c|p|E|r|pe|ne|pi|e[a-z]*)$|^--eval$|^--print$/;
-const WRITE_API = /\b(?:writeFile|appendFile|createWriteStream|copyFile|rename|unlink|rmSync|rmdir|write_text|write_bytes|shutil\.(?:copy\w*|move)|os\.(?:remove|rename|replace|unlink))|\bopen\s*\([^)]*,\s*['"][^'"]*[wax+]/;
+// git subcommands that write the work tree: with a path of the memory, or run inside the memory's own git.
+const GIT_WRITES = new Set(['checkout', 'restore', 'rm', 'mv', 'apply', 'reset', 'clean', 'stash', 'merge', 'pull', 'cherry-pick',
+  'revert', 'am', 'switch', 'read-tree', 'checkout-index']);
+// In-place flags: -i, -pi, -i.bak — not -Mstrict, -Ilib, -e (perl), -E (sed).
+const IN_PLACE = (x) => /^-(?![MmIeE])[a-zA-Z]*i/.test(x) || x.startsWith('--in-place');
 const REDIRECT = /(?:^|[^<>&\d])(?:\d+|&)?>{1,2}\|?\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|()<>"']+))/g;
+const ASSIGN = /(?:^|[\s;&|(])([A-Za-z_]\w*)=(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|()<>"']+))/g;
+const globRe = (seg) => new RegExp(`^${seg.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
 
-// The first path of the memory's lessons/ or decisions/ the command writes, or null. Writes: a redirection, tee,
-// touch/truncate/rm/mv/shred, the target of cp/install/ln/rsync, sed -i / perl -i, dd of=, and inline code of an
-// interpreter (-e/-c, or a heredoc fed to it) that names such a path and calls a write API. Reads pass.
+// Arguments of a call in code text, from the index of its `(`: split on top-level commas, strings kept whole.
+function callArgs(code, open) {
+  const args = [];
+  let depth = 0, cur = '', q = null;
+  for (let i = open + 1; i < code.length && i < open + 2000; i++) {
+    const c = code[i];
+    if (q) { cur += c; if (c === '\\') { cur += code[++i] || ''; } else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; cur += c; continue; }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    if (c === ')' || c === ']' || c === '}') { if (depth === 0) { args.push(cur.trim()); return args; } depth--; }
+    if (c === ',' && depth === 0) { args.push(cur.trim()); cur = ''; continue; }
+    cur += c;
+  }
+  return args;
+}
+
+// A path an expression of inline code names: a string literal, a variable assigned one, or path.join / os.path.join of
+// those; null — not known (then not judged).
+function pathOf(expr, vars, code, depth = 0) {
+  const e = String(expr || '').trim();
+  const lit = /^(['"`])([^'"`]*)\1$/.exec(e);
+  if (lit) return lit[2];
+  if (/^[A-Za-z_]\w*$/.test(e)) return vars.has(e) ? vars.get(e) : null;
+  const j = /^(?:require\(\s*['"]path['"]\s*\)\.|path\.|os\.path\.)join\s*\(/.exec(e);
+  if (j && depth < 3) {
+    const parts = callArgs(e, j[0].length - 1).map((x) => pathOf(x, vars, code, depth + 1));
+    return parts.every((x) => typeof x === 'string') ? path.join(...parts) : null;
+  }
+  return null;
+}
+
+// Paths inline code (node -e, python -c, a heredoc fed to an interpreter) writes: the first argument of a write call
+// (the destination of copy/move, both ends of rename), resolved through literals, assigned variables and path.join.
+// A path the code only reads is not a write: a copy out of the memory passes.
+function codeWrites(code) {
+  const vars = new Map();
+  for (const m of code.matchAll(/\b([A-Za-z_]\w*)\s*=\s*(['"`])([^'"`\n]*)\2/g)) vars.set(m[1], m[3]);
+  const out = [];
+  const calls = [
+    [/\b(?:writeFile|appendFile|createWriteStream|truncate|unlink|rmSync|rmdir|rm)(?:Sync)?\s*\(/g, [0]],
+    [/\b(?:copyFile|cp)(?:Sync)?\s*\(/g, [1]],
+    [/\brename(?:Sync)?\s*\(/g, [0, 1]],
+    [/\bshutil\.(?:copy\w*)\s*\(/g, [1]],
+    [/\bshutil\.move\s*\(/g, [0, 1]],
+    [/\bos\.(?:remove|unlink|rmdir)\s*\(/g, [0]],
+    [/\bos\.(?:rename|replace)\s*\(/g, [0, 1]],
+  ];
+  for (const [re, which] of calls) {
+    for (const m of code.matchAll(re)) {
+      const args = callArgs(code, m.index + m[0].length - 1);
+      for (const k of which) { const p = pathOf(args[k], vars, code); if (p) out.push(p); }
+    }
+  }
+  for (const m of code.matchAll(/\bopen\s*\(/g)) {
+    const args = callArgs(code, m.index + m[0].length - 1);
+    const mode = args.slice(1).find((x) => /^(?:mode\s*=\s*)?['"][^'"]*['"]$/.test(x));
+    if (mode && /[wax+]/.test(mode.replace(/^mode\s*=\s*/, ''))) { const p = pathOf(args[0], vars, code); if (p) out.push(p); }
+  }
+  for (const m of code.matchAll(/\bPath\s*\(/g)) {
+    const args = callArgs(code, m.index + m[0].length - 1);
+    const after = code.slice(m.index + m[0].length - 1).replace(/^\((?:[^()]|\([^()]*\))*\)/, '');
+    if (/^\s*\.\s*(?:write_text|write_bytes|unlink|touch|rename|replace|mkdir)\b/.test(after)) { const p = pathOf(args[0], vars, code); if (p) out.push(p); }
+  }
+  return out;
+}
+
+// The first path of the memory's lessons/ or decisions/ the command writes or destroys, or null. Writes: a redirection
+// (variables assigned in the command expanded), tee/touch/truncate, rm/rmdir/shred/unlink (also of a folder that holds
+// the memory), mv (both ends), find -delete / -exec, the target of cp/install/ln/rsync (the memory itself when a
+// lessons/ or decisions/ folder is copied in), sed -i / perl -i / awk -i inplace, patch, dd of=, curl -o / wget -O,
+// tar -x -C, git commands that write the work tree, inline code of an interpreter. Globs in the first segment under
+// the memory are matched against lessons/ and decisions/. Reads pass.
 function bashWritesMemory(cmd, cwd, mem) {
-  if (typeof cmd !== 'string' || !/lessons|decisions/.test(cmd)) return null;
+  if (typeof cmd !== 'string' || !/lessons|decisions|memory/.test(cmd)) return null;
   const { executions } = require('../skills/dispatch/scripts/shell.cjs');
   let execs = [];
   try { execs = executions(cmd, { cwd: cwd || '/' }).execs || []; } catch { execs = []; }
-  const bases = [cwd || '/'];
+  const base0 = cwd || '/';
+  const bases = [base0];
   for (const e of execs) {
     const n = path.basename(String(e.argv[0] || ''));
-    if ((n === 'cd' || n === 'pushd') && e.argv[1] && !e.argv[1].startsWith('-')) bases.push(path.resolve(cwd || '/', e.argv[1]));
+    if ((n === 'cd' || n === 'pushd') && e.argv[1] && !e.argv[1].startsWith('-')) bases.push(path.resolve(base0, e.argv[1]));
   }
+  const vars = new Map();
+  for (const m of cmd.matchAll(ASSIGN)) vars.set(m[1], m[2] ?? m[3] ?? m[4]);
+  const expand = (tok) => String(tok).replace(/\$\{(\w+)\}|\$(\w+)/g, (all, a, b) => (vars.has(a || b) ? vars.get(a || b) : all));
   const memReal = real(mem);
-  const hit = (tok) => {
-    if (typeof tok !== 'string' || !tok || tok.startsWith('-') || tok.includes('$')) return null;
-    for (const b of bases) {
-      const rel = path.relative(memReal, realish(path.resolve(b, tok)));
-      if (!rel.startsWith('..') && !path.isAbsolute(rel) && MEMORY_DIRS.test(rel.split(path.sep).join('/'))) return tok;
+  // kind: 'write' — lessons/ or decisions/ (or below); 'into' — also the memory folder itself; 'destroy' — also any
+  // folder that holds the memory.
+  const hit = (tok, kind = 'write', bs = bases) => {
+    if (typeof tok !== 'string' || !tok) return null;
+    const t = expand(tok);
+    if (t.startsWith('-') || t.includes('$')) return null;
+    for (const b of bs) {
+      const abs = realish(path.resolve(b, t));
+      const rel = path.relative(memReal, abs).split(path.sep).join('/');
+      if (kind === 'destroy' && !path.relative(abs, memReal).startsWith('..')) return tok;
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      if (rel === '') { if (kind !== 'write') return tok; continue; }
+      const seg = rel.split('/')[0];
+      if (/^(lessons|decisions)$/.test(seg) || (/[*?[]/.test(seg) && ['lessons', 'decisions'].some((d) => globRe(seg).test(d)))) return tok;
     }
     return null;
   };
-  const codeHit = (code) => {
-    if (!WRITE_API.test(code)) return null;
-    for (const m of code.matchAll(/(['"`])((?:(?!\1)[^\n])*?(?:lessons|decisions)(?:(?!\1)[^\n])*?)\1/g)) { if (hit(m[2])) return m[2]; }
+  const codeHit = (code, bs = bases) => codeWrites(code).map((p) => hit(p, 'write', bs)).find(Boolean) || null;
+  const opt = (args, names) => {
+    for (let i = 0; i < args.length; i++) {
+      for (const nm of names) {
+        if (args[i] === nm) return args[i + 1];
+        if (nm.startsWith('--') && args[i].startsWith(`${nm}=`)) return args[i].slice(nm.length + 1);
+        if (!nm.startsWith('--') && args[i].startsWith(nm) && args[i].length > nm.length && nm.length === 2) return args[i].slice(2);
+      }
+    }
     return null;
   };
+
   for (const m of cmd.matchAll(REDIRECT)) { const t = hit(m[1] ?? m[2] ?? m[3]); if (t) return t; }
   for (const e of execs) {
     const a = e.argv.map(String);
@@ -87,15 +183,39 @@ function bashWritesMemory(cmd, cwd, mem) {
     const args = a.slice(1);
     const plain = args.filter((x) => !x.startsWith('-'));
     let t = null;
-    if (WRITE_ALL.has(n)) t = plain.map(hit).find(Boolean);
+    if (DESTROY.has(n)) t = plain.map((x) => hit(x, 'destroy')).find(Boolean);
+    else if (WRITE_ALL.has(n)) t = plain.map((x) => hit(x)).find(Boolean);
+    else if (n === 'mv') t = plain.slice(0, -1).map((x) => hit(x, 'destroy')).find(Boolean) || hit(plain[plain.length - 1], 'into');
     else if (WRITE_TARGET.has(n)) {
-      const ti = args.findIndex((x) => x === '-t' || x === '--target-directory');
-      const eq = args.find((x) => x.startsWith('--target-directory='));
-      t = hit(ti >= 0 ? args[ti + 1] : eq ? eq.slice(eq.indexOf('=') + 1) : plain[plain.length - 1]);
-    } else if ((n === 'sed' || n === 'perl') && args.some((x) => /^-[a-zA-Z]*i/.test(x) || x.startsWith('--in-place'))) t = plain.map(hit).find(Boolean);
+      const target = opt(args, ['-t', '--target-directory']) ?? plain[plain.length - 1];
+      const sources = opt(args, ['-t', '--target-directory']) != null ? plain.filter((x) => x !== target) : plain.slice(0, -1);
+      t = hit(target) || (sources.some((x) => /^(lessons|decisions)$/.test(path.basename(expand(x).replace(/\/+$/, '')))) ? hit(target, 'into') : null);
+    } else if (n === 'find') {
+      if (args.some((x) => x === '-delete' || /^-(exec|execdir|ok|okdir)$/.test(x))) {
+        const starts = [];
+        for (const x of args) { if (x.startsWith('-') || x === '(' || x === '!') break; starts.push(x); }
+        t = starts.map((x) => hit(x, 'destroy')).find(Boolean);
+      }
+    } else if ((n === 'sed' || n === 'perl') && args.some(IN_PLACE)) t = plain.map((x) => hit(x)).find(Boolean);
+    else if ((n === 'awk' || n === 'gawk') && (args.some((x, i) => x === '-i' && args[i + 1] === 'inplace') || args.includes('--inplace'))) t = plain.map((x) => hit(x)).find(Boolean);
+    else if (n === 'patch') t = hit(opt(args, ['-o', '--output'])) || hit(plain[0]);
     else if (n === 'dd') t = args.filter((x) => x.startsWith('of=')).map((x) => hit(x.slice(3))).find(Boolean);
-    else if (INTERP.has(n)) {
-      for (let i = 0; i < args.length && !t; i++) if (CODE_FLAGS.test(args[i]) && typeof args[i + 1] === 'string') t = codeHit(args[i + 1]);
+    else if (n === 'curl') t = hit(opt(args, ['-o', '--output']));
+    else if (n === 'wget') t = hit(opt(args, ['-O', '--output-document'])) || hit(opt(args, ['-P', '--directory-prefix']), 'into');
+    else if (n === 'tar' && (args.some((x) => /^-?[a-zA-Z]*x[a-zA-Z]*$/.test(x) && !x.startsWith('--')) || args.includes('--extract'))) t = hit(opt(args, ['-C', '--directory']), 'into');
+    else if (n === 'git') {
+      let i = 0, dir = base0;
+      while (i < args.length && args[i].startsWith('-')) {
+        if (args[i] === '-C' && args[i + 1]) { dir = path.resolve(dir, expand(args[i + 1])); i += 2; } else if (args[i] === '-c') i += 2; else i++;
+      }
+      if (GIT_WRITES.has(args[i])) {
+        const paths = args.slice(i + 1).filter((x) => !x.startsWith('-'));
+        t = paths.map((x) => hit(x, 'write', [dir])).find(Boolean) || null;
+        const inside = path.relative(memReal, realish(dir));
+        if (!t && !inside.startsWith('..') && !path.isAbsolute(inside)) t = `git -C ${path.relative(base0, dir) || '.'} ${args[i]}`;
+      }
+    } else if (INTERP.has(n)) {
+      for (let k = 0; k < args.length && !t; k++) if (CODE_FLAGS.test(args[k]) && typeof args[k + 1] === 'string') t = codeHit(args[k + 1]);
     }
     if (t) return t;
   }
@@ -191,6 +311,11 @@ function preflight(ev, ctx) {
   const mem = memoryOf(ctx);
   if (!mem) return null;
   const { problems } = require('../lib/memory/store.cjs').check(mem);
+  // A `when` the hot path will not use (backreference or lookaround with unbounded repetition): the file is valid,
+  // the lesson is silently never delivered by that trigger — named here, for memory written past the write check.
+  for (const t of hot.loadTriggers(mem)) {
+    t.when.forEach((w, i) => { const c = compileItem(w); if (c.error) problems.push(`lessons/${t.id}.md: when[${i}].${c.error}`); });
+  }
   if (!problems.length) return null;
   const shown = problems.slice(0, 20).map((p) => `- ${p}`);
   if (problems.length > 20) shown.push(`- … ещё ${problems.length - 20} — recall check`);
