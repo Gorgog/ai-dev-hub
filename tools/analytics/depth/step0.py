@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import depth  # noqa: E402
-from calls import SHA_RE, epoch_s, is_report, journal_order, read_jsonl  # noqa: E402
+from calls import REPORT_RE, SHA_RE, epoch_s, is_report, journal_order, read_jsonl  # noqa: E402
 
 THRESHOLD = ('acceptance.md §4, шаг 0 [П]: наклон нарушений на возможность по глубине эпохи значим (перестановочный '
              'тест по сессиям, односторонний p ≤ 0,1) и поздний бакет ≥ 1,3× раннего; `cd` не входит')
@@ -74,7 +74,9 @@ def matches(case, name, inp, t):
 
 
 def sha_of(txt):
-    m = SHA_RE.search(txt or '')
+    """The sha of the report: the first one after its «Готово к …:» line starts (URLs and dates before it are hex too)."""
+    r = REPORT_RE.search(txt or '')
+    m = SHA_RE.search(txt, r.end()) if r else None
     return m.group(0) if m else ''
 
 
