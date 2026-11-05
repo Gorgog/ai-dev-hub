@@ -11,22 +11,18 @@ const { execFileSync } = require('child_process');
 
 const run = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const git = (cwd, ...a) => run(cwd, ...a).trim();
-// A report is a line that starts with the phrase. Before it: a list marker (`-`, `1.`), bold, a heading, an emoji; a
-// quote («> …») is a relay of someone else's report. After it: a sign (`:`, `,`, `—`, `(`), the end, an emoji, or
-// a word in Latin (HEAD, a key, a sha). A lowercase Russian word right after it goes on as a sentence — a status or a
-// plan («Готово к пушу после ревью»). Everything else is a report — a sentence after a sign («Готово к пушу, но
-// после ревью.») and a question («Готово к пушу?») included: an accepted false block, the second Stop
-// (stop_hook_active) passes it; a missed report costs more (decision 05.11).
+// A report is any line that starts with the phrase (decision 05.11: no exceptions — «Готово к пушу. Пушить?» or
+// «Готово к пушу после всех проверок» would pass the gate). Before it: a list marker (`-`, `1.`), bold, a heading,
+// an emoji; a quote («> …») is a relay of someone else's report. After it — anything but a letter or a digit.
+// A question («Готово к пушу?») and a status («Готово к пушу после ревью») get a cheap false block: the second Stop
+// (stop_hook_active) passes it, a missed report costs more.
 const START = /^[ \t*#_-]*(?:\d+[.)][ \t]+)?(?:\p{Extended_Pictographic}\uFE0F?[ \t]*)?[*_]*готово к (пушу|мержу)(?![\p{L}\p{N}])/iu;
 
 // 'push' | 'merge' | null.
 function isReport(text) {
   for (const line of String(text || '').split(/\r?\n/)) {
     const m = line.match(START);
-    if (!m) continue;
-    const rest = line.slice(m[0].length).replace(/^[*_ \t]+/, '');
-    if (/^[а-яё]/.test(rest)) continue;
-    return /пушу/i.test(m[1]) ? 'push' : 'merge';
+    if (m) return /пушу/i.test(m[1]) ? 'push' : 'merge';
   }
   return null;
 }
