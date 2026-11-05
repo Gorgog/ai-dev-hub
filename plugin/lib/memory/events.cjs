@@ -51,33 +51,70 @@ const sqlite = require('./sqlite.cjs');
 const STUCK_MS = 5000; // the lock was not taken: this process frames its next events at once for a while (review 1)
 let stuckUntil = 0;
 
+// Read-only lock file (slice 32): SQLite opens it read-only without a word, and BEGIN EXCLUSIVE then excludes nobody
+// (two connections both «hold» it) — the protection of the page would silently be gone. So W_OK is checked first; a
+// lock that cannot be written or opened is not taken (the \n frame, as without node:sqlite), and the hooks' journal
+// gets one error line per lock file and process. A busy lock past WAIT_MS is a stuck holder — framed, not journaled.
+const warned = new Set();
+function warn(file, why) {
+  if (warned.has(file)) return;
+  warned.add(file);
+  try {
+    require('../../hooks/lib/journal.cjs').journal({ type: 'error', module: 'lib/memory/events.cjs', policy: 'open',
+      error: `замок событий ${file} не взят: ${why} — события пишутся рамкой \\n без замка (защита страницы H22 снята)` });
+  } catch { /* never break the writer */ }
+}
+
+// The events lock of memDir: an open connection inside BEGIN EXCLUSIVE, or null — no node:sqlite, the stuck spell of
+// this process, a busy lock past WAIT_MS, a lock file that cannot be written. Null means «write framed».
+function takeLock(memDir) {
+  const D = sqlite();
+  if (!D || Date.now() < stuckUntil) return null;
+  const file = path.join(memDir, LOCK);
+  try { fs.accessSync(file, fs.constants.W_OK); } catch (e) {
+    if (e.code !== 'ENOENT') { stuckUntil = Date.now() + STUCK_MS; warn(file, `файл только для чтения (${e.code})`); return null; }
+  }
+  let db;
+  try {
+    db = new D(file, { timeout: 0 });
+    for (const t0 = Date.now(); ;) {
+      try { db.exec('BEGIN EXCLUSIVE'); return db; } catch (e) {
+        const busy = e && (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(String(e.message))); // SQLITE_BUSY, _LOCKED
+        if (!busy) throw e;
+        if (Date.now() - t0 >= WAIT_MS) { e.stuck = true; throw e; }
+        Atomics.wait(nap, 0, 0, 0.5 + Math.random());
+      }
+    }
+  } catch (e) {
+    stuckUntil = Date.now() + STUCK_MS;
+    try { if (db) db.close(); } catch { /* closed */ }
+    if (!e.stuck) warn(file, `не открывается (${e.code || e.errcode || e.message})`);
+    return null;
+  }
+}
+
+// fn(locked) under the events lock of memDir — appendEvent, and memory-gc fold while it rewrites a month (slice 32).
+// locked=false: the lock was not taken (see takeLock), fn writes framed. COMMIT failing after fn is not an error:
+// close() drops the lock, and the work is done (no repeated event).
+function withEventsLock(memDir, fn) {
+  const db = takeLock(memDir);
+  if (!db) return fn(false);
+  try {
+    const out = fn(true);
+    try { db.exec('COMMIT'); } catch { /* close() drops the lock */ }
+    return out;
+  } finally { db.close(); }
+}
+
 function appendEvent(memDir, ev) {
   const { line, month } = eventLine(ev);
   const dir = path.join(memDir, 'events');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${month}.jsonl`);
-  const D = sqlite();
   // A holder that is stuck (stopped, hung) must not hold a hook: past WAIT_MS — the \n frame, as without node:sqlite,
   // and so for STUCK_MS more in this process (a Stop mirrors many events: one wait, not one per event).
-  const frame = () => { fs.appendFileSync(file, `\n${line}`); };
-  if (!D || Date.now() < stuckUntil) { frame(); return line; }
-  let db;
-  try {
-    db = new D(path.join(memDir, LOCK), { timeout: 0 });
-    for (const t0 = Date.now(); ;) {
-      try { db.exec('BEGIN EXCLUSIVE'); break; } catch (e) {
-        const busy = e && (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(String(e.message))); // SQLITE_BUSY, _LOCKED
-        if (!busy || Date.now() - t0 >= WAIT_MS) throw e;
-        Atomics.wait(nap, 0, 0, 0.5 + Math.random());
-      }
-    }
-  } catch {
-    stuckUntil = Date.now() + STUCK_MS;
-    try { if (db) db.close(); } catch { /* closed */ }
-    frame();
-    return line;
-  }
-  try {
+  withEventsLock(memDir, (locked) => {
+    if (!locked) { fs.appendFileSync(file, `\n${line}`); return; }
     const fd = fs.openSync(file, 'a+');
     try {
       // Always a leading \n, no tail read (review 1): a framed writer works without the lock, and its fragment may land
@@ -86,8 +123,7 @@ function appendEvent(memDir, ev) {
       const room = PAGE - (at % PAGE);
       fs.writeSync(fd, `\n${Buffer.byteLength(line) > room ? '\n'.repeat(room) : ''}${line}`);
     } finally { fs.closeSync(fd); }
-    try { db.exec('COMMIT'); } catch { /* the line is written; close() drops the lock — no error, no repeated event */ }
-  } finally { db.close(); }
+  });
   return line;
 }
 
@@ -125,4 +161,4 @@ function foldEvents(events) {
   return out;
 }
 
-module.exports = { LOCK, appendEvent, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };
+module.exports = { LOCK, appendEvent, withEventsLock, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };

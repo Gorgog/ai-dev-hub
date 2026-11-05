@@ -1,10 +1,10 @@
 // Event journal of the delivery (slice 12): every delivery — shown, dropped by a limit, a deny / block / ask — and
 // every outcome of a «prevented» window — repeat, prevented, expired — is one JSON line in
 // <data>/events/<YYYY-MM>.jsonl, the month of its `at`. All lines of one hook call go in one write to a file opened
-// for append (O_APPEND; P15: 7 processes with kill -9 tore none at this size); a line stays small, fields are cut; a
-// torn tail is closed with a newline in the same write.
+// for append (O_APPEND; P15: 7 processes with kill -9 tore none at this size); a line stays small, fields are cut;
+// every write starts with a newline (slice 32), so empty lines are normal.
 // The format is shared with the memory events (slice 14): {at, kind, lesson | rule, session_id, agent_id,
-// tool_use_id, epoch, model, mode, ...}. The reader skips a torn line and counts it.
+// tool_use_id, epoch, model, mode, ...}. The reader skips empty lines and skips a torn line and counts it.
 // usage: node events.cjs stats [YYYY-MM]  — the «prevented» counter from the journal of the hooks' data folder
 'use strict';
 const fs = require('fs');
@@ -35,15 +35,12 @@ function append(list, dir = dataDir()) {
   const d = path.join(dir, 'events');
   fs.mkdirSync(d, { recursive: true });
   for (const [m, text] of byMonth) {
-    // A tail without a newline (a write cut by a kill) is closed first, in the same write: else the next line would
-    // glue to it and be lost with it (the format of 14). Two writers closing it at once leave an empty line — skipped.
-    const fd = fs.openSync(path.join(d, `${m}.jsonl`), 'a+');
-    try {
-      const size = fs.fstatSync(fd).size;
-      const last = Buffer.alloc(1);
-      const open = size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a;
-      fs.writeSync(fd, open ? `\n${text}` : text);
-    } finally { fs.closeSync(fd); }
+    // Always a leading newline, no tail read (slice 32, the race of H22): a kill tears a write between 4 KB pages, and
+    // a fragment of a killed writer could land between «read the last byte» and this write — the first line of this
+    // call then glued onto it and was lost with it. A write that starts on its own line never glues; the killed
+    // writer's own fragment stays a torn line of its own (skipped, counted), empty lines are skipped.
+    const fd = fs.openSync(path.join(d, `${m}.jsonl`), 'a');
+    try { fs.writeSync(fd, `\n${text}`); } finally { fs.closeSync(fd); }
   }
 }
 

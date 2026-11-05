@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('../../../lib/memory/store.cjs');
-const { appendEvent, readEvents, eventFiles } = require('../../../lib/memory/events.cjs');
+const { appendEvent, readEvents, eventFiles, withEventsLock } = require('../../../lib/memory/events.cjs');
 const { parseLesson } = require('../../../lib/memory/format.cjs');
 
 const USAGE = 'команды: dups · retire [--days N] · review --model <id> · review --list · reviewed <id> [--note <текст>] · '
@@ -200,6 +200,42 @@ const writeVia = (file, data) => {
   fs.renameSync(tmp, file);
 };
 
+function foldOne(dir, f, month, a, out, locked) {
+  const file = path.join(dir, f);
+  const fd = fs.openSync(file, 'r');
+  try {
+    const src = fs.readFileSync(fd);
+    const r = foldMonth(src.toString('utf8'));
+    if (!r.broken && r.kept.length === r.total) return; // at most one shown per lesson already
+    const arch = path.join(dir, 'archive', f);
+    const had = fs.existsSync(arch) ? fs.readFileSync(arch, 'utf8') : null;
+    const inArch = new Set(had === null ? [] : had.split('\n'));
+    const missing = had === null ? [] : src.toString('utf8').split('\n').filter((l) => l.trim() && !inArch.has(l));
+    const line = `${month}: событий ${r.total} → ${r.kept.length}${r.broken ? ` (битых строк ${r.broken} — только в архиве)` : ''}`
+      + (had === null ? '' : ` (архив уже был — дописано строк ${missing.length})`);
+    if (!a.apply) { out.push(line); return; }
+    // The source first: a crash between the two writes leaves the month whole, and the next run finishes it.
+    if (had === null) {
+      fs.mkdirSync(path.dirname(arch), { recursive: true });
+      writeVia(arch, src);
+    } else if (missing.length) {
+      writeVia(arch, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
+    }
+    writeVia(file, r.kept.length ? `${r.kept.join('\n')}\n` : '');
+    // Lines the old inode got after the read (a framed writer): into the new month, on a line of their own. They are
+    // not in the archive yet — the next fold of the month adds them there (the «missing» lines above).
+    const size = fs.fstatSync(fd).size;
+    let late = '';
+    if (size > src.length) {
+      const extra = Buffer.alloc(size - src.length);
+      fs.readSync(fd, extra, 0, extra.length, src.length);
+      late = ` (во время свёртки дописано ${extra.toString('utf8').split('\n').filter((l) => l.trim()).length} строк — перенесены)`;
+      fs.appendFileSync(file, Buffer.concat([Buffer.from('\n'), extra]));
+    }
+    out.push(`${line}${late}${locked ? '' : ' (без замка событий)'}`);
+  } finally { fs.closeSync(fd); }
+}
+
 function fold(mem, a) {
   const now = a.now ? new Date(`${a.now}T00:00:00.000Z`) : new Date();
   if (Number.isNaN(now.getTime())) throw Object.assign(new Error(`--now ${a.now}: нужна дата ГГГГ-ММ-ДД`), { code: 2 });
@@ -209,25 +245,11 @@ function fold(mem, a) {
   for (const f of eventFiles(mem)) {
     const month = f.slice(0, 7);
     if (month >= edge) continue;
-    const file = path.join(dir, f);
-    const src = fs.readFileSync(file);
-    const r = foldMonth(src.toString('utf8'));
-    if (!r.broken && r.kept.length === r.total) continue; // at most one shown per lesson already
-    const arch = path.join(dir, 'archive', f);
-    const had = fs.existsSync(arch) ? fs.readFileSync(arch, 'utf8') : null;
-    const inArch = new Set(had === null ? [] : had.split('\n'));
-    const missing = had === null ? [] : src.toString('utf8').split('\n').filter((l) => l.trim() && !inArch.has(l));
-    out.push(`${month}: событий ${r.total} → ${r.kept.length}${r.broken ? ` (битых строк ${r.broken} — только в архиве)` : ''}`
-      + (had === null ? '' : ` (архив уже был — дописано строк ${missing.length})`));
-    if (!a.apply) continue;
-    // The source first: a crash between the two writes leaves the month whole, and the next run finishes it.
-    if (had === null) {
-      fs.mkdirSync(path.dirname(arch), { recursive: true });
-      writeVia(arch, src);
-    } else if (missing.length) {
-      writeVia(arch, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
-    }
-    writeVia(file, r.kept.length ? `${r.kept.join('\n')}\n` : '');
+    // --apply rewrites the month under the events lock (slice 32): a locked writer waits, it does not append into the
+    // inode being replaced. A writer without the lock (the \n frame) may still have the old inode open: what that inode
+    // got after the read is carried into the new month (fd kept open over the rename).
+    const step = (locked) => foldOne(dir, f, month, a, out, locked);
+    if (a.apply) withEventsLock(mem, step); else step(false);
   }
   if (!out.length) return `сворачивать нечего: в месяцах до ${edge} по одному показу на урок`;
   return [a.apply ? 'Свёрнуто (исходники — events/archive/; shown свёрнутого месяца = «был показан в месяце»):'
