@@ -1,0 +1,14 @@
+{
+  "id": "improve",
+  "event": "SessionStart",
+  "file": "sessionstart.d/50-improve.cjs",
+  "handler": "improve",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": ["<data>/improve/*"],
+  "reads": ["~/hub-data (HUB_DATA): analytics/calls.db, hub/projects", "tools/process-audit/weekly.py", "<data>/events/<YYYY-MM>.jsonl"],
+  "polygon": ["H50"],
+  "replaces": "v1: аудит процесса вручную разовыми скриптами исследований (research/hub-speed, разбор 11), уроки и правила не пересматривались",
+  "review": "2027-02-05"
+}

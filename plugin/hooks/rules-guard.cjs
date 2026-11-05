@@ -1,12 +1,14 @@
 // rules-guard: rules from memory, enforced at the moment of the tool call.
 // Rules — hooks/base-rules.json (any project) + projects/<name>/rules.json of the hub ({rules, modes}).
 // Mode per rule: log (default for every new rule: pass, remind Claude, journal), ask (permission prompt),
-// deny (block with the reason). A project raises or lowers a rule with "modes": {"<id>": "deny"}.
+// deny-once (block with the reason the first time in a context epoch, then pass — the spine keeps the key; the step the
+// weekly cycle raises an ineffective reminder to, slice 24), deny (block with the reason). A project raises or lowers a rule with "modes": {"<id>": "deny"}.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
-const RANK = { log: 1, ask: 2, deny: 3 };
+// ask stays above deny-once: a permission prompt is the user's gate, a deny-once passes after its first time.
+const RANK = { log: 1, 'deny-once': 2, ask: 3, deny: 4 };
 const FIELDS = ['tools', 'commands', 'input', 'path'];
 // Where the hub is and which project a cwd is in — lib/hub.cjs, shared with the spine.
 const { HUB_ROOT, findProject } = require('./lib/hub.cjs');
@@ -69,8 +71,8 @@ function evaluate(ev, rules) {
 function toHookOutput(result, warnings) {
   const lines = result.hits.map((h) => `${h.id}: ${h.text}`);
   const note = warnings.length ? `\nrules-guard: ${warnings.join('; ')}` : '';
-  if (result.decision === 'deny' || result.decision === 'ask') {
-    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: result.decision,
+  if (result.decision === 'deny' || result.decision === 'ask' || result.decision === 'deny-once') {
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: result.decision === 'ask' ? 'ask' : 'deny',
       permissionDecisionReason: `Правило из памяти — ${lines.join('; ')}${note}` } };
   }
   if (result.decision === 'log' || warnings.length) {
