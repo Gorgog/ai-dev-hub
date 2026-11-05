@@ -101,7 +101,7 @@ def oe_ratio(opps, kind, by='rule'):
 
 def near(x, threshold, closed_low=True):
     """Within 10 % of the threshold (§5); for p the interval is (0.09; 0.11], as the method has it."""
-    lo, hi = threshold * (1 - BORDER), threshold * (1 + BORDER)
+    lo, hi = round(threshold * (1 - BORDER), 9), round(threshold * (1 + BORDER), 9)
     return x is not None and (lo <= x if closed_low else lo < x) and x <= hi
 
 
