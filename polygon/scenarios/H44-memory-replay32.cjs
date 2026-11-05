@@ -8,8 +8,10 @@
 // запусков раннера — минуты), состояние и журнал подачи — во временной папке, как у раннера.
 // Два варианта уроков: «как есть» (312 записей v1 с дублями: 18 про heredoc, 6 про `cd`, 8 про prettier) и «семейства
 // слиты» — уроки, которые связывают золотые списки, одним уроком (как их сольёт миграция 23): `when` — объединение
-// `when` членов, датированных до момента, дата — самого раннего. Наблюдение — «слиты и сужены»: сверх того без уроков,
-// чей триггер срабатывал на > 2 % из 4000 вызовов истории до 15.10 (сужение исследования памяти 04.11, поле `rate`).
+// `when` членов, датированных до момента, дата — самого раннего.
+// Решение 05.11 по тесту 6: здесь проверка — попадание (≥ 17/32); шум и «разных уроков на сессию» на памяти v1 — база
+// (наблюдение), их порог — на мигрированной копии (срез 23); подача урока на настоящем нарушении шумом не считается
+// (вторая цифра: голый `cd` по отметке bare_cd из calls.db и урок о нём, метка violation корпуса).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,13 +20,13 @@ const { realFile } = require('../lib/corpus.cjs');
 const SRC = 'acceptance §2 тест 6 [П]: «попадание ≥ 17/32 при шуме ≤ 1 подачи на 20 вызовов и медиане ≤ 10 разных уроков на сессию; цель 22/32»';
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0; };
 
-function replay(pluginDir, work, corpus, { merged = false, cap = null } = {}) {
+function replay(pluginDir, work, corpus, { merged = false } = {}) {
   const L = (rel) => require(path.join(pluginDir, rel));
   const mh = L('hooks/memory-hooks.cjs'), deliver = L('hooks/lib/deliver.cjs'), session = L('hooks/lib/session.cjs'), events = L('hooks/lib/events.cjs');
   const hooks = JSON.parse(fs.readFileSync(path.join(pluginDir, 'hooks', 'hooks.json'), 'utf8')).hooks;
   const matcher = (ev) => new RegExp(`^(?:${(hooks[ev] || [{}])[0].matcher || '$^'})$`);
   const preM = matcher('PreToolUse'), postM = matcher('PostToolUse');
-  const proj = path.join(work, `replay-${merged ? 'merged' : 'raw'}-${cap || 'all'}`, 'projects', 'demo');
+  const proj = path.join(work, `replay-${merged ? 'merged' : 'raw'}`, 'projects', 'demo');
   const mem = path.join(proj, 'memory');
   fs.mkdirSync(path.join(mem, 'lessons'), { recursive: true });
   const ctx0 = { project: { dir: proj, name: 'demo' }, delivery: true };
@@ -32,7 +34,7 @@ function replay(pluginDir, work, corpus, { merged = false, cap = null } = {}) {
   const famOf = new Map();
   for (const fam of merged ? corpus.families || [] : []) for (const id of fam) famOf.set(id, fam);
   const liveAt = (cutoff) => {
-    const live = corpus.lessons.filter((l) => l.date < cutoff && (cap == null || !(l.rate > cap)));
+    const live = corpus.lessons.filter((l) => l.date < cutoff);
     if (!merged) return live;
     const out = [], seen = new Map();
     for (const l of [...live].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1))) {
@@ -92,6 +94,7 @@ function replay(pluginDir, work, corpus, { merged = false, cap = null } = {}) {
   });
 
   setTriggers(all);
+  const violation = new Set(all.filter((l) => l.violation).map((l) => l.id));
   const per = corpus.sessions.map((s, si) => {
     const sid = `noise-${si}`;
     const last = {};
@@ -107,11 +110,17 @@ function replay(pluginDir, work, corpus, { merged = false, cap = null } = {}) {
       step(sid, `c${i}`, c, agent);
     }
     const ev = events.files().flatMap((f) => events.read(f).events).filter((e) => e.session_id === sid && e.lesson && (e.kind === 'shown' || e.kind === 'deny'));
-    return { calls: s.calls.length, deliveries: ev.length, lessons: new Set(ev.map((e) => e.lesson)).size };
+    // A delivery on a real violation: the call is marked (bare_cd) and the lesson is about that violation.
+    const real = (e) => { const c = s.calls[Number(String(e.tool_use_id).slice(1))]; return Boolean(c && c.bare_cd && violation.has(e.lesson)); };
+    const noisy = ev.filter((e) => !real(e));
+    return { calls: s.calls.length, deliveries: ev.length, lessons: new Set(ev.map((e) => e.lesson)).size,
+      noisy: noisy.length, noisyLessons: new Set(noisy.map((e) => e.lesson)).size };
   });
-  const calls = per.reduce((a, p) => a + p.calls, 0), deliveries = per.reduce((a, p) => a + p.deliveries, 0);
+  const sum = (k) => per.reduce((a, p) => a + p[k], 0);
+  const calls = sum('calls'), deliveries = sum('deliveries');
   return { rows, hits: rows.filter((r) => r.hit).length, n: rows.length, unseen: rows.filter((r) => !r.seen).length, skipped,
-    noise: deliveries / calls, deliveries, calls, median: median(per.map((p) => p.lessons)), max: Math.max(...per.map((p) => p.lessons)) };
+    noise: deliveries / calls, deliveries, calls, median: median(per.map((p) => p.lessons)), max: Math.max(...per.map((p) => p.lessons)),
+    noisy: sum('noisy'), noiseTrue: sum('noisy') / calls, medianTrue: median(per.map((p) => p.noisyLessons)) };
 }
 
 module.exports = {
@@ -119,22 +128,20 @@ module.exports = {
   async run({ pluginDir, work }) {
     const file = realFile('H44-replay.json');
     if (!file) {
-      return ['hit', 'noise', 'median', 'merged-hit', 'merged-noise', 'merged-median'].map((id) => ({ id: `real:${id}`, real: true, source: SRC, pass: false, skip: 'нет $HUB_DATA/polygon/corpus/H44-replay.json', detail: 'корпус не найден' }));
+      return [{ id: 'real:hit', real: true, source: SRC, pass: false, skip: 'нет $HUB_DATA/polygon/corpus/H44-replay.json', detail: 'корпус не найден' }];
     }
     if (!fs.existsSync(path.join(pluginDir, 'hooks', 'memory-hooks.cjs'))) {
-      return ['hit', 'noise', 'median', 'merged-hit', 'merged-noise', 'merged-median'].map((id) => ({ id: `real:${id}`, real: true, source: SRC, pass: false, detail: 'в версии нет модулей памяти (memory-hooks.cjs)' }));
+      return [{ id: 'real:hit', real: true, source: SRC, pass: false, detail: 'в версии нет модулей памяти (memory-hooks.cjs)' }];
     }
     const corpus = JSON.parse(fs.readFileSync(file, 'utf8'));
     const saved = process.env.HUB_LOG_DIR;
     const t0 = Date.now();
-    let r1, rm, rt;
+    let r1, rm;
     try {
       process.env.HUB_LOG_DIR = path.join(work, 'data');
       r1 = replay(pluginDir, work, corpus);
       process.env.HUB_LOG_DIR = path.join(work, 'data-merged');
       rm = replay(pluginDir, work, corpus, { merged: true });
-      process.env.HUB_LOG_DIR = path.join(work, 'data-tuned');
-      rt = replay(pluginDir, work, corpus, { merged: true, cap: 0.02 });
     } finally {
       if (saved === undefined) delete process.env.HUB_LOG_DIR; else process.env.HUB_LOG_DIR = saved;
     }
@@ -145,15 +152,13 @@ module.exports = {
     };
     const misses = (r) => r.rows.filter((x) => !x.hit).map((x) => `${x.id}${x.seen ? '' : '(вне матчера)'}`).join(', ');
     const noise = (r) => `${r.deliveries} подач на ${r.calls} вызовов (1 на ${(1 / Math.max(r.noise, 1e-9)).toFixed(0)}), разных уроков на сессию — медиана ${r.median}, макс ${r.max}`;
+    const NOISE = 'acceptance §2 тест 6, порог шума (1 подача на 20 вызовов, медиана ≤ 10) — по решению 05.11 база на памяти v1, порог — на копии 23';
+    const base = (r, label) => `${label}: ${noise(r)}; без подач на настоящих нарушениях — ${r.noisy} (1 на ${(1 / Math.max(r.noiseTrue, 1e-9)).toFixed(0)}), медиана ${r.medianTrue}`;
     return [
       { id: 'real:hit', real: true, source: SRC, pass: r1.hits >= 17, detail: `как есть: попадание ${r1.hits}/${r1.n} (${kinds(r1)}); вне матчера PostToolUse ${r1.unseen}; промахи: ${misses(r1)}` },
-      { id: 'real:noise', real: true, kind: 'quiet', source: SRC, pass: r1.noise <= 1 / 20, detail: `как есть: ${noise(r1)}` },
-      { id: 'real:median', real: true, kind: 'quiet', source: SRC, pass: r1.median <= 10, detail: `как есть: медиана ${r1.median}, макс ${r1.max}` },
-      { id: 'real:merged-hit', real: true, source: SRC, pass: rm.hits >= 17, detail: `семейства слиты: попадание ${rm.hits}/${rm.n} (${kinds(rm)}); промахи: ${misses(rm)}` },
-      { id: 'real:merged-noise', real: true, kind: 'quiet', source: SRC, pass: rm.noise <= 1 / 20, detail: `семейства слиты: ${noise(rm)}` },
-      { id: 'real:merged-median', real: true, kind: 'quiet', source: SRC, pass: rm.median <= 10, detail: `семейства слиты: медиана ${rm.median}, макс ${rm.max}` },
-      { id: 'merged-tuned-2pct', observe: true, source: 'research 2026-11-04 hub-memory §3: триггеры, суженные по истории (> 2 % вызовов — не подаются)',
-        pass: rt.hits >= 17 && rt.noise <= 1 / 20 && rt.median <= 10, detail: `слиты и сужены: попадание ${rt.hits}/${rt.n}; ${noise(rt)}; промахи: ${misses(rt)}` },
+      { id: 'noise-base', observe: true, source: NOISE, pass: r1.noiseTrue <= 1 / 20 && r1.medianTrue <= 10, detail: base(r1, 'как есть') },
+      { id: 'merged-base', observe: true, source: NOISE, pass: rm.hits >= 17 && rm.noiseTrue <= 1 / 20 && rm.medianTrue <= 10,
+        detail: `семейства слиты: попадание ${rm.hits}/${rm.n}; ${base(rm, 'шум')}` },
       { id: 'goal-22', observe: true, source: SRC, pass: r1.hits >= 22, detail: `цель 22/32: как есть ${r1.hits}, слиты ${rm.hits}` },
       { id: 'skipped-when', observe: true, source: 'горячий путь: `when` с вложенным повтором не берётся', pass: true,
         detail: `уроков без единого годного when: ${r1.skipped} из ${corpus.lessons.length}; прогон ${Date.now() - t0} мс` },
