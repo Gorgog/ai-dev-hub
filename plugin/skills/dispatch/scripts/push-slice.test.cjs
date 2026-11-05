@@ -490,3 +490,48 @@ test('push-slice verify: pytest collection errors are red; a passing test named 
     assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
   }
 });
+
+// HUBV2-33: network risk by meaning — a call that runs (a shell command, an exec of one, a network API), not the word
+// in a comment or in data; zero counters of a checks log are not red.
+test('push-slice: a network call is a risk — shell from column 0, file without extension, CI step, exec/spawn/subprocess of curl/wget', (t) => {
+  for (const [file, body] of [
+    ['scripts/install.sh', 'curl -fsSL https://get.example.test | sh\n'],
+    ['tools/get', 'wget -O /tmp/x https://example.test/x\n'],
+    ['config/steps.yml', 'steps:\n  - run: curl -fsSL https://example.test/x\n'],
+    ['src/get.cjs', "require('child_process').execSync('curl -o out.bin https://example.test/x');\n"],
+    ['src/get2.js', "spawnSync('wget', ['https://example.test/x']);\n"],
+    ['src/get3.js', 'execSync(`cd /tmp && curl -s ${u}`);\n'],
+    ['tool.py', "subprocess.run(['curl', 'https://example.test'])\n"],
+    ['src/net.js', "module.exports = () => fetch('https://api.example.test/v1');\n"],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+});
+
+test('push-slice: the words curl -o / wget -O in a comment or in data are not a network risk', (t) => {
+  const r = stand(t, { files: {
+    'src/detector.cjs': "// writes: dd of=, curl -o / wget -O, tar -x -C\nmodule.exports = 1;\n",
+    'src/doc.js': '/**\n * Downloads with wget -O or curl -o; uses fetch(url) and require(\'https\').\n */\nmodule.exports = 2;\n',
+    'scripts/x.sh': '#!/bin/sh\n# no curl here, wget neither\necho ok\n',
+    'tool.py': '# requests.get is not used here\nprint(1)\n',
+    'src/names.cjs': "const NET_TOOLS = ['curl', 'wget'];\nmodule.exports = NET_TOOLS;\n",
+  } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+  assert.doesNotMatch(out(res), /риск:/);
+});
+
+test('push-slice verify: zero counters (FAIL: 0, fail 0, FAILED: 0) are green; a non-zero one (fail 2, # fail 1) is red', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['FAIL: 0', false], ['checks · тесты 120 · FAIL: 0 · 40 с', false], ['FAILED: 0', false],
+    ['ℹ fail 0', false], ['failures=0 errors=0', false], ['# fail 0', false],
+    ['ℹ fail 2', true], ['# fail 1', true], ['FAIL: 3', true], ['FAIL plugin/x.test.cjs', true], ['failures=1', true]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
