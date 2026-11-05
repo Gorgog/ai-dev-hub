@@ -260,19 +260,38 @@ def validate(files):
     return json.loads(r.stdout)
 
 
-def verify_live(mem, map_file, project=None):
-    """→ (summary line, problems). Reads only."""
-    mem = Path(mem)
-    p = project or mem.parent.name
-    mp = json.loads(Path(map_file).read_bytes().decode('utf-8'))
+class MapError(Exception):
+    """The --map cannot be read or has the wrong shape: a usage error (code 2), apart from problems of the memory."""
+
+
+def load_map(map_file, p):
+    """→ the project's part of the map; MapError when the file is unreadable or not the map's shape."""
+    try:
+        mp = json.loads(Path(map_file).read_bytes().decode('utf-8'))
+    except (OSError, ValueError) as e:  # JSONDecodeError and UnicodeDecodeError are ValueError
+        raise MapError(str(e)) from e
     if not isinstance(mp, dict) or not isinstance(mp.get('projects'), dict):
-        raise ValueError('файл соответствия: нужен {"version": 1, "projects": {...}}')
+        raise MapError('нужен {"version": 1, "projects": {...}}')
     pm = mp['projects'].get(p)
     if pm is None:
+        return None
+    lists = {k: pm.get(k, []) for k in ('lessons', 'decisions', 'archive')} if isinstance(pm, dict) else None
+    if lists is None or not all(isinstance(v, list) and all(isinstance(x, dict) for x in v) for v in lists.values()):
+        raise MapError(f'у проекта {p} нужны списки объектов lessons, decisions, archive')
+    return pm
+
+
+def verify_live(mem, map_file, project=None):
+    """→ (summary line, problems). Reads only. MapError — the map is the problem, not the memory."""
+    mem = Path(mem)
+    p = project or mem.parent.name
+    pm = load_map(map_file, p)
+    if pm is None:
         return f'проект {p}', [f'проекта {p} нет в файле соответствия {map_file}']
-    if not isinstance(pm, dict) or not all(isinstance(pm.get(k, []), list) for k in ('lessons', 'decisions', 'archive')):
-        raise ValueError(f'файл соответствия: у проекта {p} нужны списки lessons, decisions, archive')
-    src = sources(mem)
+    try:
+        src = sources(mem)
+    except (OSError, UnicodeDecodeError) as e:
+        return f'проект {p}', [f'память не читается ({mem}): {e}']
     mapped = {f.get('ref') if isinstance(f, dict) else f
               for k in ('lessons', 'decisions') for d in pm.get(k, []) for f in d.get('from', [])}
     mapped |= {a.get('ref') for a in pm.get('archive', [])}
@@ -315,7 +334,7 @@ def main(argv):
             return 2
         try:
             line, problems = verify_live(a.verify_live, a.map, a.project)
-        except (OSError, ValueError) as e:  # JSONDecodeError and UnicodeDecodeError are ValueError
+        except MapError as e:
             print(f'--verify-live: не прочитать --map {a.map}: {e}', file=sys.stderr)
             return 2
         print(line)

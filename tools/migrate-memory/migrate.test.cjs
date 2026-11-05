@@ -334,3 +334,19 @@ test('--verify-live: a --map of valid JSON but the wrong shape — a usage error
     assert.doesNotMatch(r.log, /Traceback/);
   }
 });
+
+test('--verify-live: map items that are not objects — code 2; an unreadable memory file — a memory problem, code 1, not «--map»', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'items.json');
+  for (const k of ['lessons', 'archive']) {
+    fs.writeFileSync(bad, JSON.stringify({ version: 1, projects: { demo: { lessons: [], decisions: [], archive: [], [k]: ['x'] } } }));
+    const r = run(['--verify-live', l.mem, '--map', bad]);
+    assert.strictEqual(r.code, 2, `${k}: ${r.log}`);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+  fs.writeFileSync(path.join(l.mem, 'errors.md'), Buffer.from([0xff, 0xfe, 0x2d, 0x20, 0x0a]));
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /память не читается/);
+  assert.doesNotMatch(r.log, /--map/);
+});

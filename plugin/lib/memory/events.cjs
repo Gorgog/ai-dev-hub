@@ -66,7 +66,8 @@ function appendEvent(memDir, ev) {
     db = new D(path.join(memDir, LOCK), { timeout: 0 });
     for (const t0 = Date.now(); ;) {
       try { db.exec('BEGIN EXCLUSIVE'); break; } catch (e) {
-        if (!/locked|busy/i.test(String(e && e.message)) || Date.now() - t0 >= WAIT_MS) throw e;
+        const busy = e && (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(String(e.message))); // SQLITE_BUSY, _LOCKED
+        if (!busy || Date.now() - t0 >= WAIT_MS) throw e;
         Atomics.wait(nap, 0, 0, 0.5 + Math.random());
       }
     }
