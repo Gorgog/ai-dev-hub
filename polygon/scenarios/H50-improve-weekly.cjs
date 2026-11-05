@@ -70,6 +70,8 @@ module.exports = {
         detail: `старт ${first.ms} мс, итог ${wrote ? 'дописан' : 'не дописан за 15 с'}, текст старта: ${first.text.slice(0, 120)}` },
       { id: 'applies-with-refresh', source: SRC, pass: /--apply/.test(args) && /--refresh/.test(args) && /--events/.test(args),
         detail: `аргументы цикла: ${args.trim().slice(0, 300)}` },
+      { id: 'canary-scope', source: 'решение 05.11 (ревью 24, M1): действия цикла — только в проектах канарейки', pass: /--projects demo(\s|$)/.test(args),
+        detail: `аргументы цикла: ${args.trim().slice(0, 300)}` },
       { id: 'summary-once', source: SRC, pass: /Недельный итог хаба · синтетика полигона/.test(second.text) && !/Недельный итог/.test(third.text),
         detail: `второй старт: ${second.text.slice(0, 160)} / третий: ${third.text.slice(0, 160)}` },
       { id: 'weekly-not-every-start', kind: 'quiet', source: SRC, pass: runsOf(s) === 1, detail: `запусков цикла: ${runsOf(s)} вместо 1` },
