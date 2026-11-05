@@ -15,11 +15,12 @@
 const path = require('path');
 const { bareCd } = require(path.join(__dirname, '..', '..', '..', 'polygon', 'lib', 'shell.cjs'));
 
-// Simple commands as word lists: split by ; & | ( ) { } and newlines outside quotes; heredoc bodies and comments skipped.
+// Simple commands as word lists: split by ; & | ( ) { } and newlines outside quotes; heredoc bodies and comments skipped,
+// a heredoc inside "$( … )" too; & of a redirection (2>&1, &>f) is no separator.
 function simpleCommands(cmd) {
   const s = String(cmd);
   const out = [];
-  let words = [], w = '', inWord = false, quote = null, heredoc = null;
+  let words = [], w = '', inWord = false, quote = null, heredoc = null, subst = 0;
   const pending = [];
   const endWord = () => { if (inWord) words.push(w); w = ''; inWord = false; };
   const endCmd = () => { endWord(); if (words.length) out.push(words); words = []; };
@@ -32,13 +33,20 @@ function simpleCommands(cmd) {
       i = end;
       continue;
     }
+    if (quote === '"' && c === '$' && s[i + 1] === '(') { subst++; w += '$('; i++; continue; }
+    if (quote === '"' && subst) {
+      if (c === ')') subst--;
+      const qhd = c === '<' ? s.slice(i).match(/^<<-?\s*(['"]?)([A-Za-z_]\w*)\1/) : null;
+      if (qhd) { pending.push(qhd[2]); w += qhd[0]; i += qhd[0].length - 1; continue; }
+      if (c === '\n' && pending.length) { w += c; heredoc = pending.shift(); continue; }
+    }
     if (quote) {
       if (c === '\\' && quote === '"' && i + 1 < s.length) { w += s[++i]; continue; }
       if (c === quote) { quote = null; continue; }
       w += c;
       continue;
     }
-    if (c === "'" || c === '"') { quote = c; inWord = true; continue; }
+    if (c === "'" || c === '"') { quote = c; subst = 0; inWord = true; continue; }
     if (c === '$' && s[i + 1] === '{') {
       const end = s.indexOf('}', i);
       if (end !== -1) { w += s.slice(i, end + 1); inWord = true; i = end; continue; }
@@ -48,6 +56,7 @@ function simpleCommands(cmd) {
     if (hd) { endWord(); pending.push(hd[2]); i += hd[0].length - 1; continue; }
     if (c === '#' && !inWord) { const end = s.indexOf('\n', i); i = (end === -1 ? s.length : end) - 1; continue; }
     if (c === '\n') { endCmd(); if (pending.length) heredoc = pending.shift(); continue; }
+    if (c === '&' && (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>')) { w += c; inWord = true; continue; }
     if (';&|(){}'.includes(c)) { endCmd(); continue; }
     if (/\s/.test(c)) { endWord(); continue; }
     w += c;
@@ -61,11 +70,38 @@ const PREFIX = new Set(['command', 'time', 'exec', 'sudo', 'nohup', '!', 'then',
 const GIT_ARG_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 const cluster = (w, letters) => /^-[A-Za-z]+$/.test(w) && [...letters].some((l) => w.includes(l));
 
-// The program and its arguments: shell prefixes and NAME=value assignments skipped.
+// Wrappers that run the command after their options: options that take an argument.
+const WRAPPERS = {
+  timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
+  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']),
+  xargs: new Set(['-I', '-i', '-n', '-P', '-L', '-l', '-d', '-s', '-E', '-e', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs']),
+};
+
+// The program and its arguments: shell prefixes, NAME=value assignments and wrappers (timeout DURATION, env, xargs)
+// skipped.
 function program(words) {
   let i = 0;
-  while (i < words.length && (PREFIX.has(words[i]) || /^\w+=/.test(words[i]))) i++;
-  return words.slice(i);
+  for (;;) {
+    while (i < words.length && (PREFIX.has(words[i]) || /^\w+=/.test(words[i]))) i++;
+    const opts = WRAPPERS[path.basename(words[i] || '')];
+    if (!opts) return words.slice(i);
+    const wrapper = path.basename(words[i++]);
+    while (i < words.length && words[i].startsWith('-')) i += opts.has(words[i]) ? 2 : 1;
+    if (wrapper === 'timeout') i++;
+  }
+}
+
+// find … -exec CMD … ; / + : the commands find runs.
+function execCommands(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] !== '-exec' && words[i] !== '-execdir') continue;
+    let j = i + 1;
+    while (j < words.length && words[j] !== ';' && words[j] !== '+') j++;
+    out.push(words.slice(i + 1, j));
+    i = j;
+  }
+  return out;
 }
 
 // git's subcommand and its arguments, global options skipped; null - not git.
@@ -80,10 +116,12 @@ function rulesOf(cmd) {
   const rules = {};
   const set = (rule, v) => { rules[rule] = Math.max(rules[rule] || 0, v ? 1 : 0); };
   const events = [];
-  for (const raw of simpleCommands(cmd)) {
+  const queue = simpleCommands(cmd);
+  for (const raw of queue) {
     const words = program(raw);
     if (!words.length) continue;
     const name = path.basename(words[0]);
+    if (name === 'find') queue.push(...execCommands(words));
     const args = words.slice(1);
     if (name === 'cd') set('cd', 0);
     if (name === 'sed' && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'))) set('sed-in-place', 1);

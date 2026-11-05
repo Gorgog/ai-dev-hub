@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import depth  # noqa: E402
-from calls import epoch_s, is_report, journal_order, read_jsonl  # noqa: E402
+from calls import SHA_RE, epoch_s, is_report, journal_order, read_jsonl  # noqa: E402
 
 THRESHOLD = ('acceptance.md §4, шаг 0 [П]: наклон нарушений на возможность по глубине эпохи значим (перестановочный '
              'тест по сессиям, односторонний p ≤ 0,1) и поздний бакет ≥ 1,3× раннего; `cd` не входит')
@@ -73,6 +73,11 @@ def matches(case, name, inp, t):
     return old_body(inp) == p.get('body', '')
 
 
+def sha_of(txt):
+    m = SHA_RE.search(txt or '')
+    return m.group(0) if m else ''
+
+
 def is_checks_skill(name, inp):
     return name == 'Skill' and str(inp.get('skill') or '').split(':')[-1] == 'checks' and '--full' in str(inp.get('args') or '').split()
 
@@ -83,7 +88,7 @@ class Journals:
 
     def __init__(self, db, cases):
         self.db, self.cases = db, cases
-        self.reports = []           # (session, epoch, depth, t, order)
+        self.reports = []           # (session, epoch, depth, t, order, sha)
         self.checks_ids = set()
         self.found = {}             # case id -> [tool ids]
         self.checked = self.mismatched = 0
@@ -122,7 +127,7 @@ class Journals:
                 if not isinstance(b, dict):
                     continue
                 if b.get('type') == 'text' and main and not dup and is_report(b.get('text')):
-                    self.reports.append((sid, epoch, n, t, n + 0.5))
+                    self.reports.append((sid, epoch, n, t, n + 0.5, sha_of(b.get('text'))))
                 if b.get('type') != 'tool_use':
                     continue
                 n += 1
@@ -135,8 +140,9 @@ class Journals:
                 if row and row['session'] == sid and row['agent'] == '':
                     self.checked += 1
                     self.mismatched += (row['epoch'], row['n']) != (epoch, n)
-                if (name == 'SendMessage' or name.endswith('send_message')) and is_report(str(inp.get('message') or '')):
-                    self.reports.append((sid, epoch, n, t, n))
+                msg = str(inp.get('message') or '')
+                if (name == 'SendMessage' or name.endswith('send_message')) and is_report(msg):
+                    self.reports.append((sid, epoch, n, t, n, sha_of(msg)))
 
     def run(self, root):
         for f in journal_order(glob.glob(os.path.join(root, '*', '*.jsonl'))):
@@ -163,9 +169,11 @@ def opportunities(rows, flags, j, checks_since):
             o = {'kind': kind_of(r['agent']), 'stratum': f"{r['session']}/{r['agent']}|{rule}", 'rule': rule,
                  'depth': r['n'], 'v': v, 'session': r['session'], 'agent': r['agent'], 'epoch': r['epoch']}
             (cds if rule == 'cd' else rules).append(o)
-    for sid, epoch, d, t, order in sorted(j.reports):
-        if t < checks_since:
+    seen = set()  # a report sent to the dispatcher and repeated to the user is one: (session, sha) counts once
+    for sid, epoch, d, t, order, sha in sorted(j.reports):
+        if t < checks_since or (sha and (sid, sha) in seen):
             continue
+        seen.add((sid, sha))
         key = (t, order, 0)
         last = max((c for c in commits.get(sid, []) if c < key), default=None)
         ok = any((last is None or c > last) and c < key for c in checks.get(sid, []))
@@ -175,7 +183,8 @@ def opportunities(rows, flags, j, checks_since):
 
 
 def around_compactions(opps, epoch_len, k):
-    """Opportunities in the last k calls of an epoch of a main thread before a compaction and the first k after it."""
+    """Opportunities in the last k calls of an epoch of a main thread before a compaction and the first k after it:
+    their counts and the lists."""
     before, after = [], []
     bounds = {(s, e) for (s, a, e) in epoch_len if a == '' and (s, '', e + 1) in epoch_len}
     for o in opps:
@@ -186,7 +195,13 @@ def around_compactions(opps, epoch_len, k):
             before.append(o)
         if (s, e - 1) in bounds and o['depth'] <= k:
             after.append(o)
-    return {'before': depth.counts(before), 'after': depth.counts(after), 'compactions': len(bounds)}
+    return {'before': depth.counts(before), 'after': depth.counts(after), 'compactions': len(bounds)}, before, after
+
+
+def oe(opps, rate):
+    """Observed / expected violations, expected by each opportunity's rule rate."""
+    e = sum(rate[o['rule']] for o in opps)
+    return round(sum(o['v'] for o in opps) / e, 3) if e else None
 
 
 def repeats(cases, j, db, epoch_len):
@@ -242,8 +257,11 @@ def build(a):
         s['cd'] = depth.thread_stats([o for o in cds if o['kind'] == kind], kind, a.perms, a.seed)
         threads[kind] = s
     early = threads['main']['buckets'][0]
-    comp_rules = around_compactions(rules, epoch_len, a.k)
-    comp = {'k': a.k, 'rules': comp_rules, 'cd': around_compactions(cds, epoch_len, a.k),
+    comp_rules, before, after = around_compactions(rules, epoch_len, a.k)
+    main_rules = [o for o in rules if o['kind'] == 'main']
+    rate = {r: c['viol'] / c['opps'] for r, c in depth.thread_stats(main_rules, 'main', 0, a.seed, False)['by_rule'].items()}
+    comp = {'k': a.k, 'rules': comp_rules, 'cd': around_compactions(cds, epoch_len, a.k)[0],
+            'oe_before': oe(before, rate), 'oe_after': oe(after, rate),
             'early_rate_main': round(early['viol'] / early['opps'], 4) if early['opps'] else None,
             'rate_before': round(comp_rules['before']['viol'] / comp_rules['before']['opps'], 4) if comp_rules['before']['opps'] else None,
             'rate_after': round(comp_rules['after']['viol'] / comp_rules['after']['opps'], 4) if comp_rules['after']['opps'] else None}
@@ -259,7 +277,8 @@ def build(a):
         'repeats': repeats(cases, j, db, epoch_len),
         'tokens': tokens(con),
         'depth_check': {'checked': j.checked, 'mismatched': j.mismatched},
-        'reports': {'found': len(j.reports), 'since': a.checks_since},
+        'reports': {'found': len(j.reports), 'checks_full_opps': sum(1 for o in rules if o['rule'] == 'checks-full'),
+                    'since': a.checks_since},
         'calls': len(rows),
         'command': 'python3 tools/analytics/depth/step0.py --data <data> --out <file>'
                    f' --perms {a.perms} --seed {a.seed} --k {a.k} --checks-since {a.checks_since}',

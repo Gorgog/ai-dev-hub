@@ -99,8 +99,10 @@ def oe_ratio(opps, kind, by='rule'):
     return std, raw, oe == 0 and ol > 0
 
 
-def near(x, threshold):
-    return x is not None and abs(x - threshold) <= BORDER * threshold
+def near(x, threshold, closed_low=True):
+    """Within 10 % of the threshold (§5); for p the interval is (0.09; 0.11], as the method has it."""
+    lo, hi = threshold * (1 - BORDER), threshold * (1 + BORDER)
+    return x is not None and (lo <= x if closed_low else lo < x) and x <= hi
 
 
 def thread_stats(opps, kind, perms=10000, seed=11, diagnostics=True):
@@ -140,7 +142,7 @@ def thread_stats(opps, kind, perms=10000, seed=11, diagnostics=True):
         'raw_ratio': raw,
         'early_zero': early_zero,
         'verdict': verdict,
-        'borderline': verdict != LITTLE and (near(p, P_MAX) or near(ratio, RATIO_MIN)),
+        'borderline': verdict != LITTLE and (near(p, P_MAX, closed_low=False) or near(ratio, RATIO_MIN)),
         'depth_median': st.median(depths) if depths else None,
         'perms': perms,
         'seed': seed,
