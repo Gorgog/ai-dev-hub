@@ -35,25 +35,27 @@ const NODE_FAIL = `# tests 3\n# suites 0\n# pass 2\n# fail 1\n# cancelled 0\n# s
 const NODE_SPEC_SKIP = `ℹ tests 3\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0`;
 const NODE_OK = `# tests 3\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 0`;
 
-test('test-output: exit 0 with failed tests is a block naming the runner line (vitest, jest, node --test)', () => {
+test('test-output: exit 0 with failed tests is a reminder naming the runner line (vitest, jest, node --test)', () => {
   for (const [out, re] of [[VITEST_FAIL, /Tests\s+1 failed/], [JEST_FAIL, /Tests:\s+2 failed/], [NODE_FAIL, /fail 1/]]) {
     const r = mod.run(bash(out));
-    assert.strictEqual(r && r.decision, 'block', out);
-    assert.match(r.reason, re);
-    assert.match(r.reason, /упал/);
+    assert.strictEqual(r && r.decision, undefined, out);
+    assert.strictEqual(r.items[0].priority, 'reminder', out);
+    assert.match(r.items[0].text, re);
+    assert.match(r.items[0].text, /упал/);
   }
 });
 
-test('test-output: skipped tests in a «green» run are a block too', () => {
+test('test-output: skipped tests in a «green» run are a reminder too', () => {
   for (const out of [VITEST_SKIP, JEST_SKIP, NODE_SPEC_SKIP]) {
     const r = mod.run(bash(out));
-    assert.strictEqual(r && r.decision, 'block', out);
-    assert.match(r.reason, /пропущ/);
+    assert.strictEqual(r && r.decision, undefined, out);
+    assert.strictEqual(r.items[0].priority, 'reminder', out);
+    assert.match(r.items[0].text, /пропущ/);
   }
 });
 
 test('test-output: the summary on stderr counts as well (jest prints there)', () => {
-  assert.strictEqual(mod.run(bash('', JEST_FAIL)).decision, 'block');
+  assert.strictEqual(mod.run(bash('', JEST_FAIL)).items[0].priority, 'reminder');
 });
 
 test('test-output: a green run, a quoted fixture, a non-Bash tool, an odd response — silent', () => {
@@ -62,12 +64,20 @@ test('test-output: a green run, a quoted fixture, a non-Bash tool, an odd respon
   assert.strictEqual(mod.run(bash("const JEST = 'Tests:       2 failed, 30 passed, 32 total';\nassert.match(out, /# fail 1/);")), null);
   assert.strictEqual(mod.run(bash('src/a.ts:3:Tests:       2 failed, 30 passed, 32 total')), null, 'grep output');
   assert.strictEqual(mod.run({ tool_name: 'Edit', tool_response: { stdout: JEST_FAIL } }), null);
-  assert.strictEqual(mod.run({ tool_name: 'Bash', tool_response: JEST_FAIL }).decision, 'block', 'a plain string response');
+  assert.strictEqual(mod.run({ tool_name: 'Bash', tool_response: JEST_FAIL }).items[0].priority, 'reminder', 'a plain string response');
   assert.strictEqual(mod.run({ tool_name: 'Bash' }), null);
 });
 
 test('review 1: colored output (ANSI codes) is read as plain; the reason does not push to «fix» an intended red run', () => {
   const r = mod.run(bash('\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m | 4 passed (5)'));
-  assert.strictEqual(r && r.decision, 'block');
-  assert.match(r.reason, /намеренно красн/i);
+  assert.strictEqual(r && r.decision, undefined);
+  assert.strictEqual(r.items[0].priority, 'reminder');
+  assert.match(r.items[0].text, /намеренно красн/i);
+});
+
+test('review 4: the same summary is one reminder per epoch, another summary — another (key by the line)', () => {
+  const a = mod.run(bash(JEST_FAIL)).items[0].key, b = mod.run(bash(VITEST_FAIL)).items[0].key;
+  assert.match(a, /^test-output:/);
+  assert.notStrictEqual(a, b);
+  assert.strictEqual(a, mod.run(bash(JEST_FAIL)).items[0].key);
 });

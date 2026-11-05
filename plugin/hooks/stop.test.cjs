@@ -1,4 +1,4 @@
-// node --test stop.test.cjs — the Stop modules of the done-gate (stop.d/10-done-gate.cjs, 11-done-facts.cjs).
+// node --test stop.test.cjs — v1 doneGate (stop.cjs) and the Stop modules of the done-gate (stop.d/10, 11).
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { doneGate } = require('./stop.cjs');
 const gate = require('./stop.d/10-done-gate.cjs');
 const factsMod = require('./stop.d/11-done-facts.cjs');
 // Temp folders of this file, removed after its tests.
@@ -15,50 +16,64 @@ test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: 
 
 function repo() {
   const hub = mkdtemp('st-');
-  const project = { dir: path.join(hub, 'projects', 'demo'), name: 'demo' };
-  const r = path.join(project.dir, 'repo');
+  const r = path.join(hub, 'projects', 'demo', 'repo');
   fs.mkdirSync(r, { recursive: true });
   const git = (...a) => execFileSync('git', a, { cwd: r, encoding: 'utf8' }).trim();
-  git('init', '-q', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+  git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
   fs.writeFileSync(path.join(r, 'a.txt'), '1'); git('add', '.'); git('commit', '-q', '-m', 'x');
-  return { hub, r, project, sha: git('rev-parse', '--short', 'HEAD'), full: git('rev-parse', 'HEAD') };
+  return { hub, r, sha: git('rev-parse', '--short', 'HEAD') };
 }
-const stop = (mod, project, cwd, msg, extra = {}) => mod.run({ cwd, last_assistant_message: msg, ...extra }, { project });
 
-test('done-gate: a report needs a clean tree and the HEAD sha in the text', () => {
-  const { r, project, sha } = repo();
-  assert.strictEqual(stop(gate, project, r, `Готово к пушу: K-1 ${sha}`), null);
-  const noSha = stop(gate, project, r, 'Готово к пушу, всё проверено');
+test('done-gate: «готово к пушу» needs a clean tree and the HEAD sha in the text', () => {
+  const { hub, r, sha } = repo();
+  assert.strictEqual(doneGate({ cwd: r, last_assistant_message: `Готово к пушу: K-1 ${sha}` }, hub), null);
+  const noSha = doneGate({ cwd: r, last_assistant_message: 'Готово к пушу, всё проверено' }, hub);
   assert.strictEqual(noSha.decision, 'block');
   assert.match(noSha.reason, new RegExp(sha));
   fs.writeFileSync(path.join(r, 'a.txt'), 'changed');
-  const dirty = stop(gate, project, r, `Готово к пушу: ${sha}`);
+  const dirty = doneGate({ cwd: r, last_assistant_message: `Готово к пушу ${sha}` }, hub);
   assert.strictEqual(dirty.decision, 'block');
   assert.match(dirty.reason, /не чистое: a\.txt/);
-  assert.match(stop(gate, project, r, 'Готово к мержу: K-1').reason, /«Готово к мержу»/);
 });
 
-test('done-gate: silent on a mention, «не готово к пушу», stop_hook_active, in the project folder and outside the hub', () => {
-  const { r, project } = repo();
+test('done-gate: silent without the phrase, on «не готово к пушу», on stop_hook_active, in the project folder and outside the hub', () => {
+  const { hub, r } = repo();
   fs.writeFileSync(path.join(r, 'b.txt'), 'dirty');
-  assert.strictEqual(stop(gate, project, r, 'сделал половину'), null);
-  assert.strictEqual(stop(gate, project, r, 'Ещё не готово к пушу: жду ревью'), null);
-  assert.strictEqual(stop(gate, project, r, 'Статус: ревью | Дальше: доклад «готово к пушу» с sha'), null);
-  assert.strictEqual(stop(gate, project, r, 'Готово к пушу', { stop_hook_active: true }), null);
-  assert.strictEqual(stop(gate, project, path.dirname(r), 'Готово к пушу: K-1 abc1234'), null);
-  assert.strictEqual(stop(gate, null, os.tmpdir(), 'Готово к пушу'), null);
+  assert.strictEqual(doneGate({ cwd: r, last_assistant_message: 'сделал половину' }, hub), null);
+  assert.strictEqual(doneGate({ cwd: r, last_assistant_message: 'Ещё не готово к пушу: жду ревью' }, hub), null);
+  assert.strictEqual(doneGate({ cwd: r, last_assistant_message: 'Готово к пушу', stop_hook_active: true }, hub), null);
+  assert.strictEqual(doneGate({ cwd: path.dirname(r), last_assistant_message: 'Готово к пушу: K-1 abc1234' }, hub), null);
+  assert.strictEqual(doneGate({ cwd: os.tmpdir(), last_assistant_message: 'Готово к пушу' }, hub), null);
 });
 
-test('done-facts: with checks.json a report needs a green full run of the final HEAD; the reason says how', () => {
-  const { r, project, full } = repo();
-  fs.writeFileSync(path.join(project.dir, 'checks.json'), '{"full": []}');
-  const res = stop(factsMod, project, r, `Готово к пушу: K-1 ${full.slice(0, 7)}`);
-  assert.strictEqual(res.decision, 'block');
-  assert.match(res.reason, /checks\.cjs --full/);
+const project = (hub) => ({ dir: path.join(hub, 'projects', 'demo'), name: 'demo' });
+const canary = (hub) => fs.writeFileSync(path.join(hub, 'projects', 'demo', 'canary.json'), JSON.stringify({ mechanisms: ['done-gate'] }));
+const run = (mod, hub, cwd, msg, extra = {}) => mod.run({ cwd, last_assistant_message: msg, ...extra }, { project: project(hub), hub });
+
+test('done-gate module: outside the canary — v1 as on main (a mention with the phrase on a dirty tree is still blocked)', () => {
+  const { hub, r, sha } = repo();
+  assert.strictEqual(run(gate, hub, r, `Готово к пушу: K-1 ${sha}`, {}), null);
+  fs.writeFileSync(path.join(r, 'b.txt'), 'dirty');
+  const v1 = run(gate, hub, r, 'Дальше: допишу тест и пришлю «готово к пушу» с sha.');
+  assert.strictEqual(v1 && v1.decision, 'block');
+  assert.strictEqual(run(gate, hub, r, 'Готово к мержу: K-1'), null, 'v1 does not judge «готово к мержу»');
+});
+
+test('done-gate module: on the canary it steps aside — done-facts judges the report by facts', () => {
+  const { hub, r, sha } = repo();
+  canary(hub);
+  fs.writeFileSync(path.join(r, 'b.txt'), 'dirty');
+  assert.strictEqual(run(gate, hub, r, 'Готово к пушу'), null);
+  assert.strictEqual(run(factsMod, hub, r, 'Дальше: допишу тест и пришлю «готово к пушу» с sha.'), null, 'a mention');
+  assert.match(run(factsMod, hub, r, `Готово к пушу: K-1 ${sha}`).reason, /не чистое: b\.txt/);
+  fs.rmSync(path.join(r, 'b.txt'));
+  assert.match(run(factsMod, hub, r, 'Готово к мержу: K-1').reason, /«Готово к мержу».*нет HEAD/);
+  fs.writeFileSync(path.join(hub, 'projects', 'demo', 'checks.json'), '{"full": []}');
+  assert.match(run(factsMod, hub, r, `Готово к пушу: K-1 ${sha}`).reason, /checks\.cjs --full/);
+  const full = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: r, encoding: 'utf8' }).trim();
   const file = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json'], { cwd: r, encoding: 'utf8' }).trim();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ sha: full, code: 0, clean: true }));
-  assert.strictEqual(stop(factsMod, project, r, `Готово к пушу: K-1 ${full.slice(0, 7)}`), null);
-  assert.strictEqual(stop(factsMod, project, r, 'Готово к пушу: K-1', { stop_hook_active: true }), null);
-  assert.strictEqual(stop(factsMod, null, r, 'Готово к пушу: K-1'), null);
+  assert.strictEqual(run(factsMod, hub, r, `Готово к пушу: K-1 ${sha}`), null);
+  assert.strictEqual(run(factsMod, hub, r, 'Готово к пушу: K-1', { stop_hook_active: true }), null);
 });
