@@ -123,3 +123,13 @@ test('bashMemoryWrites, round 2: &>>, tee --append, cp -t, perl -i, truncate —
     "cat > /tmp/draft.md <<'EOF'\nУрок: не писать > memory/errors.md напрямую\nEOF",
     "node episode.cjs repeat x --note 'не пишем в memory/lessons/ через cp a b'"]) assert.strictEqual(n(c), 0, c);
 });
+
+test('bashMemoryWrites, round 3: bash -c / sh -c / eval, |&, subshell, env — yes; > inside quotes without spaces — no', () => {
+  const { bashMemoryWrites } = variants;
+  const n = (c) => bashMemoryWrites([bash(c)]).length;
+  for (const c of ["bash -c 'echo x >> memory/errors.md'", 'sh -c "printf y >> ../memory/errors.md"', "eval 'echo x >> memory/errors.md'",
+    'echo x |& tee memory/errors.md', '(tee -a memory/errors.md < /tmp/x)', 'env A=1 tee -a memory/errors.md < /tmp/x',
+    '{ echo x; } >> memory/errors.md']) assert.strictEqual(n(c), 1, c);
+  for (const c of ['grep -n "=>" memory/errors.md', "grep -c '->' memory/lessons/a.md", "grep -n '>>' memory/errors.md",
+    "bash -c 'grep -c x memory/errors.md'"]) assert.strictEqual(n(c), 0, c);
+});

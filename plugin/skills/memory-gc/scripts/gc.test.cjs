@@ -230,3 +230,11 @@ test('review before any mark: repeats under A, then under B, then gc under B —
   appendEvent(mem, { at: '2026-11-02T10:00:00.000Z', kind: 'repeat', lesson: 'dev-port', model: 'model-b' });
   assert.match(run(['--memory', mem, 'review', '--model', 'model-b']).out, /model-a → model-b: на пересмотр поставлено 5/);
 });
+
+test('review: a reviewed mark without a model (reviewed before any review) does not count — the first review is the baseline', () => {
+  const mem = memory();
+  assert.strictEqual(run(['--memory', mem, 'reviewed', 'dev-port']).code, 0);
+  const r = run(['--memory', mem, 'review', '--model', 'model-a']);
+  assert.match(r.out, /опорная модель model-a/);
+  assert.doesNotMatch(run(['--memory', mem, 'review', '--list']).out, /undefined/);
+});
