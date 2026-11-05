@@ -410,3 +410,64 @@ test('the Bash module filters commands with the same gate as the library', () =>
   const src = fs.readFileSync(path.join(__dirname, 'pretool.d', '50-memory-bash-write.cjs'), 'utf8');
   assert.ok(src.includes(`/${GATE.source}/.test(cmd)`), `50-memory-bash-write.cjs must test /${GATE.source}/`);
 });
+
+// Decision 05.11 (variant D, the vm watchdog): every trigger is matched inside one synchronous vm run with a timeout;
+// a run cut by it loses this call's lessons (fail-open), the culprit is journaled, rechecked alone and quarantined;
+// full regex syntax stays (lookaround, backreferences, i, large {m,n}) — the static forms are a warning, not a refusal.
+const REVIEW_FORMS = { 'r-bounded': '\\s{0,1000}\\s{0,1000}x', 'r-look': '(?=\\s)\\s*-?\\s*x', 'r-alt': '(?=a)((?:a)|aa)+b' };
+const REVIEW_INPUT = { 'r-bounded': ' '.repeat(4000), 'r-look': ' '.repeat(4000), 'r-alt': 'a'.repeat(4000) };
+
+test('variant D: a catastrophic `when` is cut by the watchdog — the library call ends fast, the culprit is quarantined', () => {
+  const s = setup();
+  for (const [id, rx] of Object.entries(REVIEW_FORMS)) write(path.join(s.mem, 'lessons', `${id}.md`), lesson({ id, when: [{ tool: '^Bash$', cmd: rx }], first: `Форма ревью ${id}.` }));
+  store.ensureTriggers(s.mem);
+  const hot = require('./memory-hot.cjs');
+  assert.strictEqual(typeof hot.matchGuarded, 'function', 'the guarded matcher is exported');
+  for (const [id] of Object.entries(REVIEW_FORMS)) {
+    const t0 = Date.now();
+    const hits = hot.matchGuarded(hot.loadTriggers(s.mem), hot.fieldsOf({ tool_name: 'Bash', tool_input: { command: REVIEW_INPUT[id] } }), s.mem);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 100, `${id}: ${ms} ms`);
+    assert.ok(Array.isArray(hits));
+  }
+  const q = JSON.parse(fs.readFileSync(path.join(s.mem, '.triggers-quarantine.json'), 'utf8'));
+  const lessons = Object.values(q).map((e) => e.lesson).sort();
+  assert.deepStrictEqual(lessons, Object.keys(REVIEW_FORMS).sort(), JSON.stringify(q));
+  // Quarantined sources are skipped: the same calls are fast and a sane lesson still fires.
+  const t1 = Date.now();
+  for (const id of Object.keys(REVIEW_FORMS)) hot.matchGuarded(hot.loadTriggers(s.mem), hot.fieldsOf({ tool_name: 'Bash', tool_input: { command: REVIEW_INPUT[id] } }), s.mem);
+  assert.ok(Date.now() - t1 < 60, `quarantined: ${Date.now() - t1} ms`);
+  assert.strictEqual(hot.matchGuarded(hot.loadTriggers(s.mem), hot.fieldsOf({ tool_name: 'Bash', tool_input: { command: "cat <<'EOF'\nx\nEOF" } }), s.mem)[0].id, 'heredoc-script');
+});
+
+test('variant D: a hang in the memory module keeps the decision of another module of the call (rules-guard ask)', () => {
+  const s = setup();
+  write(path.join(s.mem, 'lessons', 'r-look.md'), lesson({ id: 'r-look', when: [{ tool: '^Bash$', cmd: REVIEW_FORMS['r-look'] }], first: 'Форма ревью с просмотром.' }));
+  store.ensureTriggers(s.mem);
+  start(s);
+  assert.match(post(s, 'p1', ' x', '').ctx, /r-look/, 'the lesson is delivered on a short match');
+  const t0 = Date.now();
+  const r = pre(s, 'p2', `git push origin main${' '.repeat(4000)}`);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 1500, `Pre took ${ms} ms`);
+  assert.strictEqual(r.code, 0);
+  assert.strictEqual(r.json && r.json.hookSpecificOutput && r.json.hookSpecificOutput.permissionDecision, 'ask', r.out);
+  const journal = fs.readFileSync(path.join(s.logs, 'hooks.jsonl'), 'utf8');
+  assert.match(journal, /"lesson":"r-look"/);
+  assert.match(start(s, 'compact').out, /r-look[^\n]*карантин/, 'SessionStart names the quarantined trigger');
+  // Editing the lesson's `when` changes the source: the quarantine no longer applies to it.
+  write(path.join(s.mem, 'lessons', 'r-look.md'), lesson({ id: 'r-look', when: [{ tool: '^Bash$', cmd: '^\\s*x$' }], first: 'Форма ревью с просмотром.' }));
+  store.ensureTriggers(s.mem);
+  assert.doesNotMatch(start(s, 'compact').out, /r-look[^\n]*карантин/);
+});
+
+test('variant D: a risky but valid `when` is written without a block — a warning names it', () => {
+  const s = setup();
+  start(s);
+  const f = path.join(s.mem, 'lessons', 'nested.md');
+  write(f, lesson({ id: 'nested', when: [{ tool: '^Bash$', cmd: '(\\w+\\s?){1,30}!' }], first: 'Вложенный повтор.' }));
+  const r = run(s, 'PostToolUse', { tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: f, content: '' }, tool_response: { filePath: f } });
+  assert.strictEqual(r.block, null, r.out);
+  assert.match(r.ctx, /nested[^\n]*when\[0\]/);
+  assert.ok(store.readTriggers(s.mem).lessons.some((l) => l.id === 'nested'), 'it keeps its trigger');
+});
