@@ -41,7 +41,10 @@ function eventLine(ev) {
 // (≤ MAX_LINE ≤ PAGE) then lies in one page and a kill cannot tear it. Without node:sqlite: a \n frame, no tail read —
 // no glue, a torn fragment stays its own (skipped) line. Local file systems only: NFS/FUSE keep neither guarantee.
 const PAGE = 4096;
-const WAIT_MS = 250; // the lock is held for tens of µs; longer — the holder is stuck
+// The lock is held for tens of µs. Waiting is our own poll every ~1 ms (review 2): SQLite's busy handler sleeps up to
+// tens of ms and starves under 8+ writers — the wait ran out with nobody stuck. Past WAIT_MS the holder is stuck.
+const WAIT_MS = 400;
+const nap = new Int32Array(new SharedArrayBuffer(4));
 const LOCK = '.events.lock.db'; // outside events/: readers and the memory commit never see it
 if (MAX_LINE > PAGE) throw new Error('MAX_LINE больше страницы: строка события не помещается в одну страницу');
 const sqlite = require('./sqlite.cjs');
@@ -60,8 +63,13 @@ function appendEvent(memDir, ev) {
   if (!D || Date.now() < stuckUntil) { frame(); return line; }
   let db;
   try {
-    db = new D(path.join(memDir, LOCK), { timeout: WAIT_MS });
-    db.exec('BEGIN EXCLUSIVE');
+    db = new D(path.join(memDir, LOCK), { timeout: 0 });
+    for (const t0 = Date.now(); ;) {
+      try { db.exec('BEGIN EXCLUSIVE'); break; } catch (e) {
+        if (!/locked|busy/i.test(String(e && e.message)) || Date.now() - t0 >= WAIT_MS) throw e;
+        Atomics.wait(nap, 0, 0, 0.5 + Math.random());
+      }
+    }
   } catch {
     stuckUntil = Date.now() + STUCK_MS;
     try { if (db) db.close(); } catch { /* closed */ }

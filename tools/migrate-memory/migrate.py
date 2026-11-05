@@ -265,9 +265,13 @@ def verify_live(mem, map_file, project=None):
     mem = Path(mem)
     p = project or mem.parent.name
     mp = json.loads(Path(map_file).read_bytes().decode('utf-8'))
-    pm = (mp.get('projects') or {}).get(p) if isinstance(mp, dict) else None
+    if not isinstance(mp, dict) or not isinstance(mp.get('projects'), dict):
+        raise ValueError('файл соответствия: нужен {"version": 1, "projects": {...}}')
+    pm = mp['projects'].get(p)
     if pm is None:
         return f'проект {p}', [f'проекта {p} нет в файле соответствия {map_file}']
+    if not isinstance(pm, dict) or not all(isinstance(pm.get(k, []), list) for k in ('lessons', 'decisions', 'archive')):
+        raise ValueError(f'файл соответствия: у проекта {p} нужны списки lessons, decisions, archive')
     src = sources(mem)
     mapped = {f.get('ref') if isinstance(f, dict) else f
               for k in ('lessons', 'decisions') for d in pm.get(k, []) for f in d.get('from', [])}
@@ -311,7 +315,7 @@ def main(argv):
             return 2
         try:
             line, problems = verify_live(a.verify_live, a.map, a.project)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:  # JSONDecodeError and UnicodeDecodeError are ValueError
             print(f'--verify-live: не прочитать --map {a.map}: {e}', file=sys.stderr)
             return 2
         print(line)
