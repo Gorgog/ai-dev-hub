@@ -133,3 +133,10 @@ test('review 1: base without checks.json — the trunk (main/master), not the br
   p.commit(p.repo, 'm.txt', 'main moved');
   assert.match(facts(other, p.proj, 'push').join(), /отстала от main на 1/);
 });
+
+test('review 2: a report with a question later on its line is a report; a line that starts with the phrase and goes on in words is a status', () => {
+  for (const t of ['Готово к пушу: 2c049b8. Пушить?', 'Готово к пушу (2c049b8) — пушим?', 'Готово к пушу HEAD 2c049b8 — пушить?', '✅ Готово к пушу: abc1234'])
+    assert.strictEqual(isReport(t), 'push', t);
+  for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.', 'Готово к пушу — когда?', 'Готово к пушу, если ревью чистое?'])
+    assert.strictEqual(isReport(t), null, t);
+});
