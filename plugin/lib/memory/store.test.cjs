@@ -299,3 +299,13 @@ test('find and why give an absolute file path that exists', () => {
   assert.ok(path.isAbsolute(h.file) && fs.existsSync(h.file), h.file);
   assert.ok(fs.existsSync(S.why(d, 'why-local-plan').file));
 });
+
+// Review round 2 (05.11).
+test('status operations on mixed line endings (LF frontmatter, a CRLF body line) — work, the body bytes kept', () => {
+  const d = memory(SET);
+  const f = path.join(d, 'lessons', 'mix.md');
+  const text = lesson('mix', 'Первая строка урока.').replace('Первая строка урока.\n', 'Первая строка урока.\r\n');
+  fs.writeFileSync(f, text);
+  S.retire(d, 'mix', {});
+  assert.strictEqual(fs.readFileSync(f, 'utf8'), text.replace('status: active', 'status: retired'));
+});

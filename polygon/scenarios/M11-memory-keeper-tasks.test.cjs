@@ -134,3 +134,13 @@ test('M11: промах Edit по простому тексту — не экр�
   assert.deepStrictEqual(failed(await V['M11-retire'].grade({ run: miss('status:  active'), ctx: st.ctx })), []);
   assert.ok(failed(await V['M11-retire'].grade({ run: miss('cmd: prettier\\[^|]'), ctx: st.ctx })).some((f) => /no-escaping-errors/.test(f)));
 });
+
+test('M11: промах MultiEdit по тексту с экранированием — тоже экранирование', async () => {
+  const st = await fixture('M11-retire');
+  recall(st, 'retire', 'mailhog-check');
+  const r = { turns: 3, costUsd: 0, events: [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu2', name: 'MultiEdit', input: { edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'cmd: x\\s', new_string: 'y' }] } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu2', is_error: true, content: 'String to replace not found in file.' }] } },
+    { type: 'result', usage: {} }] };
+  assert.ok(failed(await V['M11-retire'].grade({ run: r, ctx: st.ctx })).some((f) => /no-escaping-errors/.test(f)));
+});

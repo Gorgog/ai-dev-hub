@@ -141,3 +141,24 @@ test('validator: source is a whole word; created is a real date', () => {
   assert.deepStrictEqual(problems(withLine(GOOD, /source: .*/, 'source: пользователь')), []);
   assert.ok(problems(withLine(GOOD, /created: .*/, 'created: 2026-13-45')).some((p) => /created/.test(p)));
 });
+
+// Review round 2 (05.11): no exponential backtracking; keys are search labels, not text that acts.
+test('validator: 30 flags after `git` without a subcommand — linear time, not exponential', () => {
+  const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
+  for (const tail of [`${'--a '.repeat(30)}x`, `${'-C a '.repeat(30)}x`, `${'-c k=v '.repeat(30)}x`]) {
+    const t0 = Date.now();
+    problems(`${head}Пример: git ${tail}.\nВторая.\n`);
+    assert.ok(Date.now() - t0 < 200, `${tail.slice(0, 12)}…: ${Date.now() - t0} мс`);
+  }
+});
+
+test('validator: a quoted path after `git -C` does not hide a push', () => {
+  const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
+  assert.ok(problems(`${head}Делай \`git -C "my dir" push\` сам.\nВторая.\n`).some((p) => /команд/.test(p)));
+});
+
+test('validator: `git push` as a search key is fine; a URL in keys is not; the text is still checked', () => {
+  const head = (k) => withLine(GOOD, /keys: .*/, `keys: [${k}]`);
+  assert.deepStrictEqual(problems(head('git push, worktree')), []);
+  assert.ok(problems(head('https://example.com/x')).some((p) => /URL/.test(p)));
+});
