@@ -197,6 +197,20 @@ test('records: code blocks, «#» lines without a space and text after a comment
   assert.strictEqual(rows.filter((x) => x.file === 'decisions.md').length, 1, 'a code block does not cut the section');
 });
 
+test('records: a code block inside a comment is still a comment; a comment inside a code block is text', () => {
+  const d = tmp();
+  const mem = path.join(d, 'snap', 'projects', 'p', 'memory');
+  fs.mkdirSync(mem, { recursive: true });
+  fs.writeFileSync(path.join(mem, 'errors.md'), ['# T', '', '<!-- шаблон:', '```bash', '# пример', '```', '-->', '- пункт',
+    '- код:', '```', '<!-- не комментарий -->', '```', ''].join('\n'));
+  const r = run(['--snapshot', path.join(d, 'snap'), '--list']);
+  assert.strictEqual(r.code, 0, r.log);
+  const texts = r.log.trim().split('\n').map((l) => JSON.parse(l).text);
+  assert.strictEqual(texts.length, 2, texts.join(' | '));
+  assert.strictEqual(texts[0], 'пункт');
+  assert.match(texts[1], /<!-- не комментарий -->/);
+});
+
 test('--list prints every record with its ref, line and text as JSON lines (the map author works from it)', () => {
   const r = run(['--snapshot', SNAP, '--list']);
   assert.strictEqual(r.code, 0, r.log);
