@@ -127,7 +127,7 @@ def model_runs(root, evals, repeats):
             continue
         res = json.loads(r.stdout.splitlines()[-1])
         out.append({'run': n, 'hook_log': res['hookLog'], 'cwd': res['cwd'], 'checks': res['checks'],
-                    'agents': res['agents'], 'cost': res['cost'], 'turns': res['turns'],
+                    'agents': res['agents'], 'turns': res['turns'],
                     'transcript': res['transcript']})
     return out
 
@@ -152,7 +152,7 @@ def main():
         if m.get('hook_log') and Path(m['hook_log']).exists():
             m['by_agent'] = analyze(m['hook_log'], m.get('cwd') or Path(m['hook_log']).parent.joinpath(
                 'hub/projects/demo/repo'))
-        print(json.dumps({k: m.get(k) for k in ('run', 'by_agent', 'agents', 'cost', 'error')}, ensure_ascii=False))
+        print(json.dumps({k: m.get(k) for k in ('run', 'by_agent', 'agents', 'error')}, ensure_ascii=False))
     numbers = {}
     for m in details.get('mock', []):
         numbers[f"mock_{'env' if m['keep'] else 'no_env'}_drift"] = \
