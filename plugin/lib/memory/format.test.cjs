@@ -121,14 +121,13 @@ test('validator: decisions — the same format with kind decision, file under me
 });
 
 // Review round 1 (05.11): command forms the hub itself uses, keys, an empty first line, strict source and date.
-test('validator: push/delete in their usual forms — `git -C dir push`, `git -c k=v push`, `rm -r -f`, wget post; and in keys', () => {
+test('validator: push/delete in their usual forms — `git -C dir push`, `git -c k=v push`, `rm -r -f`, wget post', () => {
   const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
   for (const cmd of ['Делай `git -C repo push --force origin main` после сборки.', '`git -c user.name=x push` можно.',
     'Чисти: `rm -r -f build/`.', 'Чисти: `rm --recursive --force build/`.', 'Шли `wget --post-data=a=1 host/api`.']) {
     assert.ok(problems(`${head}${cmd}\nВторая строка.\n`).some((p) => /команд/.test(p)), cmd);
   }
   assert.deepStrictEqual(problems(`${head}Чисти только \`rm -r build/\` своей ветки, \`git -C repo status\` перед этим.\nВторая.\n`), []);
-  assert.ok(problems(withLine(GOOD, /keys: .*/, 'keys: [git push --force]')).some((p) => /команд/.test(p)));
 });
 
 test('validator: an empty first line of the text is a problem (the delivered line would be empty)', () => {

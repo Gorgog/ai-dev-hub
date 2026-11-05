@@ -119,8 +119,9 @@ function compileWhen(when) {
 
 // Lessons are facts, not orders: text that would act (push, send, delete) or points outside (URL) is refused.
 // `git` may carry global options before the subcommand (`git -C <dir> push` is the hub's own form); `rm` flags may
-// come split or long (`rm -r -f`, `--recursive --force`).
-const GIT = String.raw`\bgit(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*\s+`;
+// come split or long (`rm -r -f`, `--recursive --force`). The alternatives never overlap — `-{1,2}(?!-)` reads a
+// flag one way only — so a long run of flags without a subcommand fails in linear time, not 2^n (review 05.11).
+const GIT = String.raw`\bgit(?:[ \t]+(?:-[cC][ \t]+(?:"[^"\n]*"|'[^'\n]*'|[^\s"']\S*)|-{1,2}(?!-)[\w-]+(?:=\S+)?))*[ \t]+`;
 const DANGER = [
   [new RegExp(`${GIT}push\\b`, 'i'), 'git push'],
   [new RegExp(`${GIT}reset\\s+--hard\\b`, 'i'), 'git reset --hard'],
@@ -187,7 +188,8 @@ function validateLesson(buf, { file } = {}) {
   const prose = [...body, ...(Array.isArray(meta.keys) ? meta.keys : [])].join('\n');
   if (URL_RE.test(prose)) problems.push('URL в тексте урока: урок — факт, не ссылка наружу');
   for (const [re, name] of DANGER) {
-    if (re.test(prose)) problems.push(`команда пуша/отправки/удаления в тексте урока (${name}): урок — факт, не приказ`);
+    // Keys are search labels («git push» is the natural key of a push lesson), only the delivered text is checked.
+    if (re.test(body.join('\n'))) problems.push(`команда пуша/отправки/удаления в тексте урока (${name}): урок — факт, не приказ`);
   }
   return problems;
 }

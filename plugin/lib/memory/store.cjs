@@ -300,7 +300,7 @@ function writeAtomic(file, data) {
 // The text with one frontmatter field line replaced (a block list under it removed), every other byte kept — CRLF
 // files stay CRLF. Pure: callers compute every new text first and write only when all of them are ready.
 function withField(file, text, key, value) {
-  const nl = text.includes('\r\n') ? '\r\n' : '\n';
+  const nl = text.startsWith('---\r\n') ? '\r\n' : '\n'; // the frontmatter's own line end: a CRLF body line is not it
   const lines = text.split(nl);
   const end = lines.indexOf('---', 1);
   if (lines[0] !== '---' || end < 0) throw new Error(`${path.basename(file)}: нет frontmatter`);
@@ -339,7 +339,12 @@ function addLesson(memDir, text, { dir = 'lessons' } = {}) {
   fs.writeFileSync(tmp, String(text));
   try { fs.linkSync(tmp, file); } catch (e) {
     if (e.code === 'EEXIST') return { ok: false, id, problems: [`урок ${id} уже есть`] };
-    throw e;
+    if (!['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV'].includes(e.code)) throw e;
+    // A file system without hard links: exclusive create — still never over another session's file.
+    try { fs.writeFileSync(file, String(text), { flag: 'wx' }); } catch (e2) {
+      if (e2.code === 'EEXIST') return { ok: false, id, problems: [`урок ${id} уже есть`] };
+      throw e2;
+    }
   } finally { fs.rmSync(tmp, { force: true }); }
   refreshTriggers(memDir);
   return { ok: true, id, file, problems: [] };
@@ -389,8 +394,10 @@ function readTriggers(memDir) {
   try { return JSON.parse(fs.readFileSync(path.join(memDir, TRIGGERS), 'utf8')); } catch { return { version: 1, sig: null, lessons: [] }; }
 }
 
+// The rules that build the file are part of its signature: a file built by an older filter is rebuilt.
+const TRIGGERS_RULES = '2';
 function ensureTriggers(memDir) {
-  const sig = signature(memDir, { events: false });
+  const sig = `${TRIGGERS_RULES}:${signature(memDir, { events: false })}`;
   const cur = readTriggers(memDir);
   if (cur.sig === sig) return { rebuilt: false, count: cur.lessons.length };
   // Only lessons the write check would accept: a file written past the hook (Bash, an external import) gets no trigger.
@@ -398,7 +405,7 @@ function ensureTriggers(memDir) {
     .filter((d) => d.dir === 'lessons' && LIVE.includes(d.status) && Array.isArray(d.meta.when) && d.meta.when.length)
     .filter((d) => !validateLesson(d.raw, { file: `${path.basename(memDir)}/${d.rel}` }).length)
     .map((d) => ({ id: d.id, kind: d.kind, layer: layer(d), first: d.first, when: d.meta.when }));
-  const now = signature(memDir, { events: false });
+  const now = `${TRIGGERS_RULES}:${signature(memDir, { events: false })}`;
   const file = path.join(memDir, TRIGGERS);
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
   fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, sig: now === sig ? sig : `stale:${sig}`, lessons })}\n`);

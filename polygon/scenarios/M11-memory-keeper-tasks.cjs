@@ -100,6 +100,11 @@ const TASKS = [
 // only when that text carried escapes (\, quotes, backticks, $): a miss on plain words is an ordinary miss.
 const ESCAPING = /unexpected EOF|unterminated|unexpected token|syntax error|bad substitution|unmatched|SyntaxError|Invalid regular expression/i;
 const EDIT_MISS = /String to replace not found|old_string/i;
+// The texts an Edit or a MultiEdit looked for.
+const oldStrings = (use) => {
+  const i = (use && use.input) || {};
+  return [i.old_string, ...(Array.isArray(i.edits) ? i.edits.map((e) => e && e.old_string) : [])].filter(Boolean).join('\n');
+};
 function toolErrors(events) {
   const out = [];
   const uses = new Map();
@@ -111,7 +116,7 @@ function toolErrors(events) {
       const text = (typeof b.content === 'string' ? b.content : (b.content || []).map((c) => c.text || '').join('\n')).slice(0, 300);
       const use = uses.get(b.tool_use_id);
       const escaping = ESCAPING.test(text)
-        || (EDIT_MISS.test(text) && /[\\`'"$]/.test(String((use && use.input && use.input.old_string) || '')));
+        || (EDIT_MISS.test(text) && /[\\`'"$]/.test(oldStrings(use)));
       out.push({ text, escaping });
     }
   }
