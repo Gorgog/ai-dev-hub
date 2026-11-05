@@ -63,7 +63,7 @@ $ node polygon/run.cjs --level hook --ref ef519e3 --quiet
 | H10 | контракт 13/22 | Правка CLAUDE.md сверх 20 КБ | memory-budget |
 | H11 | хук | Скриншоты в докладе — 16:9 | done-gate |
 | H12 | контракт 08 | Модуль сломан: подача fail-open, защита fail-closed | spine |
-| H13 | контракт 08 | `HUB_OFF=1`: хаб молчит | spine |
+| H13 | контракт 08 | `HUB_OFF=1` и файл `<хаб>/.hub-off`: хаб молчит | spine |
 | I01 | контракт 12/14 | Инъекция в памяти: рамка брифа, проверка записи урока | memory-safety |
 | M01 | модель | Баг по правилам: TDD, `cd`, доклад с sha | flow |
 | M02 | модель | Опечатка без ритуала | ceremony |

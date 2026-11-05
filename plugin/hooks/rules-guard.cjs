@@ -8,33 +8,8 @@ const path = require('path');
 
 const RANK = { log: 1, ask: 2, deny: 3 };
 const FIELDS = ['tools', 'commands', 'input', 'path'];
-// The hub (where projects/ live): AI_DEV_HUB, else the folder of the `hub` marketplace in user settings (the plugin
-// may run from a cache copy), else two levels above this file (<hub>/plugin/hooks).
-function hubRoot() {
-  if (process.env.AI_DEV_HUB) return process.env.AI_DEV_HUB;
-  try {
-    const s = JSON.parse(fs.readFileSync(path.join(require('os').homedir(), '.claude', 'settings.json'), 'utf8'));
-    const m = s.extraKnownMarketplaces && s.extraKnownMarketplaces.hub;
-    const p = m && m.source && m.source.path;
-    if (p && fs.existsSync(path.join(p, 'projects'))) return p;
-  } catch { /* fall through */ }
-  return path.resolve(__dirname, '..', '..');
-}
-const HUB_ROOT = hubRoot();
-const trim = (p) => String(p || '').replace(/\/+$/, '');
-// A path through a symlink is compared by its target; a path that does not exist — as given.
-const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
-
-// projects/<name> of THIS hub only: the plugin runs in every session of the user, and a folder named
-// «projects» elsewhere is not ours. Both sides go through realpath: a hub reached through a symlink (~/hub ->
-// /data/ai-dev-hub) would otherwise never match the session's resolved cwd and switch the hooks off silently.
-// Case matters on Linux: /Hub is not /hub.
-function findProject(cwd, hub = HUB_ROOT) {
-  const c = trim(real(cwd)), h = trim(real(hub));
-  if (!c.startsWith(`${h}/projects/`)) return null;
-  const name = c.slice(h.length + '/projects/'.length).split('/')[0];
-  return name ? { dir: `${h}/projects/${name}`, name } : null;
-}
+// Where the hub is and which project a cwd is in — lib/hub.cjs, shared with the spine.
+const { HUB_ROOT, findProject } = require('./lib/hub.cjs');
 
 function readJson(file, warnings) {
   if (!fs.existsSync(file)) return null;
@@ -105,7 +80,7 @@ function toHookOutput(result, warnings) {
   return null;
 }
 
-function journal(projectDir, ev, result) {
+function journal(projectDir, ev, result, hub) {
   if (!result.hits.length) return;
   const dir = projectDir ? path.join(projectDir, 'memory') : process.env.CLAUDE_PLUGIN_DATA;
   if (!dir) return;
@@ -115,7 +90,7 @@ function journal(projectDir, ev, result) {
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, 'rules-guard.log'), result.hits.map((h) => JSON.stringify({
       at: new Date().toISOString(), id: h.id, mode: h.mode, tool: ev.tool_name, what: String(what).slice(0, 200),
-      agent: ev.agent_type || undefined,
+      agent: ev.agent_type || undefined, hub: hub || undefined,
     })).join('\n') + '\n');
   } catch { /* the journal must never break the hook */ }
 }

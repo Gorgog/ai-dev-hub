@@ -101,3 +101,8 @@ test('brief: silent outside a project of this hub', () => {
   fs.mkdirSync(other, { recursive: true });
   assert.strictEqual(buildBrief(other, hub), '');
 });
+
+test('brief: the hub version (short sha of the hooks in use) is in the header', () => {
+  const { hub, repo } = project();
+  assert.match(buildBrief(repo, hub, 'abc1234').split('\n')[0], /^Бриф хаба: demo · ветка K-7 · изменённых 1 · хаб abc1234$/);
+});

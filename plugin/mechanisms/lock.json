@@ -1,0 +1,14 @@
+{
+  "id": "lock",
+  "event": "PreToolUse",
+  "file": "pretool.d/10-lock.cjs",
+  "handler": "lock",
+  "stage": "on",
+  "onError": "closed",
+  "failScope": "worktree",
+  "state": ["memory/dispatch-grants.json", "memory/dispatch-guard.log"],
+  "reads": ["dispatch-rules.json"],
+  "polygon": ["H02", "H12"],
+  "replaces": "v1: pretool.cjs → skills/dispatch/scripts/guard.cjs decide()",
+  "review": "2027-02-05"
+}

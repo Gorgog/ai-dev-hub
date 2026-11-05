@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Install the hub as the Claude Code plugin `hub` from this folder (a local marketplace; Claude Code keeps a cached
-// copy tied to the hub's commit, so after edits: commit, then update — this script runs `claude plugin marketplace
-// update hub` and `claude plugin update hub@hub` when the CLI is there). Writes ~/.claude/settings.json (backup first): the marketplace `hub` and the
-// enabled plugin `hub@hub`; removes what the old install left — the user-level guard hook (now the plugin's
-// PreToolUse), links to hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
-// (moved to a backup, never deleted). Idempotent. usage: node install.cjs [--dry-run]
+// Install the hub as the Claude Code plugin `hub` from this folder (a local marketplace). The hooks run straight from
+// this folder's working tree (CLAUDE_PLUGIN_ROOT is the marketplace folder, probe P17): a commit here is live in every
+// session at once, and hooks.json is read at session start. This script runs `claude plugin marketplace update hub`
+// and `claude plugin update hub@hub` when the CLI is there. Writes ~/.claude/settings.json (backup first): the
+// marketplace `hub` and the enabled plugin `hub@hub`; removes what the old install left — the user-level guard hook
+// (now the plugin's PreToolUse), links to hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
+// (moved to a backup, never deleted). Checks node ≥ 22 (the hook spine needs it). Idempotent.
+// usage: node install.cjs [--dry-run]
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -16,6 +18,12 @@ const home = path.join(os.homedir(), '.claude');
 const file = path.join(home, 'settings.json');
 const stamp = new Date().toISOString().slice(0, 10);
 const say = (s) => console.log(s);
+
+// The hook spine (plugin/hooks/run.cjs) runs on node ≥ 22 with node:sqlite; older node — say it, install anyway.
+const major = Number(process.versions.node.split('.')[0]);
+let sqlite = true;
+try { require('node:sqlite'); } catch { sqlite = false; }
+if (major < 22 || !sqlite) say(`node:    ${process.versions.node}${sqlite ? '' : ' без node:sqlite'} — хукам хаба нужен node ≥ 22; обнови node`);
 
 let settings = {};
 if (fs.existsSync(file)) settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -90,3 +98,4 @@ if (!dry) {
   say(u.status === 0 ? `plugin:  ${out}` : 'plugin:  claude CLI недоступен — обнови вручную: claude plugin marketplace update hub && claude plugin update hub@hub');
 }
 say('Done. Start a NEW Claude Code session: skills /hub:*, agents hub:*, hooks of the plugin load at session start.');
+say(`Switch the hub off: the file ${path.join(hub, '.hub-off')} — live sessions too, no restart (remove it to switch back on); HUB_OFF=1 — for a session started with it.`);

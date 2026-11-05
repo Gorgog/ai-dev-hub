@@ -1,0 +1,14 @@
+{
+  "id": "memory-brief",
+  "event": "SessionStart",
+  "file": "sessionstart.d/10-memory-brief.cjs",
+  "handler": "memory-brief",
+  "stage": "on",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": ["memory/errors-index.md", "brief.json", "memory/sessions/", "rules.json", "dispatch-rules.json", "checks.json"],
+  "polygon": ["H04", "H12"],
+  "replaces": "v1: session-start.cjs",
+  "review": "2027-02-05"
+}

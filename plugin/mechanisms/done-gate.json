@@ -1,0 +1,14 @@
+{
+  "id": "done-gate",
+  "event": "Stop",
+  "file": "stop.d/10-done-gate.cjs",
+  "handler": "done-gate",
+  "stage": "on",
+  "onError": "open",
+  "failScope": "project",
+  "state": [],
+  "reads": [],
+  "polygon": ["H01", "H11"],
+  "replaces": "v1: stop.cjs",
+  "review": "2027-02-05"
+}

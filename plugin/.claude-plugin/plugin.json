@@ -1,7 +1,7 @@
 {
   "name": "hub",
   "displayName": "ai-dev-hub",
-  "description": "Base of ai-dev-hub: rules-guard and session brief hooks, dispatcher with resource lock, task lanes (fast-lane, checks, ship, debug), estimates, wind-down, clean-context reviewer.",
+  "description": "Base of ai-dev-hub: hook spine (one runner per event, modules with a registry, switch HUB_OFF), rules-guard and session brief hooks, dispatcher with resource lock, task lanes (fast-lane, checks, ship, debug), estimates, wind-down, clean-context reviewer.",
   "author": { "name": "Gorgog" },
   "repository": "https://github.com/Gorgog/ai-dev-hub",
   "license": "MIT",

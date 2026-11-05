@@ -3,7 +3,6 @@
 // working tree and the HEAD sha printed in it (hub rule 3: numbers from the final HEAD). Otherwise Claude is sent
 // back with the reason. The project folder itself (a dispatcher relays sessions' reports there) is not checked.
 'use strict';
-const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { findProject, HUB_ROOT } = require('./rules-guard.cjs');
 const { workTree } = require('./session-start.cjs');
@@ -29,10 +28,8 @@ function doneGate(ev, hub = HUB_ROOT) {
   return { decision: 'block', reason: `«Готово к пушу» не проходит (правило 3 хаба): ${problems.join('; ')}. Закоммить, прогони проверки на итоговом HEAD и повтори доклад с sha.` };
 }
 
-if (require.main === module) {
-  let ev = {};
-  try { ev = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { /* no input */ }
-  try { const r = doneGate(ev); if (r) process.stdout.write(JSON.stringify(r)); } catch { /* never break a stop */ }
-}
-
 module.exports = { doneGate };
+
+// v1 entry of Stop, kept for sessions started before the spine (their hooks.json calls this file): done-gate now
+// runs from stop.d/10-done-gate.cjs through the spine.
+if (require.main === module) require('./run.cjs').cli('Stop');

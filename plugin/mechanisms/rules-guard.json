@@ -1,0 +1,14 @@
+{
+  "id": "rules-guard",
+  "event": "PreToolUse",
+  "file": "pretool.d/20-rules-guard.cjs",
+  "handler": "rules-guard",
+  "stage": "on",
+  "onError": "closed",
+  "failScope": "project",
+  "state": ["memory/rules-guard.log"],
+  "reads": ["plugin/hooks/base-rules.json", "rules.json"],
+  "polygon": ["H03"],
+  "replaces": "v1: pretool.cjs → rules-guard.cjs",
+  "review": "2027-02-05"
+}

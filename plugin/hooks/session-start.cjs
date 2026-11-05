@@ -2,6 +2,7 @@
 // SessionStart: a short brief of the hub project into Claude's context instead of «read the index first».
 // Project, branch and changes; preflight (configs parse, checks background, index limits); the errors index (cut
 // to the budget); the latest session note of this branch — its «Дальше». Silent outside projects/<name>/ of the hub.
+// A library of the module sessionstart.d/10-memory-brief.cjs.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -84,13 +85,13 @@ function workTree(cwd, proj) {
   return null;
 }
 
-function buildBrief(cwd, hub = HUB_ROOT) {
+function buildBrief(cwd, hub = HUB_ROOT, version = '') {
   const proj = findProject(cwd, hub);
   if (!proj || !fs.existsSync(proj.dir)) return '';
   const wt = workTree(cwd, proj) || (fs.existsSync(path.join(proj.dir, 'repo')) ? path.join(proj.dir, 'repo') : null);
   const branch = wt ? git(wt, 'branch', '--show-current') : '';
   const changed = wt ? git(wt, 'status', '--porcelain').split('\n').filter(Boolean).length : 0;
-  const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}`];
+  const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}${version ? ` · хаб ${version}` : ''}`];
   const warn = preflight(proj.dir);
   if (warn.length) head.push('Предполётная проверка:', ...warn.map((w) => `- ${w}`));
   const note = latestNote(proj.dir, branch);
@@ -115,10 +116,8 @@ function buildBrief(cwd, hub = HUB_ROOT) {
   return [...head, body ? `Правила из ошибок (memory/errors-index.md):\n${body}` : '', ...tail].filter(Boolean).join('\n').slice(0, BUDGET);
 }
 
-if (require.main === module) {
-  let ev = {};
-  try { ev = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { /* no input */ }
-  try { const b = buildBrief(ev.cwd || process.cwd()); if (b) process.stdout.write(b + '\n'); } catch { /* never break a session start */ }
-}
-
 module.exports = { buildBrief, workTree, BUDGET };
+
+// v1 entry of SessionStart, kept for sessions started before the spine (their hooks.json calls this file): the
+// brief now comes from sessionstart.d/10-memory-brief.cjs through the spine.
+if (require.main === module) require('./run.cjs').cli('SessionStart');
