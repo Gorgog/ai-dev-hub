@@ -1,15 +1,16 @@
 // Hub rules in Bash commands for step0.py: stdin - a JSON array of commands, stdout - a JSON array, same order, of
-// {rules: {<rule>: 0|1}, commit: 0|1, checks_full: 0|1}. A key in `rules` is an opportunity of that rule, its value -
+// {rules: {<rule>: 0|1}, events: [...]}. A key in `rules` is an opportunity of that rule, its value -
 // violated. Read by words outside quotes, comments and heredoc bodies, simple command by simple command (the tokenizer
 // of shell-flags.cjs); `cd` - the polygon's own parser: an opportunity is any `cd` command (in a subshell too), a
 // violation - a bare one (polygon/lib/shell.cjs).
-//   git-add-all     git add            -> -A, --all or the path .
+//   git-add-all     git add            -> the path ., or -A/--all with no path named
 //   sed-in-place    sed -i             -> always (Edit calls are its kept opportunities, counted by step0.py)
 //   no-verify       git commit         -> --no-verify or a short cluster with n
 //   clean-x         git clean          -> a short cluster with x or X
 //   worktree-force  git worktree remove-> --force or a short cluster with f
-//   checkout-dot    git checkout/restore -> the path .
-// commit - a git commit; checks_full - a run of the checks script (checks.cjs / checks.sh) with --full after it.
+//   checkout-dot    git checkout/restore -> the path . (restore --staged alone touches no file: no opportunity)
+// events - in the command's order: 'commit' (a git commit) and 'checks' (the checks script, checks.cjs / checks.sh,
+// run with --full after it).
 'use strict';
 const path = require('path');
 const { bareCd } = require(path.join(__dirname, '..', '..', '..', 'polygon', 'lib', 'shell.cjs'));
@@ -78,7 +79,7 @@ function gitArgs(words) {
 function rulesOf(cmd) {
   const rules = {};
   const set = (rule, v) => { rules[rule] = Math.max(rules[rule] || 0, v ? 1 : 0); };
-  let commit = 0, checksFull = 0;
+  const events = [];
   for (const raw of simpleCommands(cmd)) {
     const words = program(raw);
     if (!words.length) continue;
@@ -87,22 +88,28 @@ function rulesOf(cmd) {
     if (name === 'cd') set('cd', 0);
     if (name === 'sed' && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'))) set('sed-in-place', 1);
     const ci = words.findIndex((w) => /^checks\.(cjs|sh)$/.test(path.basename(w)));
-    if (ci !== -1 && words.slice(ci + 1).includes('--full')) checksFull = 1;
+    if (ci !== -1 && words.slice(ci + 1).includes('--full')) events.push('checks');
     const g = gitArgs(words);
     if (!g || !g.length) continue;
     const [sub, ...rest] = g;
-    if (sub === 'add') set('git-add-all', rest.some((a) => a === '.' || a === '--all' || cluster(a, 'A')));
+    if (sub === 'add') {
+      const dd = rest.indexOf('--');
+      const paths = dd === -1 ? rest.filter((a) => !a.startsWith('-')) : rest.slice(dd + 1);
+      const all = rest.slice(0, dd === -1 ? rest.length : dd).some((a) => a === '--all' || cluster(a, 'A'));
+      set('git-add-all', paths.includes('.') || (all && !paths.length));
+    }
     if (sub === 'commit') {
-      commit = 1;
+      events.push('commit');
       set('no-verify', rest.some((a) => a === '--no-verify' || cluster(a, 'n')));
     }
     if (sub === 'clean') set('clean-x', rest.some((a) => cluster(a, 'xX')));
     if (sub === 'worktree' && rest[0] === 'remove') set('worktree-force', rest.some((a) => a === '--force' || cluster(a, 'f')));
-    if (sub === 'checkout' || sub === 'restore') set('checkout-dot', rest.includes('.'));
+    const staged = rest.some((a) => a === '--staged' || a === '-S') && !rest.some((a) => a === '--worktree' || a === '-W');
+    if (sub === 'checkout' || (sub === 'restore' && !staged)) set('checkout-dot', rest.includes('.'));
   }
   if ('cd' in rules) rules.cd = bareCd(cmd) ? 1 : 0;
   else if (bareCd(cmd)) rules.cd = 1;
-  return { rules, commit, checks_full: checksFull };
+  return { rules, events };
 }
 
 let input = '';

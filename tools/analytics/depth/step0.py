@@ -149,14 +149,13 @@ class Journals:
 def opportunities(rows, flags, j, checks_since):
     """(rule opportunities, cd opportunities): dicts with kind, stratum, rule, depth, v, session, agent, epoch."""
     rules, cds = [], []
-    commits, checks = {}, {}  # session -> [(t, n)]
+    commits, checks = {}, {}  # session -> [(t, n, order in the command)]
     for r in rows:
         f = flags.get(r['id'])
-        key = (r['t'], r['n'])
-        if f and f['commit']:
-            commits.setdefault(r['session'], []).append(key)
-        if (f and f['checks_full']) or r['id'] in j.checks_ids:
-            checks.setdefault(r['session'], []).append(key)
+        for i, e in enumerate(f['events'] if f else []):
+            (commits if e == 'commit' else checks).setdefault(r['session'], []).append((r['t'], r['n'], i))
+        if r['id'] in j.checks_ids:
+            checks.setdefault(r['session'], []).append((r['t'], r['n'], 0))
         found = dict(f['rules']) if f else {}
         if r['tool'] in EDIT_TOOLS:
             found['sed-in-place'] = 0
@@ -167,7 +166,7 @@ def opportunities(rows, flags, j, checks_since):
     for sid, epoch, d, t, order in sorted(j.reports):
         if t < checks_since:
             continue
-        key = (t, order)
+        key = (t, order, 0)
         last = max((c for c in commits.get(sid, []) if c < key), default=None)
         ok = any((last is None or c > last) and c < key for c in checks.get(sid, []))
         rules.append({'kind': 'main', 'stratum': f'{sid}/|checks-full', 'rule': 'checks-full', 'depth': d, 'v': 0 if ok else 1,
