@@ -78,7 +78,7 @@ test('pre-commit 30-mechanisms: 12 handlers fit the budget (owner decision 05.11
   assert.strictEqual(r.status, 0, r.err);
 });
 
-test('pre-commit 30-mechanisms: more than 12 handlers or 10 state kinds is refused with the list', (t) => {
+test('pre-commit 30-mechanisms: more than 12 handlers or 12 state kinds is refused with the list', (t) => {
   const wt = setup(t);
   const files = {};
   for (const id of ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm']) {
@@ -89,13 +89,20 @@ test('pre-commit 30-mechanisms: more than 12 handlers or 10 state kinds is refus
   assert.notStrictEqual(r.status, 0, r.err);
   assert.match(r.err, /обработчик.*13/);
   assert.match(r.err, /a, b, c, d, e, f, g, h, i, j, k, l, m/);
-  // One handler, eleven kinds of state.
+  // One handler, thirteen kinds of state.
   const wt2 = setup(t);
-  const state = Array.from({ length: 11 }, (_, i) => `memory/s${i}.json`);
+  const state = Array.from({ length: 13 }, (_, i) => `memory/s${i}.json`);
   const s = commit(wt2, { 'plugin/mechanisms/a.json': record('a', { state }) });
   assert.notStrictEqual(s.status, 0, s.err);
-  assert.match(s.err, /состояни.*11/);
-  assert.match(s.err, /memory\/s10\.json/);
+  assert.match(s.err, /состояни.*13/);
+  assert.match(s.err, /memory\/s12\.json/);
+});
+
+test('pre-commit 30-mechanisms: 12 state kinds fit the budget (owner decision 05.11)', (t) => {
+  const wt = setup(t);
+  const state = Array.from({ length: 12 }, (_, i) => `memory/s${i}.json`);
+  const s = commit(wt, { 'plugin/mechanisms/a.json': record('a', { state }) });
+  assert.strictEqual(s.status, 0, s.err);
 });
 
 test('pre-commit 30-mechanisms: a module in a folder of no event (typo) is refused; two records of one module too', (t) => {
