@@ -22,12 +22,19 @@ function fixture(base, work) {
   return { hub, proj, repo };
 }
 
-// Case → PreToolUse event: relative file paths from the repo; <repo>, <hub>, <tmp> in commands and paths.
-function event({ tool, input, agent_type }, { hub, repo, work }) {
+// Case → PreToolUse event: relative file paths from the repo; <repo>, <hub>, <tmp> in commands and paths; transcript —
+// records of the session journal, written to a file for transcript_path.
+function event({ id, tool, input, agent_type, transcript }, { hub, repo, work }) {
   const sub = (s) => String(s).replace(/<repo>/g, repo).replace(/<hub>/g, hub).replace(/<tmp>/g, path.join(work, 'tmp'));
   const inp = JSON.parse(sub(JSON.stringify(input)));
   if (inp.file_path && !path.isAbsolute(inp.file_path)) inp.file_path = path.join(repo, inp.file_path);
-  return { hook_event_name: 'PreToolUse', session_id: 'eval', cwd: repo, tool_name: tool, tool_input: inp, ...(agent_type ? { agent_type } : {}) };
+  const ev = { hook_event_name: 'PreToolUse', session_id: 'eval', cwd: repo, tool_name: tool, tool_input: inp, ...(agent_type ? { agent_type } : {}) };
+  if (transcript) {
+    ev.transcript_path = path.join(work, 'tmp', `${String(id).replace(/[^\w.-]/g, '_')}.jsonl`);
+    fs.mkdirSync(path.dirname(ev.transcript_path), { recursive: true });
+    fs.writeFileSync(ev.transcript_path, transcript.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  }
+  return ev;
 }
 
 // A catch passes only on the mechanism's own deny (its reason matching `must`, when given); quiet — no deny of any
@@ -43,7 +50,7 @@ function judge(mech, cases, { base, pluginDir, work }, must = null) {
   });
 }
 
-const cases = (corpus, id) => corpus.map(([cid, tool, input, expect, source, agent_type]) => ({ id: cid, tool, input, expect, source, agent_type }))
+const cases = (corpus, id) => corpus.map(([cid, tool, input, expect, source, agent_type, transcript]) => ({ id: cid, tool, input, expect, source, agent_type, transcript }))
   .concat(realCorpus(id) || []);
 
 const R4 = 'правило 4 хаба';

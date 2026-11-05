@@ -431,11 +431,50 @@ function inlineScript(ev) {
 
 const roleOf = (type) => String(type || '').split(':').pop();
 
+// A model family by name, Latin or Cyrillic, as a person writes it in chat.
+const FAMILIES = { sonnet: /sonnet|сон+ет/i, fable: /fable|ф[еэ]йбл/i, haiku: /haiku|хайку/i };
+const TRANSCRIPT_CAP = 32 * 1024 * 1024;
+
+// The text of the person's last message in the session journal, system-reminder blocks cut out; null when the journal
+// is missing or unreadable. «The person» = origin.kind human: tool results, other sessions' messages (peer), task
+// notifications and hook injections are not them.
+function lastHumanText(file) {
+  if (typeof file !== 'string' || !file) return null;
+  let text;
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, TRANSCRIPT_CAP);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"human"')) continue;
+    let o;
+    try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (o.type !== 'user' || o.isMeta || !o.origin || o.origin.kind !== 'human') continue;
+    const c = o.message && o.message.content;
+    const raw = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n') : '';
+    return raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '');
+  }
+  return null;
+}
+
+// Rule 8: the reviewer runs on Opus (reviewer.md); another model only when the person named it in their last message.
 function agentModel(ev) {
   if (ev.tool_name !== 'Agent' && ev.tool_name !== 'Task') return null;
   const input = ev.tool_input || {};
-  if (roleOf(input.subagent_type) !== 'reviewer' || !input.model || /opus/i.test(String(input.model))) return null;
-  return { decision: 'deny', reason: `Хаб (agent-model): ревьюер — только на Opus (правило 8 хаба), модель задаёт reviewer.md. Повтори вызов ${ev.tool_name} с теми же полями без model (subagent_type: "${input.subagent_type}"), сейчас model: "${input.model}".` };
+  const model = String(input.model || '');
+  if (roleOf(input.subagent_type) !== 'reviewer' || !model || /opus/i.test(model)) return null;
+  const family = Object.keys(FAMILIES).find((f) => model.toLowerCase().includes(f));
+  const named = family ? FAMILIES[family] : new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const said = lastHumanText(ev.transcript_path);
+  if (said !== null && named.test(said)) return null;
+  return { decision: 'deny', reason: `Хаб (agent-model): ревьюер — только на Opus (правило 8 хаба), модель задаёт reviewer.md. Повтори вызов ${ev.tool_name} с теми же полями без model (subagent_type: "${input.subagent_type}"), сейчас model: "${input.model}"; другая модель — только если пользователь назовёт её сам${said === null ? ' (журнал сессии не прочитан)' : ''}.` };
 }
 
 // ---- agent-roles ---------------------------------------------------------------------------------------------------
