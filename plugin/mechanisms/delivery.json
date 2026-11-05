@@ -1,0 +1,14 @@
+{
+  "id": "delivery",
+  "event": "SessionStart",
+  "file": "sessionstart.d/00-delivery.cjs",
+  "handler": "delivery",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": ["<data>/sessions/<session_id>.json", "<data>/events/<YYYY-MM>.jsonl"],
+  "reads": [],
+  "polygon": ["H14", "H15", "H16"],
+  "replaces": "08: заглушка lib/deliver.cjs (порядок по приоритету, один элемент на ключ в вызове)",
+  "review": "2027-02-05"
+}

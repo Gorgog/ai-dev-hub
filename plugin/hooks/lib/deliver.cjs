@@ -17,3 +17,9 @@ function deliver(items) {
 }
 
 module.exports = { deliver, PRIORITY };
+
+// Slice 12 — skeleton: the tests come first.
+const LIMITS = {};
+const FRAME = { open: '', close: '' };
+const step = () => ({ text: '', final: null, events: [] });
+Object.assign(module.exports, { step, LIMITS, FRAME });

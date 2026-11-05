@@ -1,0 +1,14 @@
+{
+  "id": "delivery-subagent",
+  "event": "SubagentStart",
+  "file": "subagentstart.d/00-delivery.cjs",
+  "handler": "delivery",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": ["<data>/sessions/<session_id>.json"],
+  "reads": [],
+  "polygon": ["H14"],
+  "replaces": "—",
+  "review": "2027-02-05"
+}
