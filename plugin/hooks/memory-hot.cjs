@@ -104,7 +104,7 @@ function compileItem(w) {
 // regex, so a cold hook process compiles only the regexes whose literal is in the call (V8 compiles a regex on its
 // first run; 250 lessons are ≈ 670 of them). Conservative: only top-level atoms count — a top-level `|` gives none,
 // groups and classes break a run, a character made optional or repeated by `?`, `*`, `{` leaves it.
-function literalOf(src) {
+function literalOf(src, { raw = false } = {}) {
   let best = '', cur = '', depth = 0, inClass = false;
   const quant = (j) => src[j] === '{' && /^\{\d+(?:,\d*)?\}/.test(src.slice(j, j + 24));
   const flush = () => { if (cur.length > best.length) best = cur; cur = ''; };
@@ -141,6 +141,7 @@ function literalOf(src) {
     if (nx === '?' || nx === '*' || quant(i + 1)) { cur = cur.slice(0, -1); flush(); }
   }
   flush();
+  if (raw) return best.length >= 2 ? best : ''; // as written: the caller folds it the way the field is folded
   const lit = best.toLowerCase();
   // A letter whose case folding differs from toLowerCase (ς, µ) could make `includes` miss what `i` matches.
   return lit.length >= 2 && [...lit].every((ch) => ch.toUpperCase().toLowerCase() === ch) ? lit : '';
@@ -149,10 +150,20 @@ function literalOf(src) {
 // What the hot path knows of a regex source, computed on first use and shared by every item with that source: its
 // literal (for the `includes` before the regex) and the compiled regex (`i`, as written; one that does not compile
 // never matches).
+// The prefilter folds both sides exactly as the `i` flag without `u` compares characters (ECMAScript Canonicalize: a
+// character is its toUpperCase when that is one character and does not take a non-ASCII character to ASCII): ς and σ,
+// µ and μ, ϑ and θ share a capital, toLowerCase of the field would keep them apart and drop a real match.
+const canon = (ch) => { const u = ch.toUpperCase(); return u.length !== 1 || (ch.charCodeAt(0) >= 128 && u.charCodeAt(0) < 128) ? ch : u; };
+function foldText(s) {
+  if (!/[^\x00-\x7f]/.test(s)) return s.toUpperCase();
+  let out = '';
+  for (const ch of s) out += ch.length === 1 ? canon(ch) : ch;
+  return out;
+}
 const srcCache = new Map();
 function condOf(src) {
   let c = srcCache.get(src);
-  if (!c) { c = { lit: literalOf(src), re: undefined }; srcCache.set(src, c); }
+  if (!c) { c = { lit: foldText(literalOf(src, { raw: true })), re: undefined }; srcCache.set(src, c); }
   return c;
 }
 function rxOf(src, c = condOf(src)) {
@@ -168,13 +179,23 @@ const keyOf = (src) => {
   for (const ch of String(src)) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
   return `${String(src).length}.${h.toString(16)}`;
 };
-function readQuarantine(mem) {
+function readFile(mem) {
   try { const q = JSON.parse(fs.readFileSync(path.join(mem, QUARANTINE), 'utf8')); return q && typeof q === 'object' && !Array.isArray(q) ? q : {}; } catch { return {}; }
 }
-function quarantine(mem, entry) {
+// The quarantined sources ({key: entry}); `_suspects` — sources that were the slowest of a cut run, counted.
+const readQuarantine = (mem) => Object.fromEntries(Object.entries(readFile(mem)).filter(([k]) => !k.startsWith('_')));
+// entry → the quarantine at once; suspect → its count goes up, the second time it is quarantined too.
+function quarantine(mem, entry, { suspect = false } = {}) {
   try {
-    const q = readQuarantine(mem);
-    q[keyOf(entry.src)] = { ...entry, src: String(entry.src).slice(0, 300), at: new Date().toISOString() };
+    const q = readFile(mem);
+    const key = keyOf(entry.src);
+    if (suspect) {
+      const sus = q._suspects && typeof q._suspects === 'object' ? q._suspects : {};
+      sus[key] = (Number(sus[key]) || 0) + 1;
+      q._suspects = sus;
+      if (sus[key] < 2) { entry = null; } else delete sus[key];
+    }
+    if (entry) q[key] = { ...entry, src: String(entry.src).slice(0, 300), at: new Date().toISOString() };
     const file = path.join(mem, QUARANTINE);
     const tmp = `${file}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, `${JSON.stringify(q, null, 1)}\n`);
@@ -231,17 +252,19 @@ function fieldsOf(ev, { withOut = false } = {}) {
 // opts.skip — quarantined keys; opts.state — where the condition being tested is noted (state.cur) for the watchdog.
 function match(triggers, f, { skip = null, state = null } = {}) {
   const hits = [];
-  const low = {};
-  const lower = (k) => (low[k] ??= f[k].toLowerCase());
+  const folded = {};
+  const fold = (k) => (folded[k] ??= foldText(f[k]));
   const holds = (k, src, id) => {
     if (typeof src !== 'string' || !WHEN_FIELDS.includes(k) || !f[k]) return false;
     if (skip && skip.has(keyOf(src))) return false;
     const c = condOf(src);
-    if (c.lit && !lower(k).includes(c.lit)) return false;
-    const re = rxOf(src, c);
-    if (!re) return false;
+    if (c.lit && !fold(k).includes(c.lit)) return false;
     if (state) state.cur = { lesson: id, field: k, src };
-    return re.test(f[k]);
+    const t0 = state ? process.hrtime.bigint() : 0n;
+    const re = rxOf(src, c);
+    const hit = Boolean(re) && re.test(f[k]);
+    if (state) state.times.set(src, (state.times.get(src) || 0) + Number(process.hrtime.bigint() - t0) / 1e6);
+    return hit;
   };
   // An item fires when every field it names holds; `tool` is tried first (few sources, most items stop there).
   const fires = (w, id) => {
@@ -269,11 +292,13 @@ let guard = null;
 function guarded(fn, ms) {
   if (!guard) {
     const vm = require('vm');
-    const state = { job: null, out: null, cur: null };
+    const state = { job: null, out: null, cur: null, times: new Map() };
     guard = { state, ctx: vm.createContext({ all: () => { state.out = state.job(); } }), script: new vm.Script('all()') };
   }
   guard.state.job = fn;
   guard.state.out = null;
+  guard.state.cur = null;
+  guard.state.times = new Map();
   try { guard.script.runInContext(guard.ctx, { timeout: ms }); return { ok: true, out: guard.state.out }; } catch (e) {
     if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return { ok: false };
     throw e;
@@ -285,8 +310,19 @@ function matchGuarded(triggers, f, mem) {
   const run = guarded(() => match(triggers, f, { skip, state: guard.state }), BUDGET_MS);
   if (run.ok) return run.out;
   const cur = guard.state.cur || {};
+  const times = guard.state.times;
   const again = cur.src ? guarded(() => rxOf(cur.src).test(f[cur.field]), RECHECK_MS) : { ok: true };
   if (!again.ok) quarantine(mem, { lesson: cur.lesson, field: cur.field, src: cur.src });
+  else {
+    // No single culprit: the budget went to several conditions. The slowest of the run (the cut one counted with the
+    // rest of the budget) is a suspect; a suspect twice goes to the quarantine.
+    if (cur.src) times.set(cur.src, (times.get(cur.src) || 0) + BUDGET_MS);
+    let worst = null;
+    for (const [src, ms] of times) if (!worst || ms > worst.ms) worst = { src, ms };
+    const who = worst && triggers.find((t) => t.when.some((w) => w && Object.values(w).includes(worst.src)));
+    const field = who && Object.entries(who.when.find((w) => w && Object.values(w).includes(worst.src))).find(([, v]) => v === worst.src)[0];
+    if (worst && worst.src) quarantine(mem, { lesson: who ? who.id : cur.lesson, field, src: worst.src }, { suspect: true });
+  }
   require('./lib/journal.cjs').journal({ type: 'error', module: 'memory-hot.cjs', error: `when: сторож прервал сопоставление за ${BUDGET_MS} мс`,
     lesson: cur.lesson, field: cur.field, src: String(cur.src || '').slice(0, 200), quarantined: !again.ok, policy: 'open' });
   return [];

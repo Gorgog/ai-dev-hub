@@ -343,21 +343,27 @@ function preflight(ev, ctx) {
   // For memory written past the write check: a `when` that does not compile, one that may backtrack long (a warning),
   // and a source the watchdog cut twice — in the quarantine, skipped by the hot path until the lesson's `when` changes.
   const q = hot.readQuarantine(mem);
+  const warnings = [];
   for (const t of hot.loadTriggers(mem)) {
     t.when.forEach((w, i) => {
       const c = compileItem(w);
       if (c.error) problems.push(`lessons/${t.id}.md: when[${i}].${c.error}`);
-      else for (const x of c.warn) problems.push(`lessons/${t.id}.md: when[${i}].${x}`);
+      else for (const x of c.warn) warnings.push(`lessons/${t.id}.md: when[${i}].${x}`);
       for (const [k, src] of Object.entries(w && typeof w === 'object' ? w : {})) {
         if (typeof src === 'string' && q[hot.keyOf(src)]) problems.push(`lessons/${t.id}.md: when[${i}].${k} в карантине — сторож дважды прервал его на поле ${q[hot.keyOf(src)].field}; поправь регэксп, правка снимет карантин`);
       }
     });
   }
-  if (!problems.length) return null;
-  const shown = problems.slice(0, 20).map((p) => `- ${p}`);
-  if (problems.length > 20) shown.push(`- … ещё ${problems.length - 20} — recall check`);
-  return { items: [{ text: `Память v2 проекта ${ctx.project.name}: проблем ${problems.length} — вызовы не блокируются, но урок с ошибкой не подаётся. `
-    + `Исправь файлы (Edit/Write), проверка всей памяти — recall check:\n${shown.join('\n')}`, priority: 'reminder', key: 'memory-check', source: 'memory' }] };
+  if (!problems.length && !warnings.length) return null;
+  const list = (xs, n) => [...xs.slice(0, n).map((p) => `- ${p}`), ...(xs.length > n ? [`- … ещё ${xs.length - n} — recall check`] : [])];
+  const parts = [];
+  if (problems.length) {
+    parts.push(`Память v2 проекта ${ctx.project.name}: проблем ${problems.length} — вызовы не блокируются, но урок с ошибкой не подаётся. `
+      + 'Исправь файлы (Edit/Write), проверка всей памяти — recall check:', ...list(problems, 20));
+  }
+  // A warning is no problem: the lesson is delivered, its trigger is worth narrowing (the watchdog guards the hot path).
+  if (warnings.length) parts.push(`Память v2 проекта ${ctx.project.name}: предупреждений ${warnings.length} — уроки подаются, но триггеры стоит сузить:`, ...list(warnings, 10));
+  return { items: [{ text: parts.join('\n'), priority: 'reminder', key: 'memory-check', source: 'memory' }] };
 }
 
 module.exports = { ...hot, GATE, checkWrite, bashWritesMemory, bashWrite, mirrorEvents, commitMemory, stop, preflight };

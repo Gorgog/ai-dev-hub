@@ -491,7 +491,8 @@ test('variant D check: conditions slow only together are quarantined by accumula
 test('variant D check: SessionStart names a risky `when` as a warning, apart from errors', () => {
   const s = setup();
   write(path.join(s.mem, 'lessons', 'risky.md'), lesson({ id: 'risky', when: [{ tool: '^Bash$', cmd: '(\\w+\\s?){1,30}!' }], first: 'Рискованный триггер.' }));
-  const r = start(s);
+  start(s); // the first start builds the index (a problem of its own: «индекса не было — собран»)
+  const r = start(s, 'compact');
   assert.match(r.out, /предупрежд[^\n]*\n(?:[^\n]*\n)*?[^\n]*risky/i);
-  assert.doesNotMatch(r.out, /проблем 1 /, 'a warning is no problem');
+  assert.doesNotMatch(r.out, /проблем \d/, 'a warning is no problem');
 });
