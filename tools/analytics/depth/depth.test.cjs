@@ -123,7 +123,12 @@ test('shell-rules: возможность и нарушение — по раз�
     // Here-strings and shifts are no heredoc; redirections are no paths of git add.
     ['x="$(tr a b <<<abc)"\ngit add -A\ngit commit -n -m y', { 'git-add-all': 1, 'no-verify': 1 }],
     ['tr a b <<<abc\ngit add -A\nabc', { 'git-add-all': 1 }], ['echo "$((a<<b))"\ngit add -A\nb', { 'git-add-all': 1 }],
-    ['git add -A 2>&1 | tail -3', { 'git-add-all': 1 }], ['git add -A >/dev/null', { 'git-add-all': 1 }], ['git add -A > log', { 'git-add-all': 1 }], ["find . -name '*.md' -exec sed -i 's/a/b/' {} \\;", { 'sed-in-place': 1 }],
+    ['git add -A 2>&1 | tail -3', { 'git-add-all': 1 }], ['git add -A >/dev/null', { 'git-add-all': 1 }], ['git add -A > log', { 'git-add-all': 1 }],
+    ['git add -A >& log', { 'git-add-all': 1 }], ['git add -A <<< x', { 'git-add-all': 1 }], ['git add -A &>log 2>&1', { 'git-add-all': 1 }],
+    // A quoted ">" is an argument, not a redirection; $(( only with its own )).
+    ['git commit -m ">" -n', { 'no-verify': 1 }], ['git commit -m "<" --no-verify', { 'no-verify': 1 }],
+    ['x=$((cd /r && git add .) | wc -l)\ngit commit -n -m y\necho $((1+2))', { cd: 0, 'git-add-all': 1, 'no-verify': 1 }],
+    ['git add 2024-report.md', { 'git-add-all': 0 }], ["find . -name '*.md' -exec sed -i 's/a/b/' {} \\;", { 'sed-in-place': 1 }],
   ];
   const r = spawnSync('node', [path.join(DIR, 'shell-rules.cjs')], { input: JSON.stringify(cases.map((c) => c[0])), encoding: 'utf8', timeout: 10000 });
   assert.strictEqual(r.status, 0, r.error ? String(r.error) : r.stderr);
