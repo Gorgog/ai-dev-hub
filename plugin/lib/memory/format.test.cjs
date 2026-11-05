@@ -24,7 +24,7 @@ const GOOD = [
   '',
 ].join('\n');
 
-const withLine = (text, re, line) => text.replace(re, line);
+const withLine = (text, re, line) => text.replace(re, () => line); // a function: `$'` in a regex is not a pattern
 const problems = (text, file = 'memory/lessons/bash-inline-script-to-file.md') => validateLesson(Buffer.from(text), { file });
 
 test('parse: fields, raw regexes of `when` (no escaping, no quotes), flow lists, body lines', () => {
