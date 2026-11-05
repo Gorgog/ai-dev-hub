@@ -144,7 +144,7 @@ function gradeTask(task, { run, ctx }) {
     { id: 'no-escaping-errors', kind: 'never', source: SRC, pass: escaping.length === 0, detail: escaping.slice(0, 2).join(' | ') },
     { id: 'tool-errors', observe: true, source: SRC, pass: errs.length === 0, detail: `ошибок инструментов ${errs.length}: ${errs.slice(0, 2).join(' | ')}` },
     { id: 'tokens', observe: true, source: SRC, pass: true,
-      detail: `токены ${tokens} (вход ${u.input_tokens || 0}, кэш ${(u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)}, выход ${u.output_tokens || 0}), ${run.turns} ходов, $${(run.costUsd || 0).toFixed(2)}` },
+      detail: `токены ${tokens} (вход ${u.input_tokens || 0}, кэш ${(u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)}, выход ${u.output_tokens || 0}), ${run.turns} ходов` },
   ];
 }
 
@@ -156,7 +156,7 @@ module.exports = TASKS.map((task) => ({
     const repo = path.join(proj, 'repo');
     gitRepo(repo, { 'apps/web/package.json': '{ "name": "web", "private": true }\n' });
     const mem = path.join(proj, 'memory');
-    return { cwd: repo, hubDir: hub, prompt: task.prompt, maxTurns: 14, maxBudgetUsd: 1.5, timeoutSec: 600,
+    return { cwd: repo, hubDir: hub, prompt: task.prompt, maxTurns: 14, timeoutSec: 600,
       ctx: { mem, hub, before: snapshot(mem) } };
   },
   async grade({ run, ctx }) { return gradeTask(task, { run, ctx }); },
