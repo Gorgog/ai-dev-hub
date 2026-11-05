@@ -139,7 +139,7 @@ function main(argv) {
         + `${s.median_lessons_per_session}, уроков с when ${s.lessons_with_when}, сессий ${s.sessions}`);
       if (s.unmeasured) {
         lines.push(`  без ${FIELDS.filter((f) => !s.fields.includes(f)).join('/')} в базе: ${s.unmeasured} ${lessonsWord(s.unmeasured)} `
-          + `не измерен${s.unmeasured === 1 ? '' : 'о'}; верхняя граница — подач ${s.deliveries_upper} (${s.per20_upper} на 20), `
+          + `не измерен${s.unmeasured % 10 === 1 && s.unmeasured % 100 !== 11 ? '' : lessonsWord(s.unmeasured) === 'урока' ? 'ы' : 'о'}; верхняя граница — подач ${s.deliveries_upper} (${s.per20_upper} на 20), `
           + `медиана ${s.median_lessons_per_session_upper}`);
       }
       for (const n of s.noisy) lines.push(`  шумный: ${n.id} — ${n.calls} вызовов (${n.rate} %)`);

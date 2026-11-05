@@ -38,7 +38,7 @@ def records(text, name):
         line = raw.rstrip('\r')
         in_section = cur is not None and cur['unit'] == 'section'
         fence = line.lstrip().startswith('```')
-        if in_fence or fence:
+        if (in_fence or fence) and not in_comment:  # a fence inside a comment is the comment's
             # a code block is text as written: no headings, comments or blank-line breaks inside
             in_fence = in_fence != fence
             if cur is None:
