@@ -67,7 +67,7 @@ test('shipped base-rules.json: catches the forms the hub itself advises and leav
     [bash('sed -n 1,5p f'), []],
     [bash("node -e 'console.log(`${1}`)'"), []],
     [bash("cat <<'EOF'\na\\b ${x}\nEOF"), []],
-    [{ tool_name: 'Write', tool_input: { file_path: '/home/u/x/repo/.claude/agent-memory/r.md', content: 'x' } }, ['agent-memory-write']],
+    [{ tool_name: 'Write', tool_input: { file_path: '/home/u/x/repo/.claude/agent-memory/r.md', content: 'x' } }, []], // agent-roles (13) denies it now
     [{ tool_name: 'Edit', tool_input: { file_path: '/home/u/x/memory/errors-index.md', new_string: 'не писать в .claude/agent-memory/' } }, []],
   ];
   for (const [ev, ids] of cases) assert.deepStrictEqual(hit(ev), ids, ev.tool_input.command || ev.tool_input.file_path);
