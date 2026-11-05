@@ -85,6 +85,14 @@ test('M12-v1: запись v1 в errors.md — зелёное; lessons/ в пр�
   assert.ok(failed(await V['M12-v1'].grade({ run: run(), ctx: st.ctx })).some((f) => /no-v2-created/.test(f)));
 });
 
+test('M12-v1: запись v1, перенесённая на несколько строк (как пишет модель), — одна запись, зелёное', async () => {
+  const st = await fixture('M12-v1');
+  fs.appendFileSync(path.join(st.ctx.mem, 'errors.md'), '\n- (2026-11-05, проверка вёрстки) **Вёрстку смотрели не на том порту.** '
+    + 'Дев-сервер apps/web слушает :3000, а открыли\n  localhost:8080 и ~15 мин искали баг → сверить порт. стоило: ~15 мин · повторов: 0 · механизм: нет ·\n'
+    + '  Ключи: `порт`, `3000`\n');
+  assert.deepStrictEqual(failed(await V['M12-v1'].grade({ run: run(), ctx: st.ctx })), []);
+});
+
 test('bashMemoryWrites: запись в память Bash-ом — да; запуск episode.cjs и чтение — нет', () => {
   const { bashMemoryWrites } = variants;
   const ev = (c) => [bash(c)];
