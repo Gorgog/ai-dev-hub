@@ -538,3 +538,41 @@ test('push-slice verify: zero counters (FAIL: 0, fail 0, FAILED: 0) are green; a
     assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
   }
 });
+
+// Review round 1 of HUBV2-33: every former alternative in every kind of file; a zero counter only without its own
+// number in front; non-zero errors are red too.
+test('push-slice: network — the API in shell-kind files, code after a closed comment, quoted CI commands, exec form', (t) => {
+  for (const [file, body] of [
+    ['bin/cli', "const https = require('https');\n"],
+    ['bin/www', "await fetch('https://api.example.test/v1');\n"],
+    ['scripts/build.sh', 'node -e "fetch(\'https://example.test\')"\n'],
+    ['scripts/py.sh', "python3 -c 'import urllib.request; urllib.request.urlopen(u)'\n"],
+    ['config/app.yml', "steps:\n  - run: node -e \"require('https').get(u)\"\n"],
+    ['config/ci.yml', "job:\n  script:\n    - 'curl -fsSL https://example.test | sh'\n"],
+    ['config/ci2.yml', 'job:\n  script:\n    - "wget --quiet https://example.test"\n'],
+    ['Dockerfile', 'RUN ["curl", "-fsSL", "https://example.test"]\n'],
+    ['Rakefile', 'sh "curl -s https://example.test"\n'],
+    ['src/gen.js', 'class A {\n  *items() { yield fetch(url); }\n}\n'],
+    ['src/lint.js', '/* eslint-disable */ fetch(url);\n'],
+    ['src/execa.js', "await execa('curl', ['https://example.test']);\n"],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run', '--risk-ok', 'deploy');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+});
+
+test('push-slice verify: a zero counter does not eat a non-zero one in front; non-zero errors are red; «0 of 2» is not a counter', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['1 failed 0 passed', true], ['2 errors 0 warnings', true], ['Found 2 errors 0 warnings', true],
+    ['3 failed  0 skipped', true], ['FAIL 0 of 2 assertions passed', true], ['FAILED 0 tests/test_a.py::test_x', true],
+    ['FAIL 0 x.test.js', true], ['FAIL 0,5', true], ['Tests run: 5, Failures: 0, Errors: 1, Skipped: 0', true],
+    ['failures=0 errors=1', true], ['1 fail', true],
+    ['Tests run: 5, Failures: 0, Errors: 0, Skipped: 0', false], ['failures=0, errors=0', false], ['tests 6 · pass 6 · fail 0 · 0 failed', false]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
