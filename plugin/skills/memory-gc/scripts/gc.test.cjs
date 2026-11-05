@@ -150,3 +150,29 @@ test('fold: a torn line of an old month stays in the archive and is named; the m
   assert.match(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-06.jsonl'), 'utf8'), /"at":"2026-06-02T1/);
   assert.strictEqual(readEvents(mem).problems.length, 0);
 });
+
+test('fold: a crash after the archive was written (month not yet folded) is finished by the next run; lines written after the archive are added to it', () => {
+  const mem = memory();
+  for (let d = 1; d <= 3; d++) appendEvent(mem, { at: `2026-05-0${d}T10:00:00.000Z`, kind: 'shown', lesson: 'dev-port' });
+  const arch = path.join(mem, 'events', 'archive', '2026-05.jsonl');
+  fs.mkdirSync(path.dirname(arch), { recursive: true });
+  fs.copyFileSync(path.join(mem, 'events', '2026-05.jsonl'), arch); // the crash: archive written, month not rewritten
+  appendEvent(mem, { at: '2026-05-04T10:00:00.000Z', kind: 'repeat', lesson: 'dev-port' }); // a late writer
+  const r = run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']);
+  assert.strictEqual(r.code, 0, r.err);
+  const month = fs.readFileSync(path.join(mem, 'events', '2026-05.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepStrictEqual(month.map((e) => `${e.kind}:${e.at.slice(8, 10)}`), ['shown:03', 'repeat:04']);
+  const a = fs.readFileSync(arch, 'utf8').split('\n').filter(Boolean);
+  assert.strictEqual(a.length, 4, 'the archive holds every line the month ever had');
+});
+
+test('fold: shown events without lesson or rule, or without at, are kept, not merged under one key', () => {
+  const mem = memory();
+  appendEvent(mem, { at: '2026-05-01T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  appendEvent(mem, { at: '2026-05-02T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  fs.appendFileSync(path.join(mem, 'events', '2026-05.jsonl'), '{"at":"2026-05-03T10:00:00.000Z","kind":"shown","key":"x"}\n'
+    + '{"at":"2026-05-04T10:00:00.000Z","kind":"shown","key":"y"}\n{"kind":"shown","lesson":"dev-port"}\n');
+  assert.strictEqual(run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']).code, 0);
+  const month = fs.readFileSync(path.join(mem, 'events', '2026-05.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepStrictEqual(month.map((e) => `${e.key || e.lesson}:${(e.at || '-').slice(8, 10)}`), ['dev-port:02', 'x:03', 'y:04', 'dev-port:-']);
+});

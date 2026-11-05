@@ -103,3 +103,13 @@ test('bashMemoryWrites: запись в память Bash-ом — да; зап�
   assert.strictEqual(bashMemoryWrites(ev('grep -n vitest ../memory/errors.md 2>/dev/null')).length, 0);
   assert.strictEqual(bashMemoryWrites(ev('ls memory/lessons/ && tail -3 memory/errors.md')).length, 0);
 });
+
+test('bashMemoryWrites: cp, mv, python, dd into the memory — yes; reading with a redirect elsewhere — no', () => {
+  const { bashMemoryWrites } = variants;
+  const n = (c) => bashMemoryWrites([bash(c)]).length;
+  for (const c of ['cp /tmp/draft.md ../memory/lessons/dev-port.md', 'mv /tmp/d.md memory/lessons/x.md',
+    'python3 -c "open(\'memory/errors.md\',\'a\').write(\'x\')"', 'printf x | dd of=memory/errors.md oflag=append conv=notrunc',
+    'install -m 644 /tmp/d.md memory/lessons/x.md']) assert.strictEqual(n(c), 1, c);
+  for (const c of ['grep -c 3000 ../memory/errors.md > /dev/null', 'ls ../memory/lessons/ >/tmp/list.txt',
+    'cp ../memory/errors.md /tmp/errors.bak', 'wc -l memory/errors.md 2>&1 | tee /tmp/count.txt']) assert.strictEqual(n(c), 0, c);
+});

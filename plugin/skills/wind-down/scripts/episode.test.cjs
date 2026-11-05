@@ -130,3 +130,29 @@ test('a project of the old format: said so with the v1 way, code 0, no lessons/ 
   assert.deepStrictEqual(fs.readdirSync(mem), ['errors.md']);
   assert.strictEqual(fs.readFileSync(path.join(mem, 'errors.md'), 'utf8'), V1_HEAD);
 });
+
+test('a new episode below the similarity bar still names its nearest lessons: the agent checks for a repeat in other words', () => {
+  const { mem, draft } = sandbox();
+  const f = draft('npx-vitest-monorepo', ['Npx vitest run в корне монорепо не нашёл ни одного теста.', 'Перед прогоном — cd в пакет.'],
+    { keys: ['тесты', 'монорепо'] });
+  const r = run(['--memory', mem, 'add', f]);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /ближайшие уроки.*vitest-from-package/s);
+  assert.match(r.out, /episode\.cjs repeat/);
+});
+
+test('repeat: a note over several lines stays one v1 record line', () => {
+  const { mem } = sandbox();
+  assert.strictEqual(run(['--memory', mem, 'repeat', 'vitest-from-package', '--note', 'строка1\nстрока2\r\n  строка3']).code, 0);
+  const added = v1Lines(mem);
+  assert.strictEqual(added.length, 1, added.join('\n'));
+  assert.match(added[0], /^- Повтор: строка1 строка2 строка3\. Тесты vitest/);
+});
+
+test('repeat: the hint names the episode number — 2nd, then 3rd — while the lesson is still knowledge', () => {
+  const { mem } = sandbox();
+  assert.match(run(['--memory', mem, 'repeat', 'vitest-from-package', '--note', 'раз']).out, /2-й эпизод/);
+  const r = run(['--memory', mem, 'repeat', 'vitest-from-package', '--note', 'два']).out;
+  assert.match(r, /3-й эпизод/);
+  assert.doesNotMatch(r, /2-й эпизод/);
+});
