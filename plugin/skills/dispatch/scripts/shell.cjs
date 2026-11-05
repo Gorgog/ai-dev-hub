@@ -93,7 +93,7 @@ class Parser {
     this.heredocs = []; // pending: { delim, strip, cmd }
     this.queue = [];    // simple commands waiting for their heredoc bodies: { cmd, snap }
     this.caseDepth = 0; this.expectPattern = false;
-    // Function definitions: the body's commands are kept, not run; a call runs them (Ctx.fns).
+    // Function definitions: the body is read but not run; its text is kept, a call reads it again (Ctx.fns).
     this.fnName = null; this.braces = 0; this.frames = [];
   }
 
@@ -173,6 +173,7 @@ class Parser {
       if (this.i === start) { this.i++; continue; } // a character no rule above took: never stall
       const raw = s.slice(start, this.i);
       if (!cur.words.length && /^[^'"\\$`]+$/.test(raw) && this.keyword(raw, scope)) continue;
+      this.fnName = null; // f() if …; fi — a body without { } runs as written; the next { } is not the body
       cur.words.push(...fields);
     }
   }
@@ -185,17 +186,19 @@ class Parser {
 
   keyword(w, scope) {
     const s = this.s;
+    // A function body { … } is kept as text and read at each call, with the call's arguments as $@ (Ctx.exec).
     if (w === '{') {
       this.braces++;
-      if (this.fnName) { this.frames.push({ name: this.fnName, level: this.braces, cmds: [] }); this.fnName = null; }
+      if (this.fnName) { this.frames.push({ name: this.fnName, level: this.braces, start: this.i }); this.fnName = null; }
       return true;
     }
     if (w === '}') {
       const top = this.frames[this.frames.length - 1];
-      if (top && top.level === this.braces) { this.frames.pop(); this.ctx.fns.set(top.name, top.cmds); }
+      if (top && top.level === this.braces) { this.frames.pop(); this.ctx.fns.set(top.name, s.slice(top.start, this.i - 1)); }
       this.braces = Math.max(0, this.braces - 1);
       return true;
     }
+    this.fnName = null; // f() if …; fi — a body without { } runs as written; the next { } is not the body
     if (KEYWORDS.has(w)) {
       if (w === 'time') { this.skipBlank(); const m = this.at(/-p(?=\s)/y); if (m) this.i += m[0].length; }
       return true;
@@ -485,7 +488,7 @@ class Parser {
   finish(cmd, scope) {
     this.ctx.work();
     const frame = this.frames[this.frames.length - 1];
-    if (frame) { frame.cmds.push({ cmd, snap: childScope(scope) }); return; }
+    if (frame) return; // inside a function body: runs only when called
     if (!cmd.words.length) {
       for (const a of cmd.assigns) {
         const old = scope.vars.get(a.name);
@@ -660,19 +663,15 @@ class Ctx {
     if (w0.dyn) { this.note(`программа известна только при запуске: ${w0.text || '$…'}`); return; }
     const argv = words.map((w) => w.text);
     const name = path.basename(argv[0]);
-    // A call of a function defined in this command or a sourced file: its body runs (once per call chain).
+    // A call of a function defined in this command or a sourced file: its body is read now, $@ = the call's
+    // arguments, its cd / source / export act (once per call chain). The call line itself is opaque — a wrapper
+    // function (retry "$@") runs its arguments.
     const fn = !argv[0].includes('/') && this.fns.get(argv[0]);
-    if (fn) {
-      this.execs.push({ argv, dyn: words.map((w) => w.dyn), env: { ...env }, bin: false, opaque: false });
+    if (fn !== undefined && fn !== false) {
+      this.execs.push({ argv, dyn: words.map((w) => w.dyn), env: { ...env }, bin: false, opaque: true });
       if (this.calling.has(argv[0])) return;
       this.calling.add(argv[0]);
-      try {
-        for (const { cmd, snap: s2 } of fn) {
-          const env2 = envOf(s2);
-          for (const a of cmd.assigns) env2[a.name] = a.value.text;
-          this.exec(cmd.words, env2, s2, { bin: false, stdin: cmd.heredocs, depth: o.depth, hops: o.hops + 1 });
-        }
-      } finally { this.calling.delete(argv[0]); }
+      try { this.sub(fn, childScope(snap, { pos: words.slice(1) }), o.depth); } finally { this.calling.delete(argv[0]); }
       return;
     }
     // opaque — a program the reader neither unwraps nor knows as data-only: it may run its arguments.
