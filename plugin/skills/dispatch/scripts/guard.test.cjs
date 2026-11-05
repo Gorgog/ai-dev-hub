@@ -111,19 +111,30 @@ test('decide by program: source файла, запуск по пути, прог
   assert.ok(prog(p, "sed 's/x/npx jest/e' a.txt"), 's///e');
   assert.ok(prog(p, "sed --expression='1e npx jest' a.txt"), 'sed --expression= (ревью р3)');
   assert.ok(prog(p, "sed -n --expression '1e npx jest' a.txt"), 'sed --expression <скрипт>');
-  for (const cmd of ['. ./lib.sh; echo $L', 'git log --oneline -3', "sed -n '1,5p' a.txt", "sed -i 's/npx jest/x/' a.txt", 'tar -xf a.tar',
+  for (const cmd of ["sed -e'1e npx jest' a.txt", "sed -ne'1e npx jest' a.txt", "sed --expr='1e npx jest' a.txt", "sed --e='1e npx jest' a.txt"])
+    assert.ok(prog(p, cmd), `слитная форма sed (ревью р3+): ${cmd}`);
+  for (const cmd of ['git log --oneline -3', "sed -n '1,5p' a.txt", "sed -i 's/npx jest/x/' a.txt", 'tar -xf a.tar',
     "sed -i 's#node a/snippets/x.cjs#node /home/george/b/snippets/x.cjs#; s#--a#--b#' c.json"])
     assert.strictEqual(prog(p, cmd), null, cmd);
 });
 
 test('decide by program: функции-обёртки с "$@", cd и source в теле, тело без скобок (ревью р3)', () => {
   const p = projectWith(SETS.polygon, { 'lib2.sh': 'retry() { "$@"; }\n', 'lib3.sh': 'with_db() { export DB=x; "$@"; }\n',
-    'sub/x.sh': '#!/bin/sh\nnpx jest\n', 'rt.sh': 'npx jest src\n', 'lib.sh': 'export L=1\nt() { npx jest; }\n' });
+    'sub/x.sh': '#!/bin/sh\nnpx jest\n', 'rt.sh': 'npx jest src\n', 'lib.sh': 'export L=1\nt() { npx jest; }\n',
+    'chain.sh': '#!/bin/bash\nhelper() { npx jest; }\nrun_tests() { helper; }\nmain() { run_tests; }\nmain "$@"\n',
+    'chain2.sh': '#!/bin/bash\nrun() { npx jest; }\nmain() { run; }\nmain\n' });
+  for (const f of ['chain.sh', 'chain2.sh']) fs.chmodSync(path.join(p, 'worktrees', 'K-1', f), 0o755);
   for (const cmd of ['retry() { for i in 1 2 3; do "$@" && break; done; }; retry npx jest src', 'run() { echo "+ $*"; "$@"; }; run npx jest',
     'retry() { local n=0; until "$@"; do n=$((n+1)); done; }; retry npx jest', '. ./lib3.sh && with_db npx jest', '. ./lib2.sh; retry npx jest',
-    't() { npx "$1"; }; t jest', 'f() { cd sub; ./x.sh; }; f', 'f() { . ./rt.sh; }; f', 'f() { source ./lib.sh; t; }; f',
-    'f() if true; then :; fi; { npx jest; } > log', 'f() for i in 1; do :; done; { npx jest; }'])
+    'f() { cd sub; ./x.sh; }; f', 'f() { . ./rt.sh; }; f', 'f() { source ./lib.sh; t; }; f',
+    'f() if true; then :; fi; { npx jest; } > log', 'f() for i in 1; do :; done; { npx jest; }', 'f() ((x=1)); { npx jest; } > log',
+    './chain.sh', 'bash -c ./chain2.sh'])
     assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
+  // Тело функции считается запущенным при определении (решение 05.11): известные остатки —
+  // неиспользованная функция source-библиотеки блокирует (ложный блок) …
+  assert.ok(prog(p, '. ./lib.sh; echo $L'), 'остаток: неиспользованная функция source-библиотеки');
+  // … и аргумент, который функция подставляет в программу ($1), не виден: тело читалось с пустым $1.
+  assert.strictEqual(prog(p, 't() { npx "$1"; }; t jest'), null, 'остаток: t() { npx "$1"; }; t jest');
 });
 
 test('decide by program: yarn|pnpm <бинарь> — бинарь; yarn --version — не установка (ревью р1)', () => {

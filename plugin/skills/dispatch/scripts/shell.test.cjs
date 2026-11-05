@@ -135,13 +135,16 @@ test('executions: скрипт читается и разбирается — ba
   has('bash scripts/outer.sh npx playwright test', 'bin:playwright test', o);
   has('source scripts/env.sh; npx $RUN test', 'bin:playwright test', o);
   has('. scripts/env.sh && npx $RUN test', 'bin:playwright test', o);
-  // функция запускается при вызове, не при определении — и в source-библиотеке
+  // тело функции считается запущенным при определении (решение 05.11 после ревью р3: ошибка в сторону блока).
+  // Известный остаток: неиспользованная функция source-библиотеки тоже «запускается» — ложный блок, не пропуск.
   fs.writeFileSync(path.join(d, 'lib.sh'), 'export L=1\ninst() { npm install -g x; }\nfunction other { npx jest; }\n');
-  runsNo('. ./lib.sh; echo $L', 'npm', o);
+  has('. ./lib.sh; echo $L', 'npm install -g x', o);
   has('. ./lib.sh; inst', 'npm install -g x', o);
   has('. ./lib.sh; other', 'bin:jest', o);
-  runsNo('f() { npx jest; }; echo', 'npx');
+  has('f() { npx jest; }; echo', 'bin:jest');
   has('f() { npx jest; }; f', 'bin:jest');
+  // вызов функции — незнакомая программа: его строку замок судит как текст
+  assert.ok(executions('retry() { "$@"; }; retry npx jest').execs.some((e) => e.argv[0] === 'retry' && e.opaque));
   has('g() { npx jest; }; h() { g; }; h', 'bin:jest');
   runsNo('r() { r; }; r', 'npx'); // рекурсия не вешает
   assert.strictEqual(executions('source scripts/env.sh', o).unknown.length, 0);
