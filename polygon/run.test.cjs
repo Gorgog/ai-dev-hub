@@ -40,12 +40,15 @@ test('run: реальный корпус из HUB_DATA добавляет про
   assert.ok(real && real.real === true);
 });
 
-test('run --ref ef519e3: прототип H01–H04 — 24/45, как базовая линия', () => {
+// Замороженная база acceptance §1 — 24/45 на сценариях до снятия cd-no-subshell (~/hub-data/polygon/v1-ef519e3.json).
+// cd-bare в H03 сняты 05.11 (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR держит cwd, правило снято): у v1 правило ещё было,
+// на этих двух случаях он теперь «шумит» — на текущих сценариях прототип v1 — 22/45.
+test('run --ref ef519e3: прототип H01–H04 — 22/45 на текущих сценариях (база 24/45 — до снятия cd-bare)', () => {
   const d = tmp();
   const r = run(['--level', 'hook', '--ref', 'ef519e3', '--only', '^H0[1-4]$', '--quiet', '--work', d, '--out', path.join(d, 'r.json')],
     { HUB_DATA: path.join(d, 'none') });
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.match(r.stdout, /прототип H01–H04: 24\/45/);
+  assert.match(r.stdout, /прототип H01–H04: 22\/45/);
 });
 
 test('run: сценарии H05–H13 и I01 есть и запускаются без падения раннера; контракты помечены', () => {

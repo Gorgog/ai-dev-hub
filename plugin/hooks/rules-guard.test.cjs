@@ -40,8 +40,9 @@ test('shipped base-rules.json: catches the forms the hub itself advises and leav
   assert.deepStrictEqual(warnings, []);
   const hit = (ev) => evaluate(ev, rules).hits.map((h) => h.id);
   const cases = [
-    [bash('cd /w/repo && git status'), ['cd-no-subshell']],
-    [bash('ls && cd x && make'), ['cd-no-subshell']],
+    // cd-no-subshell removed (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR keeps the cwd; live drift 0, 05.11): no reminder.
+    [bash('cd /w/repo && git status'), []],
+    [bash('ls && cd x && make'), []],
     [bash('( cd /w/repo && git status )'), []],
     [bash('git add -A apps/frontend'), ['git-add-all']],
     [bash('git -C repo add -A'), ['git-add-all']],
@@ -77,11 +78,11 @@ test('loadRules: project rules add to base, modes raise or lower a rule; broken 
   const p = tmp();
   fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({
     rules: [{ id: 'prisma-format', tools: '^Bash$', commands: 'prisma\\s+format', text: 'поля руками + validate' }],
-    modes: { 'cd-no-subshell': 'deny', push: 'log' },
+    modes: { 'sed-in-place': 'deny', push: 'log' },
   }));
   const { rules, warnings } = loadRules(SHIPPED, p);
   assert.deepStrictEqual(warnings, []);
-  assert.strictEqual(evaluate(bash('cd x'), rules).decision, 'deny');
+  assert.strictEqual(evaluate(bash('sed -i s/a/b/ x'), rules).decision, 'deny');
   assert.strictEqual(evaluate(bash('git push'), rules).decision, 'log');
   assert.strictEqual(evaluate(bash('npx prisma format'), rules).hits[0].id, 'prisma-format');
 
@@ -93,11 +94,11 @@ test('loadRules: project rules add to base, modes raise or lower a rule; broken 
     assert.ok(loadRules(SHIPPED, p).warnings.length, `a wrong shape is reported: ${JSON.stringify(shape)}`);
   }
 
-  fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({ rules: [{ id: 'bad', commands: '(' , text: 't' }], modes: { 'cd-no-subshell': 'block' } }));
+  fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({ rules: [{ id: 'bad', commands: '(' , text: 't' }], modes: { 'sed-in-place': 'block' } }));
   const w = loadRules(SHIPPED, p);
   assert.ok(w.warnings.some((s) => /bad/.test(s)), 'broken regex is reported');
   assert.ok(w.warnings.some((s) => /block/.test(s)), 'unknown mode is reported');
-  assert.strictEqual(evaluate(bash('cd x && git push'), w.rules).decision, 'ask', 'an unknown mode falls back to log and does not swallow ask');
+  assert.strictEqual(evaluate(bash('sed -i s/a/b/ x && git push'), w.rules).decision, 'ask', 'an unknown mode falls back to log and does not swallow ask');
 
   fs.writeFileSync(path.join(p, 'rules.json'), JSON.stringify({ rules: [null, 7], modes: { 'git-push': 'deny' } }));
   const odd = loadRules(SHIPPED, p);

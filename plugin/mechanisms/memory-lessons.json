@@ -1,0 +1,22 @@
+{
+  "id": "memory-lessons",
+  "event": "PostToolUse",
+  "file": "posttool.d/21-memory-lessons.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [
+    "memory/.triggers-quarantine.json"
+  ],
+  "reads": [
+    "memory/.triggers.json"
+  ],
+  "polygon": [
+    "H40",
+    "H43",
+    "H44"
+  ],
+  "replaces": "v1: уроки только в брифе старта (errors-index.md)",
+  "review": "2027-02-05"
+}

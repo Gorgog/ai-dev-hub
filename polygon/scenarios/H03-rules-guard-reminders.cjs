@@ -9,8 +9,8 @@ const { runEvent, preToolVerdict } = require('../lib/hooks.cjs');
 const RG = 'rules-guard.log проекта A';
 // [id, command, expectFlag, source]
 const CORPUS = [
-  ['cd-bare', 'cd /r/apps/api && npm test', true, 'base-rules cd-no-subshell'],
-  ['cd-bare-after-newline', 'export A=1\ncd /r/apps/api', true, 'base-rules cd-no-subshell'],
+  ['cd-bare', 'cd /r/apps/api && npm test', false, 'cd-no-subshell снято 05.11: переменная держит cwd, живой дрейф 0'],
+  ['cd-bare-after-newline', 'export A=1\ncd /r/apps/api', false, 'cd-no-subshell снято 05.11: переменная держит cwd, живой дрейф 0'],
   ['cd-subshell', '( cd /r/apps/api && npm test )', false, 'аудит №3 (ложные на `( cd … )`)'],
   ['cd-subshell-after-date', '( date +%H:%M; cd /r/memory/snippets && ls )', false, `${RG} / dispatch-guard.log 2026-11-04 case-03`],
   ['cd-in-heredoc-text', "cat >> notes.md <<'EOF'\ncd apps && npm test — так нельзя\nEOF", false, 'синтетика: текст урока в heredoc'],

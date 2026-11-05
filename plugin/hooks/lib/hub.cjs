@@ -4,12 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// The hub (where projects/ live): AI_DEV_HUB, else the folder of the `hub` marketplace in user settings (the plugin
-// may run from a cache copy), else two levels above the plugin (<hub>/plugin/hooks).
+// The hub (where projects/ live): AI_DEV_HUB, else the folder of the `hub` marketplace in user settings — those of
+// CLAUDE_CONFIG_DIR when Claude Code runs with one, of ~/.claude otherwise (the plugin may run from a cache copy) —,
+// else two levels above the plugin (<hub>/plugin/hooks).
 function hubRoot() {
   if (process.env.AI_DEV_HUB) return process.env.AI_DEV_HUB;
   try {
-    const s = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    const conf = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    const s = JSON.parse(fs.readFileSync(path.join(conf, 'settings.json'), 'utf8'));
     const m = s.extraKnownMarketplaces && s.extraKnownMarketplaces.hub;
     const p = m && m.source && m.source.path;
     if (p && fs.existsSync(path.join(p, 'projects'))) return p;
@@ -24,18 +26,28 @@ const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p
 // projects/<name> of THIS hub only: the plugin runs in every session of the user, and a folder named
 // «projects» elsewhere is not ours. Both sides go through realpath: a hub reached through a symlink (~/hub ->
 // /data/ai-dev-hub) would otherwise never match the session's resolved cwd and switch the hooks off silently.
-// Case matters on Linux: /Hub is not /hub.
+// Case matters on Linux: /Hub is not /hub. The hub's own folders outside projects/ (its root, plugin/, research/)
+// belong to the project of the hub itself, projects/ai-dev-hub, when the hub has one: its canary and rules apply to
+// a session started in the hub root (the dispatcher's).
+const SELF = 'ai-dev-hub';
 function findProject(cwd, hub = HUB_ROOT) {
   const c = trim(real(cwd)), h = trim(real(hub));
-  if (!c.startsWith(`${h}/projects/`)) return null;
-  const name = c.slice(h.length + '/projects/'.length).split('/')[0];
-  return name ? { dir: `${h}/projects/${name}`, name } : null;
+  if (c.startsWith(`${h}/projects/`)) {
+    const name = c.slice(h.length + '/projects/'.length).split('/')[0];
+    return name ? { dir: `${h}/projects/${name}`, name } : null;
+  }
+  if (c !== h && !c.startsWith(`${h}/`)) return null;
+  if (c === `${h}/projects`) return null;
+  const self = `${h}/projects/${SELF}`;
+  try { return fs.statSync(self).isDirectory() ? { dir: self, name: SELF } : null; } catch { return null; }
 }
 
 // worktrees/<name> of the project, or null.
 function worktreeOf(cwd, proj) {
   if (!proj) return null;
-  const rel = trim(real(cwd)).slice(proj.dir.length).replace(/^\/+/, '').split('/');
+  const c = trim(real(cwd));
+  if (!c.startsWith(`${proj.dir}/`)) return null;
+  const rel = c.slice(proj.dir.length).replace(/^\/+/, '').split('/');
   return rel[0] === 'worktrees' && rel[1] ? rel[1] : null;
 }
 

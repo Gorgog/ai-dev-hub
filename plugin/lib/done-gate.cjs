@@ -37,7 +37,9 @@ const headOf = (wt) => { try { return git(wt, 'rev-parse', 'HEAD'); } catch { re
 // a session may report about another copy: H01 other-worktree); none — the own copy, else the first named one.
 function target(cwd, text, proj) {
   if (!proj) return null;
-  const rel = real(cwd).slice(real(proj.dir).length).replace(/^\/+/, '').split('/');
+  const c = real(cwd), d = real(proj.dir);
+  // Only a path inside the project folder: the hub root and its folders map to the hub's own project too.
+  const rel = c.startsWith(`${d}/`) ? c.slice(d.length).replace(/^\/+/, '').split('/') : [];
   const own = rel[0] === 'repo' ? path.join(proj.dir, 'repo') : rel[0] === 'worktrees' && rel[1] ? path.join(proj.dir, 'worktrees', rel[1]) : null;
   const named = [...String(text || '').matchAll(/worktrees\/([\w.-]+)/g)].map((m) => path.join(proj.dir, 'worktrees', m[1]))
     .filter((d) => d !== own && fs.existsSync(path.join(d, '.git')));

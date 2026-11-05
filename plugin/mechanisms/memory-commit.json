@@ -1,0 +1,21 @@
+{
+  "id": "memory-commit",
+  "event": "Stop",
+  "file": "stop.d/30-memory-commit.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [
+    "memory/events/<YYYY-MM>.jsonl",
+    "memory/.git"
+  ],
+  "reads": [
+    "<data>/events/<YYYY-MM>.jsonl"
+  ],
+  "polygon": [
+    "H42"
+  ],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

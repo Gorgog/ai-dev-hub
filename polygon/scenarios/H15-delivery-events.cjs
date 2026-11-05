@@ -44,8 +44,8 @@ module.exports = {
     const env = { AI_DEV_HUB: hub, HUB_LOG_DIR: data };
     const ev = (event, extra) => runEvent(pluginDir, event, { hook_event_name: event, session_id: 'eval-h15', permission_mode: 'plan', cwd: repo, ...extra }, env);
     ev('SessionStart', { source: 'startup', model: 'polygon-model' });
-    ev('PreToolUse', { tool_name: 'Bash', tool_use_id: 'u1', tool_input: { command: 'cd /tmp && ls' } });
-    ev('PreToolUse', { tool_name: 'Bash', tool_use_id: 'u2', tool_input: { command: 'cd /tmp && ls' } });
+    ev('PreToolUse', { tool_name: 'Bash', tool_use_id: 'u1', tool_input: { command: "sed -i 's/a/b/' notes.txt" } });
+    ev('PreToolUse', { tool_name: 'Bash', tool_use_id: 'u2', tool_input: { command: "sed -i 's/a/b/' notes.txt" } });
     const one = readEvents(data).ok;
     const shown = one.filter((e) => e.kind === 'shown' && e.tool_use_id === 'u1');
     const full = one.filter((e) => ADDRESS.some((k) => !(k in e)) || !(e.lesson || e.rule));
@@ -76,7 +76,7 @@ module.exports = {
       const out = [];
       for (let i = 0; i < 10; i++) {
         out.push(await preAsync(pluginDir, { hook_event_name: 'PreToolUse', session_id: `eval-h15-p${p}`, cwd: repo, tool_name: 'Bash',
-          tool_use_id: `v${i}`, tool_input: { command: i % 2 ? `cd /tmp/d${i} && ls` : `git -C /tmp add -A # ${i}` } }, env7));
+          tool_use_id: `v${i}`, tool_input: { command: i % 2 ? `sed -i 's/a/b/' d${i}.txt` : `git -C /tmp add -A # ${i}` } }, env7));
       }
       return out;
     }));

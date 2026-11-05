@@ -1,0 +1,18 @@
+{
+  "id": "memory-bash-write",
+  "event": "PreToolUse",
+  "file": "pretool.d/50-memory-bash-write.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": [
+    "memory/lessons/"
+  ],
+  "polygon": [
+    "H41"
+  ],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

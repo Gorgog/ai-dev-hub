@@ -153,3 +153,15 @@ test('review 3: every line that starts with the phrase is judged, a question inc
   // Accepted false block (decision 05.11): a sentence after a sign stays a report.
   assert.strictEqual(isReport('Готово к пушу, но после ревью.'), 'push');
 });
+
+test('target: a folder of the hub outside its project is no copy of it, whatever its length', () => {
+  const hub = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dg-prefix-')));
+  const proj = { dir: path.join(hub, 'projects', 'ai-dev-hub'), name: 'ai-dev-hub' };
+  const look = path.join(hub, 'research', 'abcdefghij', 'worktrees', 'x');
+  fs.mkdirSync(look, { recursive: true });
+  fs.mkdirSync(path.join(proj.dir, 'worktrees', 'x', '.git'), { recursive: true });
+  try {
+    assert.strictEqual(target(look, 'готово', proj), null);
+    assert.strictEqual(target(path.join(proj.dir, 'worktrees', 'x'), 'готово', proj), path.join(proj.dir, 'worktrees', 'x'));
+  } finally { fs.rmSync(hub, { recursive: true, force: true }); }
+});

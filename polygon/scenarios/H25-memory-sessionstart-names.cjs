@@ -1,6 +1,6 @@
-// Контракт среза 21 (память в хуках) к приёмочному тесту памяти 2: SessionStart проекта с памятью v2 называет в
-// брифе каждую порчу — NUL в уроке, рваную строку событий, битый индекс — и не блокирует старт. Содержимое уже даёт
-// проверка памяти среза 14 (`recall check` / store.check); подключить её к SessionStart — дело 21.
+// Приёмочный тест памяти 2 на SessionStart (срез 21, модуль memory-check): старт проекта с памятью v2 называет в
+// брифе каждую порчу — NUL в уроке, рваную строку событий, битый индекс (пересобирает его) — и не блокирует старт.
+// Содержимое — проверка памяти среза 14 (store.check). Модуль в стадии canary: фикстура включает его canary.json.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -12,7 +12,7 @@ const lesson = (id, first) => ['---', `id: ${id}`, 'kind: rule', 'when: []', 'ke
   'source: модель', 'created: 2026-11-01', '---', first, 'Вторая строка.', ''].join('\n');
 
 module.exports = {
-  id: 'H25', level: 'hook', mech: 'memory-hooks', contract: true, title: 'SessionStart называет порчу памяти v2 (контракт 21)',
+  id: 'H25', level: 'hook', mech: 'memory-hooks', title: 'SessionStart называет порчу памяти v2 (21)',
   async run({ base, pluginDir, work }) {
     const { hub, proj } = makeHub(base, work, {
       memory: {
@@ -21,11 +21,12 @@ module.exports = {
         'events/2026-11.jsonl': '{"at":"2026-11-01T00:00:00Z","kind":"shown","lesson":"ok-one"}\n{"at":"2026-11-0',
         '.index.db': 'мусор вместо базы',
       },
+      extra: { 'canary.json': JSON.stringify({ mechanisms: ['delivery', 'memory'] }) },
     });
     const repo = path.join(proj, 'repo');
     gitRepo(repo, { 'a.txt': '1\n' });
     const res = runEvent(pluginDir, 'SessionStart', { hook_event_name: 'SessionStart', source: 'startup', session_id: 'eval', cwd: repo },
-      { AI_DEV_HUB: hub });
+      { AI_DEV_HUB: hub, HUB_LOG_DIR: path.join(work, 'data') });
     const out = res.map((r) => r.stdout + (r.json && r.json.hookSpecificOutput ? r.json.hookSpecificOutput.additionalContext || '' : '')).join('\n');
     const blocked = res.some((r) => r.code === 2 || (r.json && (r.json.continue === false || r.json.decision === 'block')));
     return [
