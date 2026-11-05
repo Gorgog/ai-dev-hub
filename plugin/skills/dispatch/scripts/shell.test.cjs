@@ -147,6 +147,47 @@ test('executions: скрипт читается и разбирается — ba
   has('bash loop.sh', 'bin:jest', o);
 });
 
+test('executions: подстановки в heredoc без кавычек, ${:-…}, $(( )), массивах; case с «(»', () => {
+  has('cat <<EOF\n$(npx jest)\nEOF', 'bin:jest');
+  has('cat <<EOF\n`npx tsc`\nEOF', 'bin:tsc');
+  runsNo("cat <<'EOF'\n$(npx jest)\nEOF", 'npx');
+  has('echo ${X:-$(npx jest)}', 'bin:jest');
+  has('echo $(( $(npx jest | wc -l) ))', 'bin:jest');
+  has('A=($(npx jest)); echo ok', 'bin:jest');
+  has('case x in (a) npx jest;; esac', 'bin:jest');
+});
+
+test('executions: не знаю — unknown, а не тишина: скрипт не прочитан, лимиты, source <( )', () => {
+  const d = tmp();
+  assert.ok(executions('bash scripts/missing.sh', { cwd: d }).unknown.length > 0, 'скрипта нет на диске');
+  assert.ok(executions('source <(echo "npx jest")').unknown.length > 0);
+  let deep = 'npx jest';
+  for (let k = 0; k < 4; k++) deep = `bash -c ${JSON.stringify(deep)}`;
+  assert.ok(executions(deep).unknown.length > 0, 'глубина больше лимита');
+  assert.ok(executions('true; '.repeat(401) + 'npx jest').unknown.length > 0, 'программ больше лимита');
+  // hub-run.sh — известная обёртка: тело не читается, и это не «не знаю»
+  assert.strictEqual(executions('bash ~/hub/plugin/skills/dispatch/scripts/hub-run.sh T-1 -- npx jest').unknown.length, 0);
+});
+
+test('executions: незнакомая программа помечена opaque, данные (grep, git, echo) — нет', () => {
+  const op = (cmd) => executions(cmd).execs.map((e) => `${e.argv[0]}:${Boolean(e.opaque)}`);
+  assert.deepStrictEqual(op('xvfb-run npx playwright test'), ['xvfb-run:true', 'npx:false', 'playwright:true']);
+  assert.deepStrictEqual(op('grep -n x a; git commit -m y; echo z'), ['grep:false', 'git:false', 'echo:false']);
+});
+
+test('executions: не виснет — FIFO вместо скрипта, самоподключение source', () => {
+  const d = tmp();
+  require('child_process').execFileSync('mkfifo', [path.join(d, 'p')]);
+  let t0 = Date.now();
+  executions('./p', { cwd: d });
+  assert.ok(Date.now() - t0 < 2000, 'FIFO не открывается');
+  fs.writeFileSync(path.join(d, 'x.sh'), '. ./x.sh\n'.repeat(200));
+  t0 = Date.now();
+  const r = executions('. ./x.sh', { cwd: d });
+  assert.ok(Date.now() - t0 < 2000, `self-source: ${Date.now() - t0} мс`);
+  assert.ok(r.unknown.length > 0, 'упор в лимит — не знаю');
+});
+
 test('executions: незакрытая кавычка — error, без исключения', () => {
   const r = executions('echo "npx jest');
   assert.ok(r.error);

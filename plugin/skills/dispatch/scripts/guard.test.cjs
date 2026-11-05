@@ -85,6 +85,29 @@ test('decide by program: обходы шаблона полигона ловят
   assert.ok(ruleOf(decide({ ...ev(p, 'mcp__Claude_Browser__preview_start'), tool_input: { name: 'web' } }, { by: 'program' })));
 });
 
+test('decide by program: незнакомая обёртка или скрипт, которого нет, — суд по тексту, не пропуск (ревью р1)', () => {
+  const p = projectWith(SETS.polygon);
+  for (const cmd of ['xvfb-run npx playwright test', 'npx concurrently "npm run dev" "x"', 'screen -dmS t npx jest', 'tmux new -d "npx jest"',
+    'su - me -c "npx jest"', 'runuser -u me -- npx jest', 'nodemon --exec "npx jest"', 'npx dotenv-cli -e .env -- npx jest',
+    'script -qc "npx jest" /dev/null', 'pm2 start npx jest', 'prlimit --as=1 npx jest', 'chrt 0 npx jest', 'parallel ::: "npx jest"',
+    "cat > /tmp/zz.sh <<'EOF'\nnpx jest src\nEOF\nbash /tmp/zz.sh", 'printf "npx jest\\n" > ./zz.sh && sh ./zz.sh'])
+    assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
+  // данные — по-прежнему не блок
+  for (const cmd of ['grep -rn "npx jest" .', 'git commit -m "npx jest"', 'echo npx jest', 'sed -n 1p test-all-batches.sh'])
+    assert.strictEqual(prog(p, cmd), null, cmd);
+});
+
+test('decide by program: yarn|pnpm <бинарь> — бинарь; yarn --version — не установка (ревью р1)', () => {
+  const a = projectWith(SETS['project-a']);
+  assert.strictEqual(prog(a, 'yarn next dev'), 'дев-серверы');
+  assert.strictEqual(prog(a, 'pnpm next dev'), 'дев-серверы');
+  assert.strictEqual(prog(a, 'yarn kubb generate'), 'kubb');
+  assert.strictEqual(prog(a, 'pnpm vitest run'), 'полный vitest');
+  const p = projectWith(SETS.polygon);
+  for (const cmd of ['yarn --version', 'yarn -v', 'yarn --help']) assert.strictEqual(prog(p, cmd), null, cmd);
+  assert.ok(prog(p, 'yarn'), 'голый yarn — установка');
+});
+
 test('decide: по умолчанию (стадия off нового модуля) — прежнее решение по тексту', () => {
   const p = projectWith(SETS.polygon);
   assert.strictEqual(text(p, 'grep -n "npx jest" a.sh'), 'тесты с общей базой', 'текстовый замок ловит упоминание, как в v1');
