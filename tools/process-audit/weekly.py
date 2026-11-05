@@ -213,7 +213,7 @@ def week_metrics(db_path, hub, since, until):
     return out
 
 
-def plan(rep, entries, until, hub, data, seen):
+def plan(rep, entries, until, hub, data, seen, only=None):
     actions, questions = [], []
     seen_ids = {e.get('id') for e in seen}
     for p, rules in sorted(rep['effect']['rules'].items()):
@@ -258,14 +258,16 @@ def plan(rep, entries, until, hub, data, seen):
             a['file'] = os.path.join(data, 'process-audit', 'candidates', f"{c['project']}-{cid}.cjs")
             a['stub'] = stub(c['project'], c['title'], cid)
         actions.append(a)
-    return [a for a in actions if a['id'] not in seen_ids], [q for q in questions if q['id'] not in seen_ids]
+    keep = lambda x: x['id'] not in seen_ids and (only is None or x['project'] in only)  # noqa: E731
+    return [a for a in actions if keep(a)], [q for q in questions if keep(q)]
 
 
 def pct(x):
     return '—' if x is None else f'{round(100 * x)} %'
 
 
-def summary(rep, prev):
+def summary(rep, prev, applied=None):
+    """applied - the apply's answer (None: a dry run, nothing done): an action that failed is not called done."""
     w = rep['window']
     lo, hi = w['since'][:10], w['until'][:10]
     lines = [f"Недельный итог хаба · {lo} – {hi} ({w['days']} дн.)"]
@@ -301,14 +303,19 @@ def summary(rep, prev):
     pg = rep.get('polygon')
     if pg:
         lines.append(f"Полигон (hook): {pg['green']} из {pg['scenarios']} зелёные" + (f"; красные: {', '.join(pg['red'])}" if pg['red'] else ''))
-    acts = rep['actions']
+    failed = {f.get('action_id') for f in (applied or {}).get('failed', [])}
+    acts = [a for a in rep['actions'] if a['id'] not in failed]
     if acts:
         n = lambda k: sum(1 for a in acts if a['kind'] == k)  # noqa: E731
-        lines.append(f"Сделано сам (обратимо): повышено правил {n('promote')}, в отставку {n('retire')}, кандидатов {n('candidate')}"
+        head = 'Сделал бы (dry-run)' if applied is None else 'Сделано сам (обратимо)'
+        lines.append(f"{head}: повышено правил {n('promote')}, в отставку {n('retire')}, кандидатов {n('candidate')}"
                      f" — откат: weekly.py --revert <id>")
         for a in [a for a in acts if a['kind'] in ('promote', 'retire')][:TOP]:
             what = f"{a['rule']}: {a['from']} → {a['to']}" if a['kind'] == 'promote' else f"урок {a['lesson']} в отставку"
             lines.append(f"  · {what} ({a['project']}; {a['reason']}) [{a['id']}]")
+    if failed:
+        kinds = sorted({f.get('action') for f in applied['failed']})
+        lines.append(f"Сбой действий — не удалось: {len(failed)} ({', '.join(kinds)}) — предложу снова через неделю; причины — в отчёте недели")
     if rep['questions']:
         lines.append('Вопросы (необратимое):')
         for k, q in enumerate(rep['questions'][:TOP], 1):
@@ -367,6 +374,7 @@ def main():
     ap.add_argument('--refresh', action='store_true')
     ap.add_argument('--polygon', action='store_true')
     ap.add_argument('--polygon-result')
+    ap.add_argument('--projects', help='actions and questions only in these projects (comma list): the canary; audit - all')
     a = ap.parse_args()
     data = os.path.abspath(os.path.expanduser(a.data))
     hub = os.path.abspath(os.path.expanduser(a.hub)) if a.hub else os.path.join(data, 'hub')
@@ -426,7 +434,8 @@ def main():
     elif a.polygon and a.apply:
         rep['polygon'] = polygon(data, until)
     entries = {p: v1_entries(hub, p) for p in projects}
-    rep['actions'], rep['questions'] = plan(rep, entries, until, hub, data, seen)
+    only = set(p for p in a.projects.split(',') if p) if a.projects is not None else None
+    rep['actions'], rep['questions'] = plan(rep, entries, until, hub, data, seen, only)
     for k in ('retire', 'knowledge'):
         rep.pop(k)
 
@@ -434,13 +443,13 @@ def main():
     trend = read_jsonl(trend_file)
     earlier = [r for r in trend if r.get('until', '') < until]
     prev = earlier[-1].get('metrics') if earlier else None
-    rep['summary'] = summary(rep, prev)
 
     if a.apply:
         stubs = [x for x in rep['actions'] if x.get('stub')]
         res = hub_io({'op': 'apply', 'hub': hub, 'base_rules': base_rules, 'events_dir': events,
                       'actions': rep['actions'] + rep['questions']}) if events else {'applied': 0, 'failed': [], 'note': 'нет --events'}
         rep['applied'] = res
+        rep['summary'] = summary(rep, prev, res)
         for x in stubs:
             x.pop('stub', None)
         if not any(r.get('until') == until for r in trend):  # one row per week: a rerun of the week adds none
@@ -451,6 +460,7 @@ def main():
     else:
         for x in rep['actions']:
             x.pop('stub', None)
+        rep['summary'] = summary(rep, prev)
     if a.out:
         write_atomic(a.out, json.dumps(rep, ensure_ascii=False, indent=1, sort_keys=True) + '\n')
     print(json.dumps(rep, ensure_ascii=False, sort_keys=True) if a.json else rep['summary'])

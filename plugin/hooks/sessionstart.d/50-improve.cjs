@@ -2,6 +2,8 @@
 // running → tools/process-audit/weekly.py of the hub starts detached under hub-run (memory ceiling, timeout) with
 // --refresh --apply --polygon and the call returns at once; a finished week not shown yet → its summary, once, as one
 // item (the user's weekly digest: actions taken, questions on the irreversible). Main thread, startup | clear only.
+// The cycle acts (raises rules, retires lessons) only in the projects of the canary while the stage is canary; at on — in
+// all. Two starts at once launch one run: a start lock.
 // The data folder: HUB_DATA, else ~/hub-data — and only when it is a copy of THIS hub (every project of the hub is in
 // its hub/projects) with a calls database: a polygon or a test hub never refreshes the real copy.
 // State: <data of the hooks>/improve/state.json {started_at, pid, report, shown}; report — improve/week.json.
@@ -14,6 +16,7 @@ const { dir: dataDir } = require('../lib/journal.cjs');
 
 const WEEK = 7 * 864e5;
 const STALE = 6 * 3600e3; // a run older than this with its pid gone or reused is over
+const LOCK_STALE = 60e3;
 const PLUGIN = path.resolve(__dirname, '..', '..');
 
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -52,10 +55,37 @@ function decide(state, report, now) {
   return null;
 }
 
-function start(hub, data, out, stateFile, state, now) {
+// Projects the cycle may act in: all at stage on; at canary — those whose canary.json names improve (audit is of all).
+function scope(hub, stage) {
+  if (stage === 'on') return null;
+  let names = [];
+  try { names = fs.readdirSync(path.join(hub, 'projects')).sort(); } catch { return []; }
+  return names.filter((p) => {
+    const c = readJson(path.join(hub, 'projects', p, 'canary.json'));
+    return c && Array.isArray(c.mechanisms) && c.mechanisms.includes('improve');
+  });
+}
+
+// One start launches the run: an exclusive lock file for the time of decide → spawn → state; a lock older than a minute
+// is a start that died there.
+function claim(lock) {
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  try { fs.closeSync(fs.openSync(lock, 'wx')); return true; } catch (e) { if (e.code !== 'EEXIST') return false; }
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs < LOCK_STALE) return false;
+    const gone = `${lock}.stale-${process.pid}`;
+    fs.renameSync(lock, gone);
+    fs.unlinkSync(gone);
+    fs.closeSync(fs.openSync(lock, 'wx'));
+    return true;
+  } catch { return false; }
+}
+
+function start(hub, data, out, stateFile, state, now, projects) {
   const weekly = process.env.HUB_IMPROVE_WEEKLY || path.join(hub, 'tools', 'process-audit', 'weekly.py');
   if (!fs.existsSync(weekly)) return null;
-  const args = [weekly, '--data', data, '--hub', hub, '--events', dataDir(), '--apply', '--refresh', '--polygon', '--out', out];
+  const args = [weekly, '--data', data, '--hub', hub, '--events', dataDir(), '--apply', '--refresh', '--polygon', '--out', out,
+    ...(projects ? ['--projects', projects.join(',')] : [])];
   const hubRun = path.join(PLUGIN, 'skills', 'dispatch', 'scripts', 'hub-run.sh');
   const [cmd, argv] = fs.existsSync(hubRun)
     ? ['bash', [hubRun, 'improve-weekly', '-MemoryMax', '2G', '-Timeout', '3600', '--', 'python3', ...args]]
@@ -82,7 +112,15 @@ module.exports = {
     try { report = { ...readJson(out), mtime: fs.statSync(out).mtimeMs }; } catch { /* no week yet */ }
     const now = Date.now();
     const what = decide(state, report, now);
-    if (what === 'run') { start(hub, data, out, stateFile, state, now); return null; }
+    if (what === 'run') {
+      const lock = path.join(dataDir(), 'improve', 'start.lock');
+      if (!claim(lock)) return null;
+      try {
+        // re-read under the lock: another start may have launched it a moment ago
+        if (decide(readJson(stateFile) || {}, report, now) === 'run') start(hub, data, out, stateFile, readJson(stateFile) || {}, now, scope(hub, ctx.stage));
+      } finally { try { fs.unlinkSync(lock); } catch { /* gone */ } }
+      return null;
+    }
     if (what === 'failed') {
       writeState(stateFile, { ...state, pid: null, failed: state.started_at });
       return { items: [{ text: `Недельный цикл улучшения (запуск ${state.started_at}) не дописал итог ${out}: следующий — через неделю от запуска; ход — \`hub-run.sh --list\`.`, priority: 'info', key: 'improve' }] };

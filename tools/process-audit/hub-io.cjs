@@ -7,9 +7,11 @@
 //             (tail, grep) — «Bash: npx jest», «Bash: git push»; the tool's name for other tools; push / push_slice / parallel_check - the dispatcher's gates
 //       rules - {project: {rule: {mode, hits, windows, prevented, repeat, expired, rate, per100}}}: rules-guard
 //             (base-rules.json + the project's rules.json) replayed over the calls; a hit outside an open window is
-//             a reminder and opens one - the next 3 calls of the same epoch of the same agent; the rule again in it -
+//             a reminder and opens one - the next 3 calls of the same epoch of the same agent (a rough measure: the
+//             delivery shows a rule once an epoch, so «prevented» here asks whether the rule fires again after a hit); the rule again in it -
 //             repeat, 3 calls without it - prevented, the epoch over first - expired. Hits before rules_since
-//             ["<project>/<rule>"] (its last promotion) are not counted: the rule was in another mode.
+//             ["<project>/<rule>"] (its last promotion) are not counted: the rule was in another mode. per100 - hits
+//             per 100 calls of the project in the window, every tool.
 //       delivery - the «prevented» counter of the delivery's journal (12) over the window, null without a journal
 //       lessons - v2 memory: {project: {lesson: {kind, shown, repeat}}} for lessons with events in the window
 //       retire - v2 memory: lessons past their own retirement condition at `until` (store.retirementCandidates)
@@ -81,11 +83,11 @@ function replay(req) {
   const out = {};
   const ruleSets = new Map();
   const groups = new Map();
-  const bash = {};
+  const total = {}; // calls of the project in the window, every tool: the base of «per 100 calls»
   for (const c of req.calls) {
     const p = c.project || '';
     if (!ruleSets.has(p)) ruleSets.set(p, projectRules(req.hub, req.base_rules, c.project));
-    if (c.tool === 'Bash') bash[p] = (bash[p] || 0) + 1;
+    total[p] = (total[p] || 0) + 1;
     const k = `${c.session}\u0000${c.agent}\u0000${c.epoch}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(c);
@@ -124,7 +126,7 @@ function replay(req) {
     }
   }
   for (const [p, byRule] of Object.entries(out)) {
-    const n = bash[p === '(без проекта)' ? '' : p] || 0;
+    const n = total[p === '(без проекта)' ? '' : p] || 0;
     for (const s of Object.values(byRule)) {
       s.rate = s.prevented + s.repeat ? Math.round(1000 * s.prevented / (s.prevented + s.repeat)) / 1000 : null;
       s.per100 = n ? Math.round(1000 * 100 * s.hits / n) / 1000 : null;
@@ -192,6 +194,11 @@ function setMode(hub, project, rule, mode, deflt) {
   fs.renameSync(tmp, f);
 }
 
+// The mode written for a rule in the project's `modes`, or null.
+function currentMode(hub, project, rule) {
+  try { const j = JSON.parse(fs.readFileSync(rulesFile(hub, project), 'utf8')); return (!Array.isArray(j) && j.modes && j.modes[rule]) || null; } catch { return null; }
+}
+
 // The mode a rule has with no entry in `modes`: its own (base-rules.json or the project's rule), else log.
 function ownMode(req, project, rule) {
   const r = projectRules(req.hub, req.base_rules, null).concat((() => {
@@ -206,9 +213,12 @@ const ev = (a, extra = {}) => {
   return { ...addr, kind, id, project, rule, lesson, from, to, what, title, reason: reason || text, mode: 'improve', ...extra };
 };
 
+// The status line of a lesson's frontmatter (LF or CRLF, as written); a lesson without one is an error, not a no-op.
 function setStatus(file, status) {
   const text = fs.readFileSync(file, 'utf8');
-  const next = text.replace(/^(---\n[\s\S]*?^status:)[ \t]*\S+/m, `$1 ${status}`);
+  const fm = text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+  if (!fm || !/^status:[ \t]*[^\r\n]*$/m.test(fm[0])) throw new Error(`${file}: в frontmatter нет строки status`);
+  const next = fm[0].replace(/^status:[ \t]*[^\r\n]*$/m, () => `status: ${status}`) + text.slice(fm[0].length);
   const tmp = `${file}.improve-${process.pid}`;
   fs.writeFileSync(tmp, next);
   fs.renameSync(tmp, file);
@@ -226,7 +236,8 @@ function apply(req) {
       }
       done.push(ev(a));
     } catch (e) {
-      done.push(ev(a, { kind: 'failed', action: a.kind, reason: String(e.message).split('\n')[0] }));
+      // a failure keeps the action's id apart: the action is not «seen», it is offered again next week
+      done.push(ev(a, { kind: 'failed', id: undefined, action_id: a.id, action: a.kind, reason: String(e.message).split('\n')[0] }));
     }
   }
   events.append(done, req.events_dir);
@@ -238,10 +249,19 @@ function revert(req) {
   const a = all.find((e) => e.id === req.id && ['promote', 'retire'].includes(e.kind));
   if (!a) throw new Error(`действие ${req.id} не найдено (откатываются promote и retire)`);
   if (all.some((e) => e.kind === 'revert' && e.of === req.id)) throw new Error(`действие ${req.id} уже откачено`);
-  if (a.kind === 'promote') setMode(req.hub, a.project, a.rule, a.from, ownMode(req, a.project, a.rule));
+  // Undo only what is still as the cycle left it: a mode or a status changed since is someone's decision.
+  if (a.kind === 'promote') {
+    const own = ownMode(req, a.project, a.rule);
+    const now = currentMode(req.hub, a.project, a.rule) || own;
+    if (now !== a.to) throw new Error(`правило ${a.rule} (${a.project}) сейчас в режиме ${now}, а цикл ставил ${a.to}: откат не делаю`);
+    setMode(req.hub, a.project, a.rule, a.from, own);
+  }
   if (a.kind === 'retire') {
     const mem = path.join(req.hub, 'projects', a.project, 'memory');
-    setStatus(path.join(mem, 'lessons', `${a.lesson}.md`), 'active');
+    const file = path.join(mem, 'lessons', `${a.lesson}.md`);
+    if (!/^status:[ \t]*retired[ \t]*\r?$/m.test(fs.readFileSync(file, 'utf8'))) throw new Error(`урок ${a.lesson} (${a.project}) уже не в отставке: откат не делаю`);
+    setStatus(file, 'active');
+    store.ensureTriggers(mem);
     memEvents.appendEvent(mem, { ...addr, kind: 'restored', lesson: a.lesson });
   }
   events.append([{ ...addr, kind: 'revert', of: a.id, id: `${a.id}r`, project: a.project, rule: a.rule, lesson: a.lesson,

@@ -75,7 +75,7 @@ for s in spec['sessions']:
 db.commit()
 `;
 
-const lesson = (id, kind, created, extra = '') => `---\nid: ${id}\nkind: ${kind}\nwhen:\n  - tool: ^Bash$\n    cmd: ${id}\nkeys: [${id}]\nstatus: active\nsupersedes: []\nsource: модель (тест)\ncreated: ${created}\n---\nУрок ${id}: не делать так.${extra}\n`;
+const lesson = (id, kind, created, extra = '') => `---\nid: ${id}\nkind: ${kind}\nwhen:\n  - tool: ^Bash$\n    cmd: ${id}\nkeys: [${id}]\nstatus: active\nsupersedes: []\nsource: модель (тест)\ncreated: ${created}\n---\nУрок ${id}: не делать так.\nИначе повтор.${extra}\n`;
 
 function fixture(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'process-audit-'));
