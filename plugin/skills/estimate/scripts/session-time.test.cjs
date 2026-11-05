@@ -191,3 +191,27 @@ test('candidates: only top-level transcripts that mention the marker, not subage
   assert.deepStrictEqual(candidates(root, 'EST-START TASK-1'), [path.join(root, 'proj-a', 's1.jsonl')]);
   assert.deepStrictEqual(candidates(root, 'EST-START NOPE-1'), []);
 });
+
+test('findByKey with the marks index: straight to the indexed transcripts; a key not in the index — the scan', () => {
+  const root = tmp(), elsewhere = tmp();
+  const { record } = require('./marks.cjs');
+  const marks = path.join(tmp(), 'memory', 'est-marks.jsonl');
+  // The indexed transcript lies outside --root: only the index can find it.
+  const f = transcript(path.join(elsewhere, 'p'), 's.jsonl', [human(0, 'x'), said(1, '⏱ EST-START TASK-1'), said(11, '⏱ EST-END TASK-1')]);
+  record(marks, [{ kind: 'START', key: 'TASK-1' }, { kind: 'END', key: 'TASK-1' }], { session_id: 's', transcript_path: f, cwd: '/w' });
+  record(marks, [{ kind: 'START', key: 'TASK-3' }], { session_id: 'gone', transcript_path: path.join(elsewhere, 'gone.jsonl'), cwd: '/w' });
+  transcript(path.join(root, 'q'), 'r.jsonl', [human(0, 'y'), said(1, '⏱ EST-START TASK-2'), said(6, '⏱ EST-END TASK-2')]);
+  const byIndex = findByKey(root, 'TASK-1', { marks });
+  assert.strictEqual(byIndex.source, 'marks');
+  assert.strictEqual(byIndex.total.activeMin, 10);
+  const scanned = findByKey(root, 'TASK-2', { marks });
+  assert.strictEqual(scanned.source, 'scan');
+  assert.strictEqual(scanned.total.activeMin, 5);
+  // An indexed transcript that is gone (cleaned up) — the scan, not zero rounds.
+  assert.strictEqual(findByKey(root, 'TASK-3', { marks }).source, 'scan');
+  assert.strictEqual(findByKey(root, 'TASK-1', { marks, scan: true }).rounds.length, 0);
+  const { execFileSync } = require('child_process');
+  const out = execFileSync(process.execPath, [path.join(__dirname, 'session-time.cjs'), 'key', 'TASK-1', '--root', root, '--marks', marks], { encoding: 'utf8' });
+  assert.match(out, /TOTAL {2}active 10 min/);
+  assert.match(out, /source: marks/);
+});
