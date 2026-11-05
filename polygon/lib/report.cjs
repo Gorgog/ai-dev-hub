@@ -20,7 +20,7 @@ function aggregate(sc) {
   const checks = Object.values(byCheck);
   const required = checks.filter((c) => !c.observe && !c.skip);
   return { checks, rate: required.reduce((s, c) => s + c.pass / c.n, 0) / Math.max(1, required.length),
-    costUsd: sc.runs.reduce((s, r) => s + (r.costUsd || 0), 0), wallMs: sc.runs.reduce((s, r) => s + (r.wallMs || 0), 0) };
+    wallMs: sc.runs.reduce((s, r) => s + (r.wallMs || 0), 0) };
 }
 
 // Where a check counts: observe/skip — nowhere; contract, real — own rows; the rest — gates.

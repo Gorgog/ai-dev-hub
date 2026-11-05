@@ -26,12 +26,12 @@ async function main() {
   fs.writeFileSync(path.join(st.cwd, '.claude', 'settings.local.json'), JSON.stringify(settings, null, 2));
   fs.appendFileSync(path.join(st.cwd, '.git', 'info', 'exclude'), '.claude/settings.local.json\n');
   const run = await runClaude({ cwd: st.cwd, prompt: st.prompt, pluginDir: path.join(base, 'plugin'),
-    hubDir: st.hubDir, maxTurns: st.maxTurns, maxBudgetUsd: st.maxBudgetUsd, timeoutSec: st.timeoutSec,
+    hubDir: st.hubDir, maxTurns: st.maxTurns, timeoutSec: st.timeoutSec,
     logFile: path.join(work, 'transcript.jsonl') });
   const checks = await m01.grade({ run, ...st });
   const agents = run.toolUses.filter((t) => t.name === 'Agent' || t.name === 'Task').map((t) => t.input.subagent_type);
   console.log(JSON.stringify({ cwd: st.cwd, hookLog, transcript: path.join(work, 'transcript.jsonl'), agents,
-    cost: run.costUsd, turns: run.turns, code: run.code,
+    turns: run.turns, code: run.code,
     checks: checks.map((c) => ({ id: c.id, pass: c.pass, detail: String(c.detail || '').slice(0, 160) })) }));
 }
 

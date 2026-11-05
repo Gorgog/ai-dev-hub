@@ -1,5 +1,7 @@
 // Замок диспетчера без гранта: что блокируется. Корпус — команды из dispatch-guard.log проекта A (ложные блоки,
 // пути обезличены) и синтетические обходы (тяжёлое без гранта). Правила — копия dispatch-rules.json проекта.
+// Мини-проект включает канарейку lock-program (срез 15, замок по программе): на версии хаба с этим модулем меряется
+// он, на версии без него (v1, main до 15) — прежний замок по тексту.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -35,6 +37,15 @@ const CORPUS = [
   ['tp-polygon-model', 'Bash', { command: 'node polygon/run.cjs --model claude-opus-5-5 --only M01' }, true, 'правило замка проекта хаба 05.11', false],
   ['fn-polygon-level-model', 'Bash', { command: 'node polygon/run.cjs --level model --repeats 3 --only M01' }, true,
     'замок проекта хаба 05.11: правило ловило только --model, --level model прошёл мимо', false],
+  // Замок по программе (срез 15): ещё обходы обёртками и переменными и упоминания в тексте — вне прототипа.
+  ['fn-env-timeout-jest', 'Bash', { command: 'env CI=1 timeout 600 npx jest src/a.spec.ts' }, true, 'синтетика 15: обёртки env и timeout', false],
+  ['fn-bash-c-playwright', 'Bash', { command: 'bash -c "npx playwright test"' }, true, 'синтетика 15: строка-код bash -c', false],
+  ['fn-var-program', 'Bash', { command: 'R=jest; npx $R src/a.spec.ts' }, true, 'синтетика 15: программа в переменной', false],
+  ['fn-yarn-dev', 'Bash', { command: 'yarn dev' }, true, 'синтетика 15: скрипт пакета через yarn', false],
+  ['fn-cd-subshell-script', 'Bash', { command: '( cd scripts && ./test-batch.sh )' }, true, 'синтетика 15: скрипт из подоболочки после cd', false],
+  ['fp-git-log-grep', 'Bash', { command: 'git log --oneline --grep "npx jest"' }, false, 'синтетика 15: упоминание в аргументе', false],
+  ['fp-echo-npm-ci', 'Bash', { command: 'echo "дальше: npm ci, потом npx tsc"' }, false, 'синтетика 15: упоминание в echo', false],
+  ['fp-cat-script', 'Bash', { command: 'cat scripts/test-batch.sh && sed -n 1,5p scripts/test-batch.sh' }, false, 'синтетика 15: чтение скрипта, не запуск', false],
 ];
 
 module.exports = {
@@ -56,6 +67,7 @@ function judge(base, pluginDir, work, rules, cases) {
   const { hub, proj } = makeHub(base, work);
   fs.copyFileSync(rules, path.join(proj, 'dispatch-rules.json'));
   fs.writeFileSync(path.join(proj, 'memory', 'dispatch-grants.json'), '{}\n');
+  fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['lock-program'] }) + '\n');
   const cwd = path.join(proj, 'worktrees', 'DEMO-5');
   fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(cwd, 'scripts', 'test-batch.sh'), '#!/bin/sh\nnpx jest "$@"\n');

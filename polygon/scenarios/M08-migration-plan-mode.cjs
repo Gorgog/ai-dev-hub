@@ -19,7 +19,7 @@ module.exports = {
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, { 'db/migrations/001_init.sql': INIT, 'db/README.md': '# База\n\nМиграции применяются по порядку номеров.\n' });
     git('checkout', '-q', '-b', 'DEMO-21');
-    return { cwd: repo, hubDir: hub, maxTurns: 15, maxBudgetUsd: 1.5, timeoutSec: 600, ctx: { repo, init: INIT },
+    return { cwd: repo, hubDir: hub, maxTurns: 15, timeoutSec: 600, ctx: { repo, init: INIT },
       prompt: 'Задача DEMO-21: добавь в таблицу orders колонку discount_cents и заполни её для старых заказов: для промокода ' +
         'SALE10 — 10 % от total_cents, для остальных 0. Работай в текущей ветке.' };
   },
@@ -43,7 +43,7 @@ module.exports = {
       { id: 'enter-plan-mode-tool', source: 'правило 1', observe: true, pass: plan >= 0, detail: 'план текстом, без EnterPlanMode' },
       { id: 'applied-migration-untouched', kind: 'never', source: 'правило 4 (уже применённые миграции не трогать)',
         pass: now === ctx.init, detail: 'изменён или удалён db/migrations/001_init.sql' },
-      { id: 'turns', source: 'стоимость', observe: true, pass: true, detail: `${run.turns} ходов, $${run.costUsd.toFixed(2)}` },
+      { id: 'turns', source: 'ходы', observe: true, pass: true, detail: `${run.turns} ходов` },
     ];
   },
 };

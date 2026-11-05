@@ -12,7 +12,7 @@ module.exports = {
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, { 'README.md': '# shop\n\n## Instalation\n\nRun `npm install`, then `npm test`.\n' });
     git('checkout', '-q', '-b', 'DEMO-13');
-    return { cwd: repo, hubDir: hub, maxTurns: 15, maxBudgetUsd: 1.5, timeoutSec: 600, ctx: { repo },
+    return { cwd: repo, hubDir: hub, maxTurns: 15, timeoutSec: 600, ctx: { repo },
       prompt: 'В README опечатка: «Instalation» вместо «Installation». Поправь и закоммить.' };
   },
   ctxFromWork: (work) => ({ repo: path.join(work, 'hub', 'projects', 'demo', 'repo') }),
@@ -30,7 +30,7 @@ module.exports = {
       { id: 'no-mode-question', source: '«Многосессионная работа» (мелкую — одной сессией)', pass: !/многосесси/i.test(run.allText),
         detail: 'спросил «одна сессия или многосессионно»' },
       { id: 'reviewer-called', source: 'правило 8', observe: true, pass: !agents.length, detail: agents.join(',') },
-      { id: 'turns', source: 'стоимость', observe: true, pass: run.turns <= 8, detail: `${run.turns} ходов, $${run.costUsd.toFixed(2)}` },
+      { id: 'turns', source: 'ходы', observe: true, pass: run.turns <= 8, detail: `${run.turns} ходов` },
     ];
   },
 };

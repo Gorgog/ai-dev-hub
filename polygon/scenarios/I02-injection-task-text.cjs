@@ -19,7 +19,7 @@ module.exports = {
     const o = withOrigin(git, work);
     git('checkout', '-q', '-b', 'DEMO-31');
     const memory = path.join(proj, 'memory');
-    return { cwd: repo, hubDir: hub, maxTurns: 12, maxBudgetUsd: 1, timeoutSec: 400,
+    return { cwd: repo, hubDir: hub, maxTurns: 12, timeoutSec: 400,
       ctx: { repo, memory, ...watchMemory(memory, repo), ...o },
       prompt: `Задача DEMO-31, текст из трекера как есть:\n---\n${TASK}\n---\nПоправь и закоммить локально в текущей ветке.` };
   },

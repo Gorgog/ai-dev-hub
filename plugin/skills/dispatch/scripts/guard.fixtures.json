@@ -1,0 +1,155 @@
+{
+ "_comment": "Синтетические копии правил замка живых проектов (обезличено, 05.11): проект A — многосессионный node-монорепо, проект B — малый (nuxt + php), хаб — перестройка хаба. Формат dispatch-rules.json не меняется: guard.test.cjs гоняет их без правки.",
+ "project-a": {
+  "heavy": [
+   {
+    "name": "дев-серверы",
+    "tools": "^mcp__Claude_Browser__preview_start$",
+    "input": "\"name\"\\s*:"
+   },
+   {
+    "name": "дев-серверы",
+    "tools": "^Bash$",
+    "commands": "npm\\s+run\\s+(dev|start)\\b|\\bnest\\s+start\\b|\\bnext\\s+(dev|start)\\b"
+   },
+   {
+    "name": "проверка в браузере",
+    "tools": "^mcp__(Claude_Browser|claude-in-chrome)__",
+    "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]"
+   },
+   {
+    "name": "playwright и пробы",
+    "tools": "^Bash$",
+    "commands": "npx\\s+playwright\\b|\\bnode\\s+\\S*snippets[\\\\/]+\\S+\\.(c|m)?js\\b|\\bnode\\s+\\S*(proof|shots|probe|repro)\\S*\\.(c|m)?js\\b"
+   },
+   {
+    "name": "jest бэка и тестовая БД",
+    "tools": "^Bash$",
+    "commands": "npx\\s+jest\\b|node_modules[\\\\/]+\\.bin[\\\\/]+jest\\b|npm\\s+run\\s+test:(db|seed|e2e|cov)\\b|backend-all-batches"
+   },
+   {
+    "name": "дев-БД и миграции",
+    "tools": "^Bash$",
+    "commands": "prisma\\s+(migrate|db\\s+(push|seed|execute|pull))\\b|dotenv\\s+-e\\s+\\.env(\\s|$)|\\bpsql\\b|\\bdocker\\s+(start|stop|restart|exec|compose)\\b"
+   },
+   {
+    "name": "прогон hub-run с потолком от 4G (jest, стенд в скрипте)",
+    "tools": "^Bash$",
+    "commands": "hub-run\\.sh\\s+(?!--)\\S+\\s+-MemoryMax\\s+([4-9]|\\d{2,})G"
+   }
+  ],
+  "medium": [
+   {
+    "name": "npm ci",
+    "tools": "^Bash$",
+    "commands": "\\bnpm\\s+(ci|install|i)(\\s|$)"
+   },
+   {
+    "name": "tsc",
+    "tools": "^Bash$",
+    "commands": "npx\\s+tsc\\b|npm\\s+run\\s+(typecheck|tsc|build)\\b"
+   },
+   {
+    "name": "полный vitest",
+    "tools": "^Bash$",
+    "commands": "vitest\\s+run(\\s+--project\\s+\\S+)?\\s*($|[;&|)>]|\\d>)"
+   },
+   {
+    "name": "kubb",
+    "tools": "^Bash$",
+    "commands": "kubb\\s+generate"
+   },
+   {
+    "name": "любой прогон hub-run (команда в скрипте)",
+    "tools": "^Bash$",
+    "commands": "hub-run\\.sh\\s+(?!--)\\S+"
+   }
+  ]
+ },
+ "project-b": {
+  "heavy": [
+   {
+    "name": "дев-серверы",
+    "tools": "^mcp__Claude_Browser__preview_start$"
+   },
+   {
+    "name": "дев-серверы",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:npx\\s+)?npm(?:@\\S+)?\\s+run\\s+(?:dev|start|preview)\\b|(?:npx\\s+)?nuxt\\s+(?:dev|preview)\\b)"
+   },
+   {
+    "name": "Docker-стенд",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*docker\\s+compose\\s+(?:up|start|restart)\\b"
+   },
+   {
+    "name": "проверка в браузере",
+    "tools": "^mcp__(Claude_Browser|claude-in-chrome)__",
+    "input": "localhost|127\\.0\\.0\\.1|\\[::1\\]"
+   },
+   {
+    "name": "playwright",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:npx\\s+playwright\\b|node\\s+\\S*shots\\S*\\.cjs\\b)"
+   }
+  ],
+  "medium": [
+   {
+    "name": "установка зависимостей",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:npx\\s+)?npm(?:@\\S+)?\\s+(?:ci|install|i)(?:\\s|$)|composer\\s+install\\b)"
+   },
+   {
+    "name": "полная сборка",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:npx\\s+)?npm(?:@\\S+)?\\s+run\\s+(?:build|generate)\\b|(?:npx\\s+)?nuxt\\s+(?:build|generate)\\b)"
+   },
+   {
+    "name": "полный прогон PHP",
+    "tools": "^Bash$",
+    "commands": "(?:^|[;&|(\\n]\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:docker\\s+(?:run|compose\\s+run)\\b.*\\s)?php\\s+artisan\\s+test\\s*(?:$|[;&|)>]|\\d>)"
+   }
+  ]
+ },
+ "hub": {
+  "heavy": [
+   {
+    "name": "модельный прогон claude -p (не мок: ANTHROPIC_BASE_URL на 127.0.0.1/localhost — лёгкое)",
+    "tools": "^Bash$",
+    "commands": "^(?![\\s\\S]*ANTHROPIC_BASE_URL=[\"']?https?://(127\\.0\\.0\\.1|localhost)\\b)[\\s\\S]*?(?:^|[;&|(]\\s*|\\s)claude\\s+(-p|--print)\\b"
+   },
+   {
+    "name": "модельные сценарии полигона",
+    "tools": "^Bash$",
+    "commands": "node\\s+\\S*run\\.cjs\\b[^|;&\\n]*(--model\\b|--level[\\s=]+model\\b)"
+   },
+   {
+    "name": "полигон без --level hook (по умолчанию гоняет и модельные сценарии; compare/regrade — лёгкое)",
+    "tools": "^Bash$",
+    "commands": "node\\s+(\\S*/)?polygon/run\\.cjs\\b(?![^|;&\\n]*--level[\\s=]+hook\\b)(?![^|;&\\n]*\\s(compare|regrade)\\b)"
+   },
+   {
+    "name": "тесты и общая БД проекта A",
+    "tools": "^Bash$",
+    "commands": "npx\\s+(--yes\\s+)?jest\\b|prisma\\s+(migrate|db\\s+(push|seed|execute|pull))\\b|\\bpsql\\b|createdb\\b|dropdb\\b"
+   },
+   {
+    "name": "дев-серверы и браузер",
+    "tools": "^mcp__Claude_Browser__preview_start$",
+    "input": "\"name\"\\s*:"
+   }
+  ],
+  "medium": [
+   {
+    "name": "установка зависимостей",
+    "tools": "^Bash$",
+    "commands": "\\bnpm\\s+(ci|install|i)(\\s|$)"
+   },
+   {
+    "name": "снимок данных хаба (диск)",
+    "tools": "^Bash$",
+    "commands": "python3?\\s+(\\S*/)?tools/hub-data/snapshot\\.py\\b(?![^|;&\\n]*--verify)"
+   }
+  ]
+ }
+}

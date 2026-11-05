@@ -22,17 +22,32 @@ const { runClaude, summarize } = require('./lib/claude.cjs');
 const { aggregate, group, summaryLines, compareRuns } = require('./lib/report.cjs');
 const { hubDataDir, realCorporaStatus } = require('./lib/corpus.cjs');
 
+const USAGE = `usage: node polygon/run.cjs [--hub <dir>] [--ref <git-ref>] [--only <regex>] [--level hook|model] [--repeats 3] [-j 1]
+                           [--model <m>] [--work <dir>] [--out <file.json>] [--quiet] [--strict] [--keep]
+       node polygon/run.cjs compare <a.json> <b.json> [--all]
+       node polygon/run.cjs regrade <results.json>
+без --level hook гоняет и модельные сценарии (тяжёлое).`;
+
+// A flag the runner does not know (--help included) must not fall through to «run everything»: without --level that
+// is the model scenarios, heavy. Anything off — usage, exit 2, before any work.
+function usage(why) {
+  process.stderr.write(`run.cjs: ${why}\n${USAGE}\n`);
+  process.exit(2);
+}
+
 function parseArgs(argv) {
   const a = { hub: path.resolve(__dirname, '..'), ref: null, only: null, level: null, repeats: 3, j: 1,
     model: null, work: path.join(os.tmpdir(), 'hub-polygon'), out: null, quiet: false, strict: false, all: false, keep: false, _: [] };
+  const count = (k, x) => (/^[1-9]\d*$/.test(x) ? Number(x) : usage(`${k} ждёт целое > 0, а не «${x}»`));
   for (let i = 0; i < argv.length; i++) {
-    const k = argv[i], v = () => argv[++i];
+    const k = argv[i];
+    const v = () => (i + 1 < argv.length ? argv[++i] : usage(`${k} без значения`));
     if (k === '--hub') a.hub = path.resolve(v());
     else if (k === '--ref') a.ref = v();
-    else if (k === '--only') a.only = new RegExp(v());
-    else if (k === '--level') a.level = v();
-    else if (k === '--repeats') a.repeats = Number(v());
-    else if (k === '-j') a.j = Number(v());
+    else if (k === '--only') { const x = v(); try { a.only = new RegExp(x); } catch (e) { usage(`--only: ${e.message}`); } }
+    else if (k === '--level') { a.level = v(); if (!['hook', 'model'].includes(a.level)) usage(`--level ${a.level} — ожидается hook | model`); }
+    else if (k === '--repeats') a.repeats = count(k, v());
+    else if (k === '-j') a.j = count(k, v());
     else if (k === '--model') a.model = v();
     else if (k === '--work') a.work = path.resolve(v());
     else if (k === '--out') a.out = path.resolve(v());
@@ -40,8 +55,13 @@ function parseArgs(argv) {
     else if (k === '--strict') a.strict = true;
     else if (k === '--all') a.all = true;
     else if (k === '--keep') a.keep = true;
+    else if (k.startsWith('-')) usage(`незнакомый флаг ${k}`);
     else a._.push(k);
   }
+  const [cmd, ...rest] = a._;
+  if (cmd === 'compare' && rest.length !== 2) usage('compare ждёт два файла');
+  if (cmd === 'regrade' && rest.length !== 1) usage('regrade ждёт один файл');
+  if (cmd && !['compare', 'regrade'].includes(cmd)) usage(`лишнее слово «${cmd}» (сценарии выбирает --only)`);
   return a;
 }
 
@@ -75,7 +95,7 @@ async function runScenario(s, a, base, runRoot) {
     let checks;
     try { checks = await s.run({ base, pluginDir: path.join(base, 'plugin'), work }); }
     catch (e) { checks = [{ id: 'crash', pass: false, detail: String(e.stack || e).slice(0, 500) }]; }
-    return { ...head(s), runs: [{ checks: tag(s, checks), wallMs: Date.now() - t0, costUsd: 0 }] };
+    return { ...head(s), runs: [{ checks: tag(s, checks), wallMs: Date.now() - t0 }] };
   }
   const reps = Array.from({ length: s.repeats || a.repeats }, (_, i) => i);
   const runs = await pool(reps, a.j, async (rep) => {
@@ -83,13 +103,13 @@ async function runScenario(s, a, base, runRoot) {
     const st = await s.setup({ base, work });
     const pluginDir = path.join(st.hubDir, 'plugin');
     const run = await runClaude({ cwd: st.cwd, prompt: st.prompt, pluginDir, hubDir: st.hubDir, model: a.model || s.model,
-      maxTurns: st.maxTurns, maxBudgetUsd: st.maxBudgetUsd, timeoutSec: st.timeoutSec, logFile: path.join(work, 'transcript.jsonl') });
+      maxTurns: st.maxTurns, timeoutSec: st.timeoutSec, logFile: path.join(work, 'transcript.jsonl') });
     let checks;
     try { checks = await s.grade({ run, ...st }); }
     catch (e) { checks = [{ id: 'grader-crash', pass: false, detail: String(e.stack || e).slice(0, 500) }]; }
     const pluginLoaded = (run.init.plugins || []).map((p) => p.name);
-    process.stderr.write(`  ${s.id} r${rep}: ${checks.filter((c) => c.pass).length}/${checks.length} · $${run.costUsd.toFixed(2)} · ${run.turns} ходов · ${Math.round(run.wallMs / 1000)} с\n`);
-    return { checks: tag(s, checks), costUsd: run.costUsd, turns: run.turns, wallMs: run.wallMs, model: run.init.model, plugins: pluginLoaded,
+    process.stderr.write(`  ${s.id} r${rep}: ${checks.filter((c) => c.pass).length}/${checks.length} · ${run.turns} ходов · ${Math.round(run.wallMs / 1000)} с\n`);
+    return { checks: tag(s, checks), turns: run.turns, wallMs: run.wallMs, model: run.init.model, plugins: pluginLoaded,
       subtype: run.subtype, transcript: path.join(work, 'transcript.jsonl'), ctx: st.ctx, finalText: run.finalText.slice(0, 1500) };
   });
   return { ...head(s), runs };
@@ -99,7 +119,7 @@ function printTable(results) {
   for (const sc of results) {
     const ag = aggregate(sc);
     console.log(`\n${sc.id} [${sc.level}${sc.contract ? ', контракт' : ''}] ${sc.title} — ${(ag.rate * 100).toFixed(0)}%` +
-      (sc.level === 'model' ? ` · $${ag.costUsd.toFixed(2)} · ${Math.round(ag.wallMs / 60000)} мин` : ''));
+      (sc.level === 'model' ? ` · ${Math.round(ag.wallMs / 60000)} мин` : ''));
     for (const c of ag.checks) {
       const state = c.skip ? 'пр. ' : c.pass === c.n ? 'ok  ' : 'FAIL';
       console.log(`  ${state} ${c.id}${c.observe ? ' (наблюдение)' : ''}: ${c.skip ? c.skip : `${c.pass}/${c.n}`}` +
@@ -151,8 +171,6 @@ async function main() {
   for (const s of scenarios) results.push(await runScenario(s, a, base, runRoot));
   if (!a.quiet) printTable(results);
   console.log(`\n${summaryLines(results).join('\n')}`);
-  const total = results.reduce((s, r) => s + aggregate(r).costUsd, 0);
-  if (total) console.log(`стоимость (оценка CLI): $${total.toFixed(2)}`);
   const out = a.out || path.join(hubDataDir(), 'polygon', 'results', `${hub.sha}-${Date.now()}.json`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), hub, results }, null, 1));

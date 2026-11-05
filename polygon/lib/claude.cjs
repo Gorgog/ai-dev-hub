@@ -5,13 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-function runClaude({ cwd, prompt, pluginDir, hubDir, model, maxTurns = 30, maxBudgetUsd = 3, timeoutSec = 900,
+function runClaude({ cwd, prompt, pluginDir, hubDir, model, maxTurns = 30, timeoutSec = 900,
   allowedTools = ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'Agent', 'Skill'], logFile }) {
   const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-hook-events',
     '--setting-sources', 'project,local', '--strict-mcp-config', '--no-session-persistence',
     '--permission-mode', 'acceptEdits', '--allowedTools', allowedTools.join(','),
     '--disallowedTools', 'WebFetch,WebSearch',
-    '--max-turns', String(maxTurns), '--max-budget-usd', String(maxBudgetUsd)];
+    '--max-turns', String(maxTurns)];
   if (pluginDir) args.push('--plugin-dir', pluginDir);
   if (model) args.push('--model', model);
   const env = { ...process.env, AI_DEV_HUB: hubDir || '', CLAUDE_PLUGIN_DATA: path.join(path.dirname(logFile), 'plugin-data') };
@@ -51,7 +51,7 @@ function summarize(events) {
     toolUses, texts, hookEvents,
     finalText: result.result || texts[texts.length - 1] || '',
     allText: texts.join('\n\n'),
-    costUsd: result.total_cost_usd || 0, turns: result.num_turns || 0, durationMs: result.duration_ms || 0,
+    turns: result.num_turns || 0, durationMs: result.duration_ms || 0,
     subtype: result.subtype, isError: result.is_error,
   };
 }

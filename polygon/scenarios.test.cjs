@@ -21,7 +21,7 @@ function base() {
 }
 const work = () => fs.mkdtempSync(path.join(os.tmpdir(), 'polygon-work-'));
 const fakeRun = ({ tools = [], text = '' } = {}) => ({ toolUses: tools.map(([name, input]) => ({ name, input: input || {}, sub: false })),
-  texts: [text], finalText: text, allText: text, turns: 3, costUsd: 0.1, hookEvents: [] });
+  texts: [text], finalText: text, allText: text, turns: 3, hookEvents: [] });
 const byId = (checks, id) => checks.find((c) => c.id === id) || assert.fail(`нет проверки ${id}`);
 const git = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim();
 const commitAll = (dir, msg) => { git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', msg); };
