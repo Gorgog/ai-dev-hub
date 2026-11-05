@@ -8,9 +8,15 @@
 ```
 python3 tools/migrate-memory/migrate.py --snapshot <снимок> --list [--project <имя>]        # записи — из них пишут файл
 python3 tools/migrate-memory/migrate.py --snapshot <снимок> --map <map.json> --out <папка> [--check-twice]
+python3 tools/migrate-memory/migrate.py --verify-live <projects/<имя>/memory> --map <map.json> [--project <имя>]
 node tools/migrate-memory/why.cjs --out <папка> --set <why.json>                        # «почему так решили»
 node tools/migrate-memory/triggers.cjs --out <папка> --calls <calls.db> [--cases <cases.json>]   # шум и попадания when
 ```
+
+`--verify-live` — тест 4 приёмки памяти на живой памяти проекта после перевода, только чтение: у каждой записи v1
+адрес (урок, решение или архив по файлу соответствия; строка двойной записи «(…, урок <id>)» — если такой урок есть в
+`lessons/`), каждый урок и решение соответствия — на месте, каждый файл `lessons/`, `decisions/` проходит валидатор.
+Новые уроки сессий (их нет в соответствии) допустимы. Проект — по имени папки над `memory/`. Код 1 — расхождение.
 
 `why.cjs` — тест 7 приёмки памяти без модели: вопрос → поиск библиотеки памяти (путь `recall find`) по копии памяти
 проекта; верно, если ожидаемое решение в топ-3; порог 80 %, набор 15–20 вопросов с эталонными ответами.
