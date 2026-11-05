@@ -3,9 +3,12 @@
 // usage:
 //   node corrections.cjs <estimates.md> [--json]                         the factor: median of fact ÷ middle of forecast
 //   node corrections.cjs <estimates.md> --apply <min>–<max> [--complexity N] [--json]   the forecast times the factor
-// A closed row has a forecast («30–60 мин», «1,5–3 ч», «120 мин» — the first range of the cell) and the active minutes
-// of the fact (the first number of «Факт (акт / ожид)»). Not closed: no fact, retro rows («ретро» — forecast by eye
-// after the fact) and cancelled ones («Попал» is «—»). Under MIN_ROWS closed rows there is no factor: the analogues
+// A closed row has a forecast («30–60 мин», «1,5–3 ч», «40 мин–1,5 ч», «120 мин» — the one range of the cell outside
+// parentheses) and the active minutes of the fact (the first figure of «Факт (акт / ожид)», «1 ч 20 мин» too). Not
+// closed: no fact, a forecast with several ranges (variants, parts of the task: which one the fact is about is
+// unknown) or a compound one («1 ч 30 мин – 2 ч»), retro rows («ретро» — forecast by eye after the fact) and cancelled
+// ones («Попал» is «—»). The forecast column is the raw one, by steps: a forecast already times the factor would teach
+// the script its own correction. Under MIN_ROWS closed rows there is no factor: the analogues
 // lead (the journal template says so). Classes by complexity 1–3 / 4–6 / 7–10 get their own factor from MIN_CLASS rows;
 // --apply takes the class factor when there is one, else the overall one.
 'use strict';
@@ -18,20 +21,25 @@ const CLASSES = [['1–3', 1, 3], ['4–6', 4, 6], ['7–10', 7, 10]];
 const num = (s) => Number(String(s).replace(',', '.'));
 const cells = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
 
-// Minutes of the first range (or single figure) with its unit in a forecast cell.
+// Minutes of the one range (or single figure) of a forecast cell; parentheses are comments (a breakdown by steps).
+// \b is ASCII-only in JS: a unit ends where no Cyrillic letter follows.
+const N = '(\\d+(?:[.,]\\d+)?)', U = '(мин|ч)(?![а-яё])';
+const RANGE = new RegExp(`${N}\\s*(?:${U})?(?:\\s*[–—-]\\s*${N})?\\s*${U}`, 'g');
 function forecastOf(cell) {
-  const m = /(\d+(?:[.,]\d+)?)(?:\s*[–—-]\s*(\d+(?:[.,]\d+)?))?\s*(мин|ч)/.exec(cell);
-  if (!m) return null;
-  const k = m[3] === 'ч' ? 60 : 1;
-  const min = Math.round(num(m[1]) * k), max = Math.round(num(m[2] ?? m[1]) * k);
+  const bare = cell.replace(/\([^()]*\)/g, ' ');
+  if (/\d\s*ч\s*\d+\s*мин/.test(bare)) return null;
+  const ms = [...bare.matchAll(RANGE)];
+  if (ms.length !== 1) return null;
+  const [, a, ua, b, ub] = ms[0];
+  const k = (u) => (u === 'ч' ? 60 : 1);
+  const min = Math.round(num(a) * k(ua || ub)), max = Math.round(num(b ?? a) * k(ub));
   return min > 0 && max >= min ? { min, max } : null;
 }
 
-// Active minutes: the first number of the fact cell («45 / 4 мин», «≈25 мин», «56 мин / 15 мин ожидания», «≈ 5 ч»).
+// Active minutes: the first figure of the fact cell («45 / 4 мин», «≈25 мин», «56 мин / 15», «≈ 5 ч», «1 ч 20 мин»).
 function activeOf(cell) {
-  // \b is ASCII-only in JS: «ч» is followed by «not a Cyrillic letter», else «≈ 5 ч активно» reads as 5 minutes.
-  const m = /^\s*≈?\s*(\d+(?:[.,]\d+)?)(?:\s*(ч)(?![а-яё]))?/i.exec(cell);
-  return m ? Math.round(num(m[1]) * (m[2] ? 60 : 1)) : null;
+  const m = /^\s*≈?\s*(\d+(?:[.,]\d+)?)(?:\s*(ч)(?![а-яё])(?:\s*(\d+)\s*мин)?)?/.exec(cell);
+  return m ? Math.round(num(m[1]) * (m[2] ? 60 : 1) + Number(m[3] || 0)) : null;
 }
 
 // Rows of the table whose header names «Прогноз» and «Факт …»; columns are found by their header.
@@ -109,7 +117,7 @@ if (require.main === module) {
     forecast = { min: Number(m[1]), max: Number(m[2] || m[1]) };
     if (forecast.max < forecast.min) die(`--apply: ${range} — максимум меньше минимума`);
   }
-  if (cx !== undefined && !/^\d+$/.test(cx)) die(`--complexity: целое 1–10, а не «${cx}»`);
+  if (cx !== undefined && !(/^\d+$/.test(cx) && cx >= 1 && cx <= 10)) die(`--complexity: целое 1–10, а не «${cx}»`);
   const c = corrections(parseJournal(text));
   const applied = forecast && apply(c, forecast, cx === undefined ? undefined : Number(cx));
   if (json) {

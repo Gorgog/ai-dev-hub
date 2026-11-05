@@ -1,6 +1,6 @@
 // Метки оценки ловит Stop (срез 19): «⏱ EST-START» в сообщении диспетчеру посреди хода и «⏱ EST-END» в последнем
-// сообщении попадают в индекс проекта memory/est-marks.jsonl; `session-time.cjs key` по индексу находит отрезок задачи,
-// даже когда журнала нет среди просканированных (--root пустой). Без канарейки механизма — тишина.
+// сообщении попадают в индекс проекта memory/est-marks.jsonl; `session-time.cjs key --index-only` по индексу находит
+// отрезок задачи, даже когда журнала нет среди просканированных (--root пустой). Без канарейки механизма — тишина.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -43,13 +43,13 @@ module.exports = {
     const script = path.join(base, 'plugin', 'skills', 'estimate', 'scripts', 'session-time.cjs');
     const empty = path.join(work, 'empty-root');
     fs.mkdirSync(empty, { recursive: true });
-    const r = spawnSync(process.execPath, [script, 'key', 'DEMO-5', '--root', empty, '--marks', on.marks], { encoding: 'utf8', timeout: 30000 });
+    const r = spawnSync(process.execPath, [script, 'key', 'DEMO-5', '--root', empty, '--marks', on.marks, '--index-only'], { encoding: 'utf8', timeout: 30000 });
     const active = Number(((r.stdout || '').match(/TOTAL\s+active\s+(\d+)\s+min/) || [])[1]);
     const silent = on.res.every((x) => !x.stdout.trim() && x.code === 0);
     return [
       { id: 'marks-from-stop', source: SRC, pass: kinds.join(',') === 'START DEMO-5,END DEMO-5' && silent,
         detail: `индекс: ${kinds.join(', ') || 'пусто'}; вывод хука: ${on.res.map((x) => `${x.code}:${x.stdout.trim().slice(0, 60)}`).join(' ') || 'нет хуков Stop'}` },
-      { id: 'key-by-index', source: SRC, pass: active === 30 && /source: marks/.test(r.stdout || ''),
+      { id: 'key-by-index', source: SRC, pass: active === 30 && /source: marks only/.test(r.stdout || ''),
         detail: `ждали 30 мин по индексу, вышло: ${(r.stdout || r.stderr || '').split('\n').slice(-3).join(' | ').slice(0, 160)}` },
       { id: 'no-canary-quiet', kind: 'quiet', source: 'стадия canary: механизм только в проектах из canary.json', pass: off.lines.length === 0,
         detail: `без канарейки строк индекса: ${off.lines.length}` },
