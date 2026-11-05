@@ -57,6 +57,8 @@ const MAIN = [
   { compact: true },
   bash('c1b', 'cd /r && ls'),                   // 1 of epoch 1: cd bare
   bash('s2b', "sed -i 's/q/w/' g"),             // 2 of epoch 1: sed-in-place violated
+  bash('k3b', 'git commit -m z && node /h/checks.cjs --full'),  // 3: no-verify kept; the checks run after the commit
+  ['m4b', 'SendMessage', { to: 'disp', message: 'Готово к пушу: T-1 def5678' }],  // 4: checks-full kept
 ];
 
 const SUB = [
@@ -101,6 +103,7 @@ test('shell-rules: возможность и нарушение — по раз�
     ['cd /r && ls', { cd: 1 }], ['( cd /r && ls )', { cd: 0 }], ['x=$(cd /r && pwd)', { cd: 0 }], ['echo cd /r', {}],
     ['git add -A', { 'git-add-all': 1 }], ['git add --all', { 'git-add-all': 1 }], ['git -C /r add -- .', { 'git-add-all': 1 }],
     ['git add src/a.ts', { 'git-add-all': 0 }], ['git add ./src', { 'git-add-all': 0 }], ['echo "git add -A"', {}],
+    ['git add -A src/a.ts docs', { 'git-add-all': 0 }], ['git add -A .', { 'git-add-all': 1 }], ['git add -u', { 'git-add-all': 0 }],
     ["sed -i 's/a/b/' f", { 'sed-in-place': 1 }], ["sed -Ei.bak 's/a/b/' f", { 'sed-in-place': 1 }], ["sed --in-place=.b 's/a/b/' f", { 'sed-in-place': 1 }],
     ['sed -n 1,5p f', {}], ["ls | sed 's/^/  /'", {}], ["sed -e 's/i/x/' f", {}],
     ['git commit -m x', { 'no-verify': 0 }], ['git commit --no-verify -m x', { 'no-verify': 1 }], ['git commit -nm x', { 'no-verify': 1 }],
@@ -109,6 +112,7 @@ test('shell-rules: возможность и нарушение — по раз�
     ['git worktree remove /w', { 'worktree-force': 0 }], ['git worktree remove --force /w', { 'worktree-force': 1 }], ['git worktree remove -f /w', { 'worktree-force': 1 }],
     ['git worktree list', {}],
     ['git checkout main', { 'checkout-dot': 0 }], ['git checkout -- .', { 'checkout-dot': 1 }], ['git restore .', { 'checkout-dot': 1 }],
+    ['git restore --staged .', {}], ['git restore --staged --worktree .', { 'checkout-dot': 1 }],
     ['cat <<EOF\ngit add -A\nsed -i x f\nEOF', {}], ['# git clean -x', {}],
   ];
   const r = spawnSync('node', [path.join(DIR, 'shell-rules.cjs')], { input: JSON.stringify(cases.map((c) => c[0])), encoding: 'utf8', timeout: 10000 });
@@ -116,11 +120,14 @@ test('shell-rules: возможность и нарушение — по раз�
   const got = JSON.parse(r.stdout);
   cases.forEach(([cmd, rules], k) => assert.deepStrictEqual(got[k].rules, rules, cmd));
   const flags = (cmd) => JSON.parse(spawnSync('node', [path.join(DIR, 'shell-rules.cjs')], { input: JSON.stringify([cmd]), encoding: 'utf8' }).stdout)[0];
-  assert.strictEqual(flags('git -C /r commit -m x').commit, 1);
-  assert.strictEqual(flags('git log --grep commit').commit, 0);
-  assert.strictEqual(flags('S=/h/scripts; bash ~/x/hub-run.sh T -- node $S/checks.cjs --full --base main').checks_full, 1);
-  assert.strictEqual(flags('node /h/checks.cjs').checks_full, 0);
-  assert.strictEqual(flags('cat /h/checks.cjs # --full').checks_full, 0);
+  // A commit and a full checks run, in their order inside the command.
+  assert.deepStrictEqual(flags('git -C /r commit -m x').events, ['commit']);
+  assert.deepStrictEqual(flags('git log --grep commit').events, []);
+  assert.deepStrictEqual(flags('S=/h/scripts; bash ~/x/hub-run.sh T -- node $S/checks.cjs --full --base main').events, ['checks']);
+  assert.deepStrictEqual(flags('node /h/checks.cjs').events, []);
+  assert.deepStrictEqual(flags('cat /h/checks.cjs # --full').events, []);
+  assert.deepStrictEqual(flags('git commit -F - <<EOF\nmsg\nEOF\nnode /h/checks.cjs --full').events, ['commit', 'checks']);
+  assert.deepStrictEqual(flags('node /h/checks.cjs --full; git commit -m x').events, ['checks', 'commit']);
 });
 
 test('шаг 0 на синтетике: глубина эпохи, правила, доклады, компакция, повторы', (t) => {
@@ -128,19 +135,20 @@ test('шаг 0 на синтетике: глубина эпохи, правил�
   const out = path.join(data, 'baseline', 'step0.json');
   const s = step0(data, out, '--checks-since', '2026-10-21');
 
-  assert.deepStrictEqual(s.depth_check, { checked: 317, mismatched: 0 });
-  // Main thread, rules without cd: early (1-50) - s3 v, a5 v, e6, s2b v; late (>= 301) - s310 v, a311, k312, report v, m315.
+  assert.deepStrictEqual(s.depth_check, { checked: 319, mismatched: 0 });
+  // Main thread, rules without cd: early (1-50) - s3 v, a5 v, e6, s2b v, k3b, m4b; late (>= 301) - s310 v, a311, k312,
+  // report v, m315.
   const main = s.threads.main;
   assert.deepStrictEqual(main.buckets.map((b) => [b.label, b.opps, b.viol]),
-    [['1-50', 4, 3], ['51-150', 0, 0], ['151-300', 0, 0], ['301+', 5, 2]]);
-  assert.deepStrictEqual(main.by_rule['checks-full'], { opps: 2, viol: 1 });
+    [['1-50', 6, 3], ['51-150', 0, 0], ['151-300', 0, 0], ['301+', 5, 2]]);
+  assert.deepStrictEqual(main.by_rule['checks-full'], { opps: 3, viol: 1 });
   assert.deepStrictEqual(main.by_rule['sed-in-place'], { opps: 4, viol: 3 });
-  assert.strictEqual(main.raw_ratio, 0.533);
+  assert.strictEqual(main.raw_ratio, 0.8);
   assert.strictEqual(main.verdict, 'мало данных');  // the late bucket holds < 100 opportunities
   // Diagnostics, out of the verdict: each rule on its own, and the ratio with the expectation of the session x rule.
   assert.deepStrictEqual(main.diagnostics?.by_rule['sed-in-place']?.buckets.map((b) => [b.opps, b.viol]), [[3, 2], [0, 0], [0, 0], [1, 1]]);
   assert.ok('p' in (main.diagnostics?.by_rule['checks-full'] || {}) && 'ratio' in (main.diagnostics?.by_rule['checks-full'] || {}));
-  assert.strictEqual(main.diagnostics?.session_ratio, 0.815);
+  assert.strictEqual(main.diagnostics?.session_ratio, 1.072);
   // cd - its own line: c1 bare, c2 kept, c1b bare - all early.
   assert.deepStrictEqual(s.threads.main.cd.buckets.map((b) => [b.opps, b.viol]), [[3, 2], [0, 0], [0, 0], [0, 0]]);
 
@@ -148,8 +156,8 @@ test('шаг 0 на синтетике: глубина эпохи, правил�
   assert.deepStrictEqual(sub.buckets.map((b) => [b.label, b.opps, b.viol]),
     [['1-10', 5, 4], ['11-30', 0, 0], ['31-60', 0, 0], ['61+', 0, 0]]);
 
-  // K = 50 before and after the compaction: s310 v, a311, k312, report v, m315 | s2b v.
-  assert.deepStrictEqual(s.compaction.rules, { before: { opps: 5, viol: 2 }, after: { opps: 1, viol: 1 }, compactions: 1 });
+  // K = 50 before and after the compaction: s310 v, a311, k312, report v, m315 | s2b v, k3b, m4b.
+  assert.deepStrictEqual(s.compaction.rules, { before: { opps: 5, viol: 2 }, after: { opps: 3, viol: 1 }, compactions: 1 });
   assert.deepStrictEqual(s.compaction.cd, { before: { opps: 0, viol: 0 }, after: { opps: 1, viol: 1 }, compactions: 1 });
 
   const rep = Object.fromEntries(s.repeats.cases.map((c) => [c.id, c]));
