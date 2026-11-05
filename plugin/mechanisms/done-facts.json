@@ -1,0 +1,14 @@
+{
+  "id": "done-facts",
+  "event": "Stop",
+  "file": "stop.d/11-done-facts.cjs",
+  "handler": "done-gate",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "project",
+  "state": [],
+  "reads": ["checks.json", "<git-dir>/hub/last-full.json"],
+  "polygon": ["H09", "H30"],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

@@ -193,3 +193,51 @@ test('summarize: one line per step, errors under FAIL, exit code 1 on any FAIL',
   assert.doesNotMatch(s.text, /e6/);
   assert.strictEqual(summarize([{ name: 'a', status: 'SKIP', ms: 0, log: '' }]).code, 0);
 });
+
+test('--full writes last-full.json into the git dir of the worktree: sha of HEAD, exit code, clean tree, steps', () => {
+  const hub = tmp();
+  const proj = path.join(hub, 'projects', 'demo');
+  const r = path.join(proj, 'repo');
+  fs.mkdirSync(r, { recursive: true });
+  git(r, 'init', '-q', '-b', 'main');
+  git(r, 'config', 'user.email', 't@t'); git(r, 'config', 'user.name', 't');
+  write(path.join(r, 'a.txt'), '1'); git(r, 'add', '.'); git(r, 'commit', '-q', '-m', 'base');
+  const cfg = path.join(proj, 'checks.json');
+  const cli = () => spawnSync(process.execPath, [path.join(__dirname, 'checks.cjs'), '--full', '--base', 'main', '--config', cfg],
+    { cwd: r, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: path.join(hub, 'cache') } });
+  const file = git(r, 'rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json').trim();
+  const head = git(r, 'rev-parse', 'HEAD').trim();
+
+  write(cfg, JSON.stringify({ full: [{ name: 'ok', cmd: 'true' }] }));
+  assert.strictEqual(cli().status, 0);
+  assert.ok(fs.existsSync(file), 'last-full.json written');
+  const green = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(green.sha, head);
+  assert.strictEqual(green.code, 0);
+  assert.strictEqual(green.clean, true);
+  assert.deepStrictEqual(green.steps, [{ name: 'ok', status: 'OK' }]);
+  assert.ok(Date.parse(green.at));
+
+  write(path.join(r, 'wip.txt'), 'x');
+  write(cfg, JSON.stringify({ full: [{ name: 'ok', cmd: 'true' }, { name: 'bad', cmd: 'echo error boom; exit 1' }] }));
+  assert.strictEqual(cli().status, 1);
+  const red = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(red.code, 1);
+  assert.strictEqual(red.clean, false);
+  assert.deepStrictEqual(red.steps.map((s) => s.status), ['OK', 'FAIL']);
+});
+
+test('the fast run leaves last-full.json alone', () => {
+  const hub = tmp();
+  const proj = path.join(hub, 'projects', 'demo');
+  const r = path.join(proj, 'repo');
+  fs.mkdirSync(r, { recursive: true });
+  git(r, 'init', '-q', '-b', 'main');
+  git(r, 'config', 'user.email', 't@t'); git(r, 'config', 'user.name', 't');
+  write(path.join(r, 'a.txt'), '1'); git(r, 'add', '.'); git(r, 'commit', '-q', '-m', 'base');
+  write(path.join(proj, 'checks.json'), JSON.stringify({ fast: [{ name: 'ok', cmd: 'true' }] }));
+  const res = spawnSync(process.execPath, [path.join(__dirname, 'checks.cjs'), '--base', 'main', '--config', path.join(proj, 'checks.json')],
+    { cwd: r, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: path.join(hub, 'cache') } });
+  assert.strictEqual(res.status, 0, res.stderr);
+  assert.ok(!fs.existsSync(git(r, 'rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json').trim()));
+});

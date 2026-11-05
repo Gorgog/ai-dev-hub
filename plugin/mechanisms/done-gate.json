@@ -9,6 +9,6 @@
   "state": [],
   "reads": [],
   "polygon": ["H01", "H11"],
-  "replaces": "v1: stop.cjs",
+  "replaces": "v1: stop.cjs (doneGate)",
   "review": "2027-02-05"
 }
