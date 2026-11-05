@@ -158,6 +158,24 @@ test('a dangling symlink stays a link (its target is created); a wrapper around 
   assert.deepStrictEqual(settings(fx).statusLine, wrap);
 });
 
+test('a chain of links dangling at the second hop: no link becomes a file; our old line with a space is updated', () => {
+  const fx = fixture();
+  const dots = path.join(fx.root, 'dots');
+  fs.mkdirSync(path.join(dots, 'real'), { recursive: true });
+  fs.symlinkSync('real/target.json', path.join(dots, 'mid.json'));
+  fs.symlinkSync('../dots/mid.json', path.join(fx.claude, 'settings.json'));
+  assert.strictEqual(run(fx, ['apply', 'journal-retention']).status, 0);
+  assert.ok(fs.lstatSync(path.join(fx.claude, 'settings.json')).isSymbolicLink());
+  assert.ok(fs.lstatSync(path.join(dots, 'mid.json')).isSymbolicLink(), 'the middle link survives');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dots, 'real', 'target.json'), 'utf8')).cleanupPeriodDays, 365);
+
+  const old = 'node "/old place/John Doe/hub/plugin/skills/setup/scripts/statusline.cjs"';
+  fs.writeFileSync(path.join(dots, 'real', 'target.json'), JSON.stringify({ statusLine: { type: 'command', command: old } }));
+  assert.strictEqual(checkJson(fx).find((c) => c.id === 'status-line').ok, false, 'our line at an old path is ours to update');
+  assert.strictEqual(run(fx, ['apply', 'status-line']).status, 0);
+  assert.notStrictEqual(settings(fx).statusLine.command, old);
+});
+
 test('the file mode of settings.json is kept, the backup too (keys in env stay private)', () => {
   const fx = fixture();
   const file = path.join(fx.claude, 'settings.json');
