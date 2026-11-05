@@ -437,11 +437,12 @@ function check(memDir) {
 
 // ---------- export / import ----------
 
-const SOURCE_RE = /^(lessons|decisions|events)\/[^/\\]+$/;
+// events/archive/ — months folded by memory-gc, kept byte for byte (the reader does not see them, export must).
+const SOURCE_RE = /^(lessons|decisions|events|events\/archive)\/[^/\\]+$/;
 
 function exportAll(memDir) {
   const files = [];
-  for (const d of [...DIRS, 'events']) {
+  for (const d of [...DIRS, 'events', 'events/archive']) {
     let names = [];
     try { names = fs.readdirSync(path.join(memDir, d)).filter((f) => !f.startsWith('.')).sort(); } catch { continue; }
     for (const f of names) {
