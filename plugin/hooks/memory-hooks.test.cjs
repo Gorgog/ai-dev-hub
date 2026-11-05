@@ -395,7 +395,10 @@ test('review round 1: SessionStart names a `when` the hot path will not use', ()
 
 test('review round 2: the matcher means what the `i` regex meant — mixed class ranges, identity escapes of letters', () => {
   const { match } = require('./memory-hooks.cjs');
-  for (const [src, str] of [['x[A-z]y', 'x_y'], ['[Z-a]q', '_q'], ['foo\\Z', 'fooz'], ['[\\x00-\\x5A]q', '_q'], ['[A-Z]{2}\\d', 'ab1'], ['\\Bstart', 'restart']]) {
+  for (const [src, str] of [['x[A-z]y', 'x_y'], ['[Z-a]q', '_q'], ['foo\\Z', 'fooz'], ['[\\x00-\\x5A]q', '_q'], ['[A-Z]{2}\\d', 'ab1'], ['\\Bstart', 'restart'],
+    // review round 3: hex and letters inside a class, Cyrillic and Latin-1 ranges, letters whose folding differs
+    ['[\\x41]x', 'ax'], ['[Ж]x', 'жx'], ['[\\x41\\x42]q', 'Aq'], ['[\\x41-\\x5a]x', 'bx'], ['[A-Z]', 'q'], ['[Ё-Я]x', 'Жx'], ['[Ѐ-Я]+', 'ПРИВЕТ'],
+    ['[À-Þ]', '÷'], ['aς', 'aσ'], ['k', '\u212A'], ['ß', 'ẞ'], ['[^A-Z]x', 'ax'], ['[^A-Z]x', 'Bx']]) {
     const want = new RegExp(src, 'i').test(str);
     const got = match([{ id: 'x', first: '', core: false, when: [{ cmd: src }] }], { cmd: str }).length === 1;
     assert.strictEqual(got, want, `${src} on ${str}: the i regex says ${want}`);
