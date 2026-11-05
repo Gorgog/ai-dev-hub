@@ -100,10 +100,10 @@ test('facts: a branch behind its base blocks a push report, not a merge report; 
   assert.deepStrictEqual(facts(behind, p.proj, 'push'), [], 'an unreadable base is no proof of being behind');
 });
 
-test('review 1: isReport — no punctuation after the phrase, a numbered list, an emoji; a question is not', () => {
+test('review 1: isReport — no punctuation after the phrase, a numbered list, an emoji', () => {
   for (const t of ['Готово к пушу HEAD abc1234, дерево чистое', '1. Готово к пушу: abc1234', 'Готово к пушу ✅ abc1234', 'ГОТОВО К ПУШУ: x'])
     assert.strictEqual(isReport(t), 'push', t);
-  for (const t of ['Готово к пушу?', 'Готово к пушу — когда?', 'готово к пушуху']) assert.strictEqual(isReport(t), null, t);
+  assert.strictEqual(isReport('готово к пушуху'), null);
 });
 
 test('review 1: target — the own copy whose HEAD the report names wins over a worktree it only mentions', () => {
@@ -134,18 +134,21 @@ test('review 1: base without checks.json — the trunk (main/master), not the br
   assert.match(facts(other, p.proj, 'push').join(), /отстала от main на 1/);
 });
 
-test('review 2: a report with a question later on its line is a report; a line that starts with the phrase and goes on in words is a status', () => {
+test('review 2: a report with a question later on its line is a report; the phrase going on in Russian words is a status', () => {
   for (const t of ['Готово к пушу: 2c049b8. Пушить?', 'Готово к пушу (2c049b8) — пушим?', 'Готово к пушу HEAD 2c049b8 — пушить?', '✅ Готово к пушу: abc1234'])
     assert.strictEqual(isReport(t), 'push', t);
-  for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.', 'Готово к пушу — когда?', 'Готово к пушу, если ревью чистое?'])
+  for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.'])
     assert.strictEqual(isReport(t), null, t);
 });
 
-test('review 3: only the phrase itself is a question; a report without a sha and a question after it is judged', () => {
+test('review 3: every line that starts with the phrase is judged, a question included', () => {
   for (const t of ['Готово к пушу. Пушить?', 'Готово к пушу: проверено — пушить?', 'Готово к пушу — ветка K-16, пушить?', 'Готово к пушу: ждёт ответа — пушить?'])
     assert.strictEqual(isReport(t), 'push', t);
-  for (const t of ['Готово к пушу?', 'Готово к пушу — когда?', '**Готово к пушу** — если ревью чистое?', 'Готово к мержу, или ещё круг?', 'Готово к пушу ли?'])
-    assert.strictEqual(isReport(t), null, t);
+  // No «question» exception (decision 05.11): a real question gets a cheap false block, the second Stop passes.
+  for (const t of ['Готово к пушу?', 'Готово к пушу — когда?', '**Готово к пушу** — если ревью чистое?', 'Готово к мержу, или ещё круг?',
+    'Готово к пушу: можно пушить?', 'Готово к пушу — как договаривались. Пушить?', 'Готово к пушу: точно всё проверено, пушить?',
+    'Готово к пушу, как и планировали: abc1234. Пушить?', 'Готово к пушу? Да, abc1234.'])
+    assert.ok(isReport(t), t);
   // Accepted false block (decision 05.11): a sentence after a sign stays a report.
   assert.strictEqual(isReport('Готово к пушу, но после ревью.'), 'push');
 });
