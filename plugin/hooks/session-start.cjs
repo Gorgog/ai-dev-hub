@@ -11,6 +11,7 @@ const { findProject, HUB_ROOT } = require('./rules-guard.cjs');
 
 const BUDGET = 9500;
 const NOTE_BUDGET = 1500;
+const CORE_MAX = 15;
 
 const git = (cwd, ...a) => {
   try { return execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; }
@@ -119,7 +120,7 @@ function buildBrief(cwd, hub = HUB_ROOT, version = '') {
   return [...head, body ? `Правила из ошибок (memory/errors-index.md):\n${body}` : '', ...tail].filter(Boolean).join('\n').slice(0, BUDGET);
 }
 
-module.exports = { buildBrief, workTree, BUDGET };
+module.exports = { buildBrief, workTree, BUDGET, CORE_MAX };
 
 // v1 entry of SessionStart, kept for sessions started before the spine (their hooks.json calls this file): the
 // brief now comes from sessionstart.d/10-memory-brief.cjs through the spine.

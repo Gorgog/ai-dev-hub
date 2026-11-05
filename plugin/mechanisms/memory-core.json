@@ -1,0 +1,14 @@
+{
+  "id": "memory-core",
+  "event": "SessionStart",
+  "file": "sessionstart.d/11-memory-core.cjs",
+  "handler": "memory-brief",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": ["memory/lessons/", "canary.json", "brief.json", "memory/sessions/", "rules.json", "dispatch-rules.json", "checks.json"],
+  "polygon": ["H53"],
+  "replaces": "memory-brief in a project with memory/lessons/ on its canary — the core of lessons instead of errors-index.md",
+  "review": "2027-02-06"
+}
