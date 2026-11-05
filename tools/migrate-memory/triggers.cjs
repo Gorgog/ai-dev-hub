@@ -6,7 +6,8 @@
 // fires when each of its fields matches the call (tool, cmd, path; body/out — when the db has them), a lesson — when
 // any item fires; a delivery — once per (session, agent, epoch, lesson), as the delivery module does. Reported: calls,
 // deliveries, deliveries per 20 calls, median of distinct lessons per session, lessons firing on more than
-// --noisy-rate of the calls. Cases (cases.json of the memory prototype: {id, src: "<project prefix>:<line>", date,
+// --noisy-rate of the calls. A field the db lacks (calls.db has no body/out) never matches — the lower bound; the
+// upper bound counts it as a match, and the lessons that lean on it are named «unmeasured». Cases (cases.json of the memory prototype: {id, src: "<project prefix>:<line>", date,
 // gold, probe: {tool, cmd, path, body, out}}): a hit — a lesson whose `when` fires on the probe, whose text or keys
 // match gold, created on or before the case date.
 'use strict';
@@ -41,7 +42,12 @@ function lessons(out, project) {
   }).filter((l) => ['core', 'active'].includes(l.status) && l.items.length);
 }
 
-const fires = (l, call) => l.items.some((it) => Object.entries(it).every(([f, re]) => re.test(call[f] || '')));
+// `missing` — fields the db has not: as an empty string (the lower bound) or as a match (the upper bound)
+const fires = (l, call, missing = null) => l.items.some((it) => Object.entries(it)
+  .every(([f, re]) => (missing && missing.includes(f) ? true : re.test(call[f] || ''))));
+
+const lessonsWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'урок'
+  : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'урока' : 'уроков');
 
 function median(xs) {
   if (!xs.length) return 0;
@@ -55,25 +61,33 @@ function noise(a, projects, byProject) {
   const db = new DatabaseSync(a.calls, { readOnly: true });
   const cols = db.prepare('PRAGMA table_info(calls)').all().map((c) => c.name);
   const have = FIELDS.filter((f) => cols.includes(f));
+  const missing = FIELDS.filter((f) => !have.includes(f));
   // the longest project name wins: «a-b» is not «a»
   const order = [...projects].sort((x, y) => y.length - x.length || x.localeCompare(y));
   const owner = (pdir) => order.find((p) => new RegExp(`-projects-${p.replace(/[^\w]/g, (c) => `\\${c}`)}(-|$)`).test(pdir || ''));
-  const st = Object.fromEntries(projects.map((p) => [p, { calls: 0, deliveries: 0, fired: {}, sessions: {}, seen: new Set() }]));
+  const fresh = () => ({ deliveries: 0, sessions: {}, seen: new Set() });
+  const st = Object.fromEntries(projects.map((p) => [p, { calls: 0, fired: {}, lo: fresh(), hi: fresh() }]));
+  const deliver = (b, c, id) => {
+    b.sessions[c.session] = b.sessions[c.session] || new Set();
+    const key = `${c.session}\0${c.agent || ''}\0${c.epoch}\0${id}`;
+    if (b.seen.has(key)) return;
+    b.seen.add(key);
+    b.deliveries++;
+    b.sessions[c.session].add(id);
+  };
   const q = db.prepare(`SELECT session, agent, epoch, pdir, ${have.join(', ')} FROM calls ORDER BY id`);
   for (const c of q.iterate()) {
     const p = owner(c.pdir);
     if (!p) continue;
     const s = st[p];
     s.calls++;
-    s.sessions[c.session] = s.sessions[c.session] || new Set();
+    for (const b of [s.lo, s.hi]) b.sessions[c.session] = b.sessions[c.session] || new Set();
     for (const l of byProject[p]) {
-      if (!fires(l, c)) continue;
-      s.fired[l.id] = (s.fired[l.id] || 0) + 1;
-      const key = `${c.session}\0${c.agent || ''}\0${c.epoch}\0${l.id}`;
-      if (s.seen.has(key)) continue;
-      s.seen.add(key);
-      s.deliveries++;
-      s.sessions[c.session].add(l.id);
+      if (fires(l, c)) {
+        s.fired[l.id] = (s.fired[l.id] || 0) + 1;
+        deliver(s.lo, c, l.id);
+        deliver(s.hi, c, l.id);
+      } else if (missing.length && fires(l, c, missing)) deliver(s.hi, c, l.id);
     }
   }
   db.close();
@@ -81,9 +95,13 @@ function noise(a, projects, byProject) {
     const s = st[p];
     const noisy = Object.entries(s.fired).filter(([, n]) => s.calls && n / s.calls > a.noisyRate)
       .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([id, n]) => ({ id, calls: n, rate: r2((n / s.calls) * 100) }));
-    return [p, { lessons_with_when: byProject[p].length, calls: s.calls, deliveries: s.deliveries,
-      per20: s.calls ? r2((s.deliveries / s.calls) * 20) : 0, sessions: Object.keys(s.sessions).length,
-      median_lessons_per_session: median(Object.values(s.sessions).map((x) => x.size)), noisy, fields: have }];
+    const per20 = (b) => (s.calls ? r2((b.deliveries / s.calls) * 20) : 0);
+    const med = (b) => median(Object.values(b.sessions).map((x) => x.size));
+    // a lesson with an item on a field the db lacks is not fully measured: the noise is between the two bounds
+    const unmeasured = byProject[p].filter((l) => l.items.some((it) => Object.keys(it).some((f) => missing.includes(f)))).length;
+    return [p, { lessons_with_when: byProject[p].length, calls: s.calls, deliveries: s.lo.deliveries, per20: per20(s.lo),
+      sessions: Object.keys(s.lo.sessions).length, median_lessons_per_session: med(s.lo), noisy, fields: have, unmeasured,
+      deliveries_upper: s.hi.deliveries, per20_upper: per20(s.hi), median_lessons_per_session_upper: med(s.hi) }];
   }));
 }
 
@@ -119,6 +137,11 @@ function main(argv) {
     for (const [p, s] of Object.entries(rep.projects)) {
       lines.push(`${p}: вызовов ${s.calls}, подач ${s.deliveries} (${s.per20} на 20), медиана уроков на сессию `
         + `${s.median_lessons_per_session}, уроков с when ${s.lessons_with_when}, сессий ${s.sessions}`);
+      if (s.unmeasured) {
+        lines.push(`  без ${FIELDS.filter((f) => !s.fields.includes(f)).join('/')} в базе: ${s.unmeasured} ${lessonsWord(s.unmeasured)} `
+          + `не измерен${s.unmeasured === 1 ? '' : 'о'}; верхняя граница — подач ${s.deliveries_upper} (${s.per20_upper} на 20), `
+          + `медиана ${s.median_lessons_per_session_upper}`);
+      }
       for (const n of s.noisy) lines.push(`  шумный: ${n.id} — ${n.calls} вызовов (${n.rate} %)`);
     }
   }

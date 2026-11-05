@@ -6,12 +6,15 @@ Two layouts:
   a record of its own, so no text is lost silently;
 - section files (decisions.md): a record is a `## ` section up to the next `## ` or `# ` heading, its lines as written
   (`### ` stays inside); text before the first section — paragraphs as above.
-Headings (`# …`) and HTML comments are not records. A record's ref is `<file>#<sha>`: sha256 of its text, 12 hex (the
+Headings (`# …`) and HTML comments are not records; text after `-->` on the comment's line is. A fenced code block
+(```) is text as written: it continues the record it is in (or starts one), its `#` lines and blank lines included. A record's ref is `<file>#<sha>`: sha256 of its text, 12 hex (the
 P6 probe's sha for bullets); an identical text met again in the same file gets `.2`, `.3`…
 """
 import hashlib
+import re
 
 SECTION_FILES = {'decisions.md'}
+HEADING = re.compile(r'#{1,6}(\s|$)')  # `#!/usr/bin/env bash` or `#123` is text, not a heading
 
 
 def _sha(text):
@@ -30,13 +33,25 @@ def records(text, name):
         cur = {'file': name, 'line': no, 'unit': unit, 'head': head, 'lines': [first]}
         out.append(cur)
 
+    in_fence = False
     for no, raw in enumerate(text.split('\n'), 1):
         line = raw.rstrip('\r')
         in_section = cur is not None and cur['unit'] == 'section'
+        fence = line.lstrip().startswith('```')
+        if in_fence or fence:
+            # a code block is text as written: no headings, comments or blank-line breaks inside
+            in_fence = in_fence != fence
+            if cur is None:
+                start(no, 'para', line.strip())
+            else:
+                cur['lines'].append(line.rstrip() if in_section else line.strip())
+            continue
         if in_comment or (line.lstrip().startswith('<!--') and not in_section):
             in_comment = '-->' not in line
             cur = None
-            continue
+            line = '' if in_comment else line.split('-->', 1)[1]
+            if not line.strip():
+                continue  # text after the comment on the same line is a record of its own
         if sections and line.startswith('## '):
             head = line[3:].strip()
             start(no, 'section', line.rstrip())
@@ -44,7 +59,7 @@ def records(text, name):
         if in_section and not line.startswith('# '):
             cur['lines'].append(line.rstrip())
             continue
-        if line.startswith('#'):
+        if HEADING.match(line):
             head = line.lstrip('#').strip()
             cur = None
             continue

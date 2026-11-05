@@ -17,6 +17,7 @@ archive with a reason. A record holding two rules is split: each claim names its
 Output: <out>/projects/<p>/memory/{lessons,decisions}/<id>.md (source «модель (миграция)», written and checked by the
 memory library through render.cjs), <out>/addresses.json (record → where it went), <out>/anchor.json (source hashes,
 counts, orphans). On any problem — exit 1, the problems listed, nothing written and an earlier --out untouched.
+--out is replaced whole, so it must be empty, absent or an earlier run, and must not hold or sit in the inputs.
 --check-twice: the whole run twice from the inputs, the two trees compared byte by byte, one kept.
 --list: every record as a JSON line {project, ref, file, line, unit, head, text} — what the map is written from.
 Codes: 0 done, 1 refused, 2 usage. Stdlib only; node (HUB_NODE, else ~/.local/bin/node, else node) for render.cjs.
@@ -203,6 +204,24 @@ def tree_sha(files):
     return h.hexdigest()
 
 
+RUN_ENTRIES = {'addresses.json', 'anchor.json', 'projects'}
+
+
+def out_problem(out, snap, map_file):
+    """Why --out may not be replaced, or None. The whole folder is swapped, so it must be an earlier run (only what a
+    run writes, anchor.json among it) or empty, and must neither hold the inputs nor lie inside the snapshot."""
+    o, s, m = (Path(x).resolve() for x in (out, snap, map_file))
+    if o == s or o in s.parents or o in m.parents or s in o.parents:
+        return f'--out {out}: совпадает со снимком, содержит входы или лежит внутри снимка'
+    if o.exists():
+        if not o.is_dir():
+            return f'--out {out}: это файл, а не папка прежнего прогона'
+        names = {p.name for p in o.iterdir()}
+        if names and (not names <= RUN_ENTRIES or 'anchor.json' not in names):
+            return f'--out {out}: непустая папка — не прежний прогон ({", ".join(sorted(names - RUN_ENTRIES)[:5]) or "нет anchor.json"})'
+    return None
+
+
 def write(out, files):
     """Into a sibling temp dir, then swapped in: a reader never sees half a tree."""
     out = Path(out)
@@ -241,6 +260,10 @@ def main(argv):
     if not a.map or not a.out:
         print('нужны --map и --out (или --list)\n' + __doc__, file=sys.stderr)
         return 2
+    bad_out = out_problem(a.out, a.snapshot, a.map)
+    if bad_out:
+        print(f'отказ: {bad_out}; ничего не записано')
+        return 1
     files, c, problems = build(a.snapshot, a.map)
     print(f'записей {c.get("records", 0)}: в уроки {c.get("to_lesson", 0)}, в решения {c.get("to_decision", 0)}, '
           f'в архив {c.get("to_archive", 0)}; сирот {c.get("orphans", 0)} · уроков {c.get("lessons", 0)}, '
