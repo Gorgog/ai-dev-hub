@@ -60,7 +60,8 @@ function runsArgs(name, argv) {
       || (a.includes('rebase') && a.some((x) => x === '-x' || x === '--exec' || x.startsWith('--exec=')))
       || a.some((x, k) => a[k - 1] === '-c' && /^alias\.[^=]*=!/.test(x));
     case 'trap': return a.length >= 2 && a[0] !== '-' && a[0] !== '';
-    case 'sed': return a.map((x) => x.replace(/^--expression=/, '')) // --expression=SCRIPT: the script itself
+    case 'sed': return a.map((x) => x.replace(/^--e(x(p(r(e(s(s(i(o(n)?)?)?)?)?)?)?)?)?=/, '').replace(/^-[nsuzEr]*e(?=.)/, ''))
+      // --expression=SCRIPT (any prefix of the name), -eSCRIPT, -neSCRIPT: the script itself
       .some((x) => !x.startsWith('-') && (SED_E.test(x) || SED_SE.test(x)));
     case 'sqlite3': return a.some((x) => /(^|\n)\s*\.(shell|system)\b/.test(x));
     case 'tar': return a.some((x) => x === '-I' || /^--(to-command|use-compress-program|checkpoint-action|info-script|new-volume-script|rsh-command)/.test(x));
@@ -93,8 +94,6 @@ class Parser {
     this.heredocs = []; // pending: { delim, strip, cmd }
     this.queue = [];    // simple commands waiting for their heredoc bodies: { cmd, snap }
     this.caseDepth = 0; this.expectPattern = false;
-    // Function definitions: the body is read but not run; its text is kept, a call reads it again (Ctx.fns).
-    this.fnName = null; this.braces = 0; this.frames = [];
   }
 
   run() {
@@ -142,13 +141,14 @@ class Parser {
       if (c === '(') {
         if (atStart && s[this.i + 1] === '(') { this.skipArith(scope); continue; }
         const def = cur.words.length === 1 && this.at(/\(\s*\)/y);
-        if (def) { // name() — a function definition
+        // name() — a function definition. Its body counts as run right here, at definition (decision 05.11 after
+        // review: two attempts at running it on call let wrappers through; a wrong guess here blocks, never passes).
+        // The call line is an unknown program — judged as text, so `retry npx jest` is caught there.
+        if (def) {
           this.i += def[0].length;
-          this.fnName = cur.words[0].text;
           cur.words = [];
           continue;
         }
-        this.fnName = null; // f() ( … ) — a subshell body runs as written
         flush();
         this.i++;
         this.list(')', childScope(scope));
@@ -173,7 +173,6 @@ class Parser {
       if (this.i === start) { this.i++; continue; } // a character no rule above took: never stall
       const raw = s.slice(start, this.i);
       if (!cur.words.length && /^[^'"\\$`]+$/.test(raw) && this.keyword(raw, scope)) continue;
-      this.fnName = null; // f() if …; fi — a body without { } runs as written; the next { } is not the body
       cur.words.push(...fields);
     }
   }
@@ -186,19 +185,6 @@ class Parser {
 
   keyword(w, scope) {
     const s = this.s;
-    // A function body { … } is kept as text and read at each call, with the call's arguments as $@ (Ctx.exec).
-    if (w === '{') {
-      this.braces++;
-      if (this.fnName) { this.frames.push({ name: this.fnName, level: this.braces, start: this.i }); this.fnName = null; }
-      return true;
-    }
-    if (w === '}') {
-      const top = this.frames[this.frames.length - 1];
-      if (top && top.level === this.braces) { this.frames.pop(); this.ctx.fns.set(top.name, s.slice(top.start, this.i - 1)); }
-      this.braces = Math.max(0, this.braces - 1);
-      return true;
-    }
-    this.fnName = null; // f() if …; fi — a body without { } runs as written; the next { } is not the body
     if (KEYWORDS.has(w)) {
       if (w === 'time') { this.skipBlank(); const m = this.at(/-p(?=\s)/y); if (m) this.i += m[0].length; }
       return true;
@@ -241,7 +227,7 @@ class Parser {
     if (w === 'function') {
       this.skipBlank();
       const name = this.at(/[^\s;&|()<>{}]+/y);
-      if (name) { this.i += name[0].length; this.fnName = name[0]; }
+      if (name) this.i += name[0].length;
       this.skipBlank();
       const m = this.at(/\(\s*\)/y);
       if (m) this.i += m[0].length;
@@ -487,8 +473,6 @@ class Parser {
   // are read once its heredoc bodies are in (end of line).
   finish(cmd, scope) {
     this.ctx.work();
-    const frame = this.frames[this.frames.length - 1];
-    if (frame) return; // inside a function body: runs only when called
     if (!cmd.words.length) {
       for (const a of cmd.assigns) {
         const old = scope.vars.get(a.name);
@@ -575,7 +559,7 @@ function binOfPath(p) {
 class Ctx {
   constructor(opts) {
     this.execs = []; this.unknown = []; this.opts = opts; this.parses = 0; this.commands = 0;
-    this.fns = new Map(); this.calling = new Set(); this.files = new Map();
+    this.files = new Map();
   }
 
   // One reason per kind, a short list: a self-sourcing script must not fill it with thousands of lines.
@@ -663,17 +647,6 @@ class Ctx {
     if (w0.dyn) { this.note(`программа известна только при запуске: ${w0.text || '$…'}`); return; }
     const argv = words.map((w) => w.text);
     const name = path.basename(argv[0]);
-    // A call of a function defined in this command or a sourced file: its body is read now, $@ = the call's
-    // arguments, its cd / source / export act (once per call chain). The call line itself is opaque — a wrapper
-    // function (retry "$@") runs its arguments.
-    const fn = !argv[0].includes('/') && this.fns.get(argv[0]);
-    if (fn !== undefined && fn !== false) {
-      this.execs.push({ argv, dyn: words.map((w) => w.dyn), env: { ...env }, bin: false, opaque: true });
-      if (this.calling.has(argv[0])) return;
-      this.calling.add(argv[0]);
-      try { this.sub(fn, childScope(snap, { pos: words.slice(1) }), o.depth); } finally { this.calling.delete(argv[0]); }
-      return;
-    }
     // opaque — a program the reader neither unwraps nor knows as data-only: it may run its arguments.
     // dyn — per word, known only at run time (its text is what was known: '' for $(…), the literal part of a$X).
     const opaque = !o.data && ((!INERT.has(name) && !UNWRAPS.has(name)) || runsArgs(name, argv));
