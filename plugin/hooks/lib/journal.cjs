@@ -6,7 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const file = () => path.join(process.env.HUB_LOG_DIR || process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), 'hub-hooks'), 'hooks.jsonl');
+// The data folder of the hooks — also of the delivery's session states and events (slice 12).
+const dir = () => process.env.HUB_LOG_DIR || process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), 'hub-hooks');
+const file = () => path.join(dir(), 'hooks.jsonl');
 
 function journal(entry) {
   try {
@@ -16,4 +18,4 @@ function journal(entry) {
   } catch { /* never break the hook */ }
 }
 
-module.exports = { journal, file };
+module.exports = { journal, file, dir };

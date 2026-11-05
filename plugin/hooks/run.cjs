@@ -3,12 +3,15 @@
 // Behaviour lives in modules — plugin/hooks/<event>.d/*.cjs, run in file-name order, each with a record in
 // plugin/mechanisms/<id>.json (stage, failure policy). Contract of a module:
 //   module.exports = { id, run(ev, ctx) }  ctx = { event, hub, project, worktree, stage, version, epoch }
-//   run returns null or { decision?: 'block' | 'deny' | 'ask', reason?, items?: [{ text, priority?, key? }] },
-//   may be async, never writes to stdout: only this runner speaks to Claude, items go through lib/deliver.cjs.
-// A block or deny ends the chain. Failure policy: a module that throws or breaks the contract is journaled; with
-// onError "closed" inside its failScope (a protection: the lock, rules-guard) the call is denied with the reason,
-// otherwise (delivery, reminders) it is skipped. The switch HUB_OFF=1 or <hub>/.hub-off silences everything, no
-// restart needed. SessionStart also runs the health check (lib/health.cjs).
+//   run returns null or { decision?: 'block' | 'deny' | 'ask', reason?, once?, lesson?, detector?, items?: [{ text,
+//   priority?, key?, lesson?, rule?, detector?, source? }] }, may be async, never writes to stdout: only this runner
+//   speaks to Claude, items and decisions go through lib/deliver.cjs (slice 12: limits, «already shown» per epoch,
+//   the event journal; its stage is the stage of the record «delivery», off — the delivery of 08).
+// A block or deny ends the chain; a deny-once (`once: <key>`) already used in the epoch is dropped and the chain goes
+// on, and without the delivery's state it becomes the lesson's text (fail-open). Failure policy: a module that throws
+// or breaks the contract is journaled; with onError "closed" inside its failScope (a protection: the lock,
+// rules-guard) the call is denied with the reason, otherwise (delivery, reminders) it is skipped. The switch HUB_OFF=1
+// or <hub>/.hub-off silences everything, no restart needed. SessionStart also runs the health check (lib/health.cjs).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -41,13 +44,24 @@ async function main(event) {
   try { ev = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { return; }
   const { journal, file: journalFile } = require('./lib/journal.cjs');
   const { version } = require('./lib/version.cjs');
-  const { deliver } = require('./lib/deliver.cjs');
+  const { deliver, open: openDelivery } = require('./lib/deliver.cjs');
   const plugin = hubLib.PLUGIN_ROOT;
   const project = hubLib.findProject(ev.cwd);
   const ctx = { event, hub: hubLib.HUB_ROOT, project, worktree: hubLib.worktreeOf(ev.cwd, project), epoch: null, version: version(plugin) };
   const registry = loadRegistry(plugin);
   const items = [];
+  const fired = [];
   let final = null;
+
+  // A canary lists mechanisms or their handlers: «delivery» turns on every module of the delivery at once.
+  const canary = (rec) => {
+    if (!project) return false;
+    try { return (JSON.parse(fs.readFileSync(path.join(project.dir, 'canary.json'), 'utf8')).mechanisms || []).some((m) => m === rec.id || m === rec.handler); } catch { return false; }
+  };
+  // The delivery with memory — only where its record is on (or canary here); no record — the delivery of 08.
+  const dRec = [...registry.byFile.values()].find((r) => r && r.id === 'delivery');
+  const dl = dRec && (dRec.stage === 'on' || (dRec.stage === 'canary' && canary(dRec))) ? openDelivery(event, ev) : null;
+  if (dl) ctx.epoch = dl.epoch();
 
   if (event === 'SessionStart') {
     let problems;
@@ -55,20 +69,15 @@ async function main(event) {
       problems = [`проверка здоровья упала: ${String(e.message).split('\n')[0]}`];
     }
     journal({ type: 'health', event, hub: ctx.version, cwd: ev.cwd, problems });
-    if (problems.length) items.push({ text: `Здоровье хаба (${ctx.version}):\n${problems.map((p) => `- ${p}`).join('\n')}`, priority: 'reminder', key: 'health' });
+    if (problems.length) items.push({ text: `Здоровье хаба (${ctx.version}):\n${problems.map((p) => `- ${p}`).join('\n')}`, priority: 'reminder', key: 'health', module: 'health' });
   }
-
-  const canary = (id) => {
-    if (!project) return false;
-    try { return (JSON.parse(fs.readFileSync(path.join(project.dir, 'canary.json'), 'utf8')).mechanisms || []).includes(id); } catch { return false; }
-  };
 
   for (const f of files) {
     const rel = `${dirName}/${f}`;
     const rec = registry.byFile.get(rel);
     // No record or a broken one: run it as «on», failure closed inside the hub's projects (pre-commit refuses this).
     const stage = rec && ['off', 'canary', 'on'].includes(rec.stage) ? rec.stage : 'on';
-    if (stage === 'off' || (stage === 'canary' && !canary(rec.id))) continue;
+    if (stage === 'off' || (stage === 'canary' && !canary(rec))) continue;
     const policy = rec && rec.onError === 'open' ? 'open' : 'closed';
     const scope = rec && ['any', 'project', 'worktree'].includes(rec.failScope) ? rec.failScope : 'project';
 
@@ -99,15 +108,35 @@ async function main(event) {
       }
       continue;
     }
+    if (dl && (event === 'SessionStart' || event === 'SubagentStart')) ctx.epoch = dl.epoch(true);
     if (!res) continue;
-    if (res.items) items.push(...res.items);
+    const owner = rec ? rec.id : rel;
+    if (res.once != null && (res.decision === 'block' || res.decision === 'deny')) {
+      const claim = dl ? dl.claimOnce(String(res.once)) : null;
+      if (claim === false) {
+        if (res.detector) fired.push({ detector: res.detector, lesson: res.lesson });
+        res = { items: res.items };
+      } else if (claim === null) {
+        res = { items: [...(res.items || []), { text: res.reason, priority: 'lesson', key: `once:${res.once}`, lesson: res.lesson, detector: res.detector }] };
+      }
+    }
+    if (res.items) items.push(...res.items.map((it) => ({ ...it, module: it.module || owner })));
+    if (res.decision) res = { ...res, module: owner };
     if (res.decision === 'block' || res.decision === 'deny') { final = res; break; }
     if (res.decision === 'ask' && !final) final = res;
   }
 
+  // What can reach Claude after the decision: a deny / block carries only its reason, a PreToolUse ask — nothing else.
+  const reaches = (f) => {
+    if (event === 'PreToolUse') return !f;
+    if (event === 'PostToolUse' || event === 'PostToolUseFailure') return !f || f.decision === 'ask';
+    return event === 'SessionStart' || event === 'SubagentStart';
+  };
+  let text;
+  if (dl) ({ text, final } = dl.finish({ items, final, fired, reaches }));
+  else text = deliver(items);
   // Every write is awaited: the runner exits right after main(), and a write still queued in a pipe (more than its
   // capacity — 64 KB, 4 KB when pipe pages run short) would be cut, a cut JSON deny is no decision at all.
-  const text = deliver(items);
   const emit = (stream, s) => new Promise((resolve) => stream.write(s, () => resolve()));
   const out = (o) => emit(process.stdout, JSON.stringify(o));
   if (event === 'PreToolUse') {
