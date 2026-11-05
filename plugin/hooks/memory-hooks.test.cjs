@@ -204,13 +204,27 @@ const BASH_WRITES = [
   ['git -C MEM log --oneline -3 -- lessons/', false],
   ['git -C MEM status --short', false],
   ['find MEM/lessons -name "*.md" | head', false],
+  // Review round 2: reads with find -exec, git commands that leave the work tree, writes into the memory root.
+  ["find MEM/lessons -name '*.md' -exec grep -l foo {} +", false],
+  ["find MEM -name '*.md' -exec wc -l {} \\;", false],
+  ["find MEM/.. -name '*.cjs' -exec grep -l memory {} +", false],
+  ['git -C MEM stash list', false],
+  ['git -C MEM reset --soft HEAD~1', false],
+  ['git -C MEM rm --cached lessons/heredoc-script.md', false],
+  ['mv /tmp/notes.md MEM/', false],
+  ['wget -P MEM http://127.0.0.1:9/a', false],
+  ['tar -C MEM -cf /tmp/m.tar lessons index', false],
+  ["find MEM/lessons -name '*.md' -exec rm {} \\;", true],
+  ['git -C MEM reset --hard HEAD~1', true],
+  ['rm -rf PROJ', true],
+  ['mv PROJ /tmp/elsewhere', true],
 ];
 
 test('Bash never writes lessons or decisions: denied with how to write one; reads pass', () => {
   const s = setup();
   start(s);
   BASH_WRITES.forEach(([cmd, denied], i) => {
-    const c = cmd.replace(/MEM/g, s.mem);
+    const c = cmd.replace(/PROJ/g, s.proj).replace(/MEM/g, s.mem);
     const r = pre(s, `b${i}`, c);
     assert.strictEqual(Boolean(r.deny && /memory\/(lessons|decisions)|урок/i.test(r.deny) && /Write/.test(r.deny)), denied, `${denied ? 'not denied' : 'denied'}: ${c}\n${r.deny || r.out}`);
     if (denied) {
@@ -335,12 +349,15 @@ test('review round 1: a `when` that backtracks catastrophically never hangs the 
   const s = setup();
   const evil = {
     'evil-alt': '(\\w|\\d)+@', 'evil-dot': 'git(.|\\s)*--no-verify$', 'evil-chain': '\\s*\\s*\\s*\\s*\\s*x', 'evil-nest': '(a+)+$',
+    // review round 2: a bounded repetition of a group the linear engine does not take; a polynomial with lookahead
+    'evil-bounded': '(\\w+\\s?){1,30}!', 'evil-alt-bounded': '(a|aa){1,1000}b', 'evil-look': '(?=.)a.*b.*c.*d.*e$|qq',
   };
   for (const [id, rx] of Object.entries(evil)) write(path.join(s.mem, 'lessons', `${id}.md`), lesson({ id, when: [{ tool: '^Bash$', cmd: rx }], first: `Злой регэксп ${id}.` }));
   write(path.join(s.mem, 'lessons', 'case-word.md'), lesson({ id: 'case-word', when: [{ tool: '^bash$', cmd: 'ПРИВЕТ\\s+World' }], first: 'Регистр не важен.' }));
   store.ensureTriggers(s.mem);
   start(s);
-  const cmds = ['1'.repeat(60), `git commit${' '.repeat(80)}--no-verify -m x`, ' '.repeat(3000), `${'a'.repeat(3000)}!`];
+  const cmds = ['1'.repeat(60), `git commit${' '.repeat(80)}--no-verify -m x`, ' '.repeat(3000), `${'a'.repeat(3000)}!`, `${'word '.repeat(30)}x`,
+    `${'a'.repeat(200)}`, `${'abcd'.repeat(800)}eX`];
   cmds.forEach((c, i) => {
     const t0 = Date.now();
     const r = call(s, `e${i}`, c, c);
@@ -364,4 +381,13 @@ test('review round 1: SessionStart names a `when` the hot path will not use', ()
   write(path.join(s.mem, 'lessons', 'skip-me.md'), lesson({ id: 'skip-me', when: [{ tool: '^Bash$', cmd: '(\\w+)+\\1' }], first: 'Обратная ссылка с вложенным повтором.' }));
   const r = start(s);
   assert.match(r.out, /skip-me[^\n]*when\[0\]/);
+});
+
+test('review round 2: the matcher means what the `i` regex meant — mixed class ranges, identity escapes of letters', () => {
+  const { match } = require('./memory-hooks.cjs');
+  for (const [src, str] of [['x[A-z]y', 'x_y'], ['[Z-a]q', '_q'], ['foo\\Z', 'fooz'], ['[\\x00-\\x5A]q', '_q'], ['[A-Z]{2}\\d', 'ab1'], ['\\Bstart', 'restart']]) {
+    const want = new RegExp(src, 'i').test(str);
+    const got = match([{ id: 'x', first: '', core: false, when: [{ cmd: src }] }], { cmd: str }).length === 1;
+    assert.strictEqual(got, want, `${src} on ${str}: the i regex says ${want}`);
+  }
 });
