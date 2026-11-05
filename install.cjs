@@ -5,7 +5,8 @@
 // and `claude plugin update hub@hub` when the CLI is there. Writes ~/.claude/settings.json (backup first): the
 // marketplace `hub` and the enabled plugin `hub@hub`; removes what the old install left — the user-level guard hook
 // (now the plugin's PreToolUse), links to hub skills in ~/.claude/skills and copies of hub agents in ~/.claude/agents
-// (moved to a backup, never deleted). Checks node ≥ 22 (the hook spine needs it). Idempotent.
+// (moved to a backup, never deleted). Checks node ≥ 22 (the hook spine needs it). Idempotent. Ends with what
+// /hub:setup would still set on this machine (plugin/skills/setup/scripts/setup.cjs check).
 // usage: node install.cjs [--dry-run]
 'use strict';
 const fs = require('fs');
@@ -97,5 +98,13 @@ if (!dry) {
   const out = text(u).split('\n').pop();
   say(u.status === 0 ? `plugin:  ${out}` : 'plugin:  claude CLI недоступен — обнови вручную: claude plugin marketplace update hub && claude plugin update hub@hub');
 }
+// Local settings of the machine the installer does not set itself (env of Bash, journal retention, status line,
+// allowlist): /hub:setup sets each one with a confirmation; here — only what is missing.
+try {
+  const setup = require('./plugin/skills/setup/scripts/setup.cjs');
+  const list = setup.check({ cwd: hub, hub });
+  const lack = setup.missingOf(list).map((c) => c.id);
+  say(`setup:   ${setup.summary(list)}${lack.length ? ` (${lack.join(', ')}) — в новой сессии: /hub:setup` : ''}`);
+} catch (e) { say(`setup:   проверка не прошла (${String(e.message).split('\n')[0]}) — в новой сессии: /hub:setup`); }
 say('Done. Start a NEW Claude Code session: skills /hub:*, agents hub:*, hooks of the plugin load at session start.');
 say(`Switch the hub off: the file ${path.join(hub, '.hub-off')} — live sessions too, no restart (remove it to switch back on); HUB_OFF=1 — for a session started with it.`);

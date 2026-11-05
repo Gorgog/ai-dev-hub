@@ -11,10 +11,6 @@
     "text": "`git clean -x` сотрёт неотслеживаемое, в корне хаба — локальную память проектов" },
   { "id": "sed-in-place", "tools": "^Bash$", "commands": "\\bsed\\s+([^|;&\\n]*\\s)?(-\\w*i|--in-place)",
     "text": "`sed -i` правит вслепую: несошедшаяся замена молчит — правь Edit-ом, после — `git diff --stat`" },
-  { "id": "agent-memory-write", "tools": "^(Edit|Write|MultiEdit)$", "path": "/\\.claude/agent-memory/",
-    "text": "агенты не пишут память в рабочий репозиторий: урок — строкой «Предлагаю в errors.md» в отчёте" },
-  { "id": "agent-memory-shell", "tools": "^Bash$", "commands": "(>>?|\\btee\\b|\\bcp\\b|\\bmv\\b)[^|;&\\n]*\\.claude/agent-memory",
-    "text": "агенты не пишут память в рабочий репозиторий: урок — строкой «Предлагаю в errors.md» в отчёте" },
   { "id": "push", "tools": "^Bash$", "commands": "\\bgit(\\s+-[Cc]\\s+(\"[^\"]*\"|\\S+))*\\s+push\\b", "mode": "ask",
     "text": "пуш — только по ответу пользователя, вид пуша решает он каждый раз" }
 ]
