@@ -1,7 +1,8 @@
 // Hub rules in Bash commands for step0.py: stdin - a JSON array of commands, stdout - a JSON array, same order, of
 // {rules: {<rule>: 0|1}, events: [...]}. A key in `rules` is an opportunity of that rule, its value -
-// violated. Read by words outside quotes, comments and heredoc bodies, simple command by simple command (the tokenizer
-// of shell-flags.cjs); `cd` - the polygon's own parser: an opportunity is any `cd` command (in a subshell too), a
+// violated. Read run by run: the programs the command runs, by the lock's shell reader without the disk
+// (../shell-read.cjs: quotes, comments and heredoc bodies are data; wrappers - env, timeout, xargs, find -exec, … - run
+// what follows them); `cd` - the polygon's own parser: an opportunity is any `cd` command (in a subshell too), a
 // violation - a bare one (polygon/lib/shell.cjs).
 //   git-add-all     git add            -> the path ., or -A/--all with no path named
 //   sed-in-place    sed -i             -> always (Edit calls are its kept opportunities, counted by step0.py)
@@ -10,135 +11,14 @@
 //   worktree-force  git worktree remove-> --force or a short cluster with f
 //   checkout-dot    git checkout/restore -> the path . (restore --staged alone touches no file: no opportunity)
 // events - in the command's order: 'commit' (a git commit) and 'checks' (the checks script, checks.cjs / checks.sh,
-// run with --full after it).
+// run with --full after it); a wrapper and the program it starts are one run, one event.
 'use strict';
 const path = require('path');
 const { bareCd } = require(path.join(__dirname, '..', '..', '..', 'polygon', 'lib', 'shell.cjs'));
+const { execs, sameRun } = require(path.join(__dirname, '..', 'shell-read.cjs'));
 
-// Simple commands as word lists: split by ; & | ( ) { } and newlines outside quotes; heredoc bodies and comments skipped,
-// a heredoc inside "$( … )" too (not a here-string <<<, not a shift in $(( … ))); redirections outside quotes (2>&1,
-// > log, &>f, <<< x) are dropped with their target, so they are neither words nor separators.
-const HEREDOC = /^<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1/;
-const heredocAt = (s, i) => (s[i] === '<' && s[i - 1] !== '<' ? s.slice(i).match(HEREDOC) : null);
-const REDIRECT = /^(\d+|&)?(<<<|>>|>&|<&|<>|>\||>|<)/;
-
-// The index of the )) that closes $(( at i, or -1: the parentheses balance on one line and close with two at once
-// (`$((cd x) | wc)` is a subshell in a substitution, not arithmetic).
-function arithEnd(s, i) {
-  let depth = 2;
-  for (let j = i + 3; j < s.length && s[j] !== '\n'; j++) {
-    if (s[j] === '(') depth++;
-    else if (s[j] === ')' && --depth === 1) return s[j + 1] === ')' ? j + 1 : -1;
-  }
-  return -1;
-}
-
-// The end of a redirection's target from i: spaces, then a word up to a separator (quotes kept whole).
-function targetEnd(s, i) {
-  let j = i, q = null;
-  while (s[j] === ' ' || s[j] === '\t') j++;
-  for (; j < s.length; j++) {
-    const d = s[j];
-    if (q) { if (d === q) q = null; continue; }
-    if (d === '"' || d === "'") { q = d; continue; }
-    if (/[\s;&|()<>]/.test(d)) break;
-  }
-  return j;
-}
-
-function simpleCommands(cmd) {
-  const s = String(cmd);
-  const out = [];
-  let words = [], w = '', inWord = false, quote = null, heredoc = null, subst = 0;
-  const pending = [];
-  const endWord = () => { if (inWord) words.push(w); w = ''; inWord = false; };
-  const endCmd = () => { endWord(); if (words.length) out.push(words); words = []; };
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (heredoc) {
-      let end = s.indexOf('\n', i);
-      if (end === -1) end = s.length;
-      if (s.slice(i, end).replace(/^\t+/, '') === heredoc) heredoc = pending.shift() || null;
-      i = end;
-      continue;
-    }
-    if ((quote === '"' || !quote) && s.startsWith('$((', i) && arithEnd(s, i) !== -1) {  // arithmetic: one word
-      const end = arithEnd(s, i);
-      w += s.slice(i, end + 1); inWord = true; i = end;
-      continue;
-    }
-    if (quote === '"' && c === '$' && s[i + 1] === '(') { subst++; w += '$('; i++; continue; }
-    if (quote === '"' && subst) {
-      if (c === ')') subst--;
-      const qhd = heredocAt(s, i);
-      if (qhd) { pending.push(qhd[2]); w += qhd[0]; i += qhd[0].length - 1; continue; }
-      if (c === '\n' && pending.length) { w += c; heredoc = pending.shift(); continue; }
-    }
-    if (quote) {
-      if (c === '\\' && quote === '"' && i + 1 < s.length) { w += s[++i]; continue; }
-      if (c === quote) { quote = null; continue; }
-      w += c;
-      continue;
-    }
-    if (c === "'" || c === '"') { quote = c; subst = 0; inWord = true; continue; }
-    if (c === '$' && s[i + 1] === '{') {
-      const end = s.indexOf('}', i);
-      if (end !== -1) { w += s.slice(i, end + 1); inWord = true; i = end; continue; }
-    }
-    if (c === '\\') { if (s[i + 1] !== '\n') { w += s[i + 1] || ''; inWord = true; } i++; continue; }
-    const hd = heredocAt(s, i);
-    if (hd) { endWord(); pending.push(hd[2]); i += hd[0].length - 1; continue; }
-    const rd = !inWord ? s.slice(i).match(REDIRECT) : null;
-    if (rd) { i = targetEnd(s, i + rd[0].length) - 1; continue; }
-    if (c === '#' && !inWord) { const end = s.indexOf('\n', i); i = (end === -1 ? s.length : end) - 1; continue; }
-    if (c === '\n') { endCmd(); if (pending.length) heredoc = pending.shift(); continue; }
-    if (c === '&' && (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>')) { w += c; inWord = true; continue; }
-    if (';&|(){}'.includes(c)) { endCmd(); continue; }
-    if (/\s/.test(c)) { endWord(); continue; }
-    w += c;
-    inWord = true;
-  }
-  endCmd();
-  return out;
-}
-
-const PREFIX = new Set(['command', 'time', 'exec', 'sudo', 'nohup', '!', 'then', 'do', 'else', 'elif', 'if', 'while', 'until']);
 const GIT_ARG_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 const cluster = (w, letters) => /^-[A-Za-z]+$/.test(w) && [...letters].some((l) => w.includes(l));
-
-// Wrappers that run the command after their options: options that take an argument.
-const WRAPPERS = {
-  timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
-  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']),
-  xargs: new Set(['-I', '-n', '-P', '-L', '-d', '-s', '-E', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs']),
-};
-
-// The program and its arguments: shell prefixes, NAME=value assignments and wrappers (timeout DURATION, env, xargs)
-// skipped.
-function program(words) {
-  let i = 0;
-  for (;;) {
-    while (i < words.length && (PREFIX.has(words[i]) || /^\w+=/.test(words[i]))) i++;
-    const opts = WRAPPERS[path.basename(words[i] || '')];
-    if (!opts) return words.slice(i);
-    const wrapper = path.basename(words[i++]);
-    while (i < words.length && words[i].startsWith('-')) i += opts.has(words[i]) ? 2 : 1;
-    if (wrapper === 'timeout') i++;
-  }
-}
-
-// find … -exec CMD … ; / + : the commands find runs.
-function execCommands(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i++) {
-    if (words[i] !== '-exec' && words[i] !== '-execdir') continue;
-    let j = i + 1;
-    while (j < words.length && words[j] !== ';' && words[j] !== '+') j++;
-    out.push(words.slice(i + 1, j));
-    i = j;
-  }
-  return out;
-}
 
 // git's subcommand and its arguments, global options skipped; null - not git.
 function gitArgs(words) {
@@ -152,16 +32,16 @@ function rulesOf(cmd) {
   const rules = {};
   const set = (rule, v) => { rules[rule] = Math.max(rules[rule] || 0, v ? 1 : 0); };
   const events = [];
-  const visit = (raw) => {
-    const words = program(raw);
+  const runs = execs(cmd);
+  runs.forEach(({ argv: words }, k) => {
     if (!words.length) return;
+    const child = k > 0 && sameRun(runs[k - 1].argv, words);
     const name = path.basename(words[0]);
     const args = words.slice(1);
     if (name === 'cd') set('cd', 0);
     if (name === 'sed' && args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'))) set('sed-in-place', 1);
     const ci = words.findIndex((w) => /^checks\.(cjs|sh)$/.test(path.basename(w)));
-    if (ci !== -1 && words.slice(ci + 1).includes('--full')) events.push('checks');
-    if (name === 'find') execCommands(words).forEach(visit);
+    if (ci !== -1 && words.slice(ci + 1).includes('--full') && !child) events.push('checks');
     const g = gitArgs(words);
     if (!g || !g.length) return;
     const [sub, ...rest] = g;
@@ -179,8 +59,7 @@ function rulesOf(cmd) {
     if (sub === 'worktree' && rest[0] === 'remove') set('worktree-force', rest.some((a) => a === '--force' || cluster(a, 'f')));
     const staged = rest.some((a) => a === '--staged' || a === '-S') && !rest.some((a) => a === '--worktree' || a === '-W');
     if (sub === 'checkout' || (sub === 'restore' && !staged)) set('checkout-dot', rest.includes('.'));
-  };
-  simpleCommands(cmd).forEach(visit);
+  });
   if ('cd' in rules) rules.cd = bareCd(cmd) ? 1 : 0;
   else if (bareCd(cmd)) rules.cd = 1;
   return { rules, events };
