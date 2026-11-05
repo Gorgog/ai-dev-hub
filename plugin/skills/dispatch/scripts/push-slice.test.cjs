@@ -503,6 +503,7 @@ test('push-slice: a network call is a risk — shell from column 0, file without
     ['src/get3.js', 'execSync(`cd /tmp && curl -s ${u}`);\n'],
     ['tool.py', "subprocess.run(['curl', 'https://example.test'])\n"],
     ['src/net.js', "module.exports = () => fetch('https://api.example.test/v1');\n"],
+    ['config/hooks.json', '{"command": "curl -s https://example.test/hook"}\n'],
   ]) {
     const r = stand(t, { files: { [file]: body } });
     const res = r.push('--solo', '--dry-run');
@@ -518,6 +519,8 @@ test('push-slice: the words curl -o / wget -O in a comment or in data are not a 
     'scripts/x.sh': '#!/bin/sh\n# no curl here, wget neither\necho ok\n',
     'tool.py': '# requests.get is not used here\nprint(1)\n',
     'src/names.cjs': "const NET_TOOLS = ['curl', 'wget'];\nmodule.exports = NET_TOOLS;\n",
+    'config/packages.yml': 'packages:\n  - curl\n  - git\n',
+    'data/lock.json': '{"require": ["curl", "wget"]}\n',
   } });
   const res = r.push('--solo', '--dry-run');
   assert.strictEqual(res.status, 0, out(res));
