@@ -14,8 +14,10 @@
 //                  npm/pnpm/yarn/bun script runs also as `npm run <script>`. A hit counts only if it rests on the
 //                  program: the same regexp on the line with the program word replaced must not match too (so
 //                  `grep "npx jest"` or `git commit -m "kubb generate"` is no hit), and arguments with blanks
-//                  (messages, patterns, code strings) are masked. Unparsed command or a program known only at run
-//                  time — the whole text, as by 'text'. dispatch-rules.json keeps its format.
+//                  (messages, patterns, code strings) are masked. A program the reader does not know (opaque: neither
+//                  a wrapper it unwraps nor a data-only one like grep or git) may run its arguments — its own line is
+//                  judged as text, unmasked. Unparsed command, a program known only at run time, a script not read,
+//                  a limit reached — the whole text, as by 'text'. dispatch-rules.json keeps its format.
 // The plugin's hooks/pretool.d/10-lock.cjs and 11-lock-program.cjs call decide(); run as a script it is the old
 // standalone hook (by text).
 'use strict';
@@ -70,7 +72,8 @@ function pmForms(argv) {
   let i = 1;
   while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--') i += PM_VALUED.includes(argv[i]) ? 2 : 1;
   const sub = argv[i], rest = argv.slice(i + 1);
-  if (sub === undefined) return name === 'yarn' ? [['npm', 'install']] : [];
+  // bare `yarn` installs; `yarn --version` / `-v` / `--help` does not
+  if (sub === undefined) return name === 'yarn' && !argv.slice(1).some((a) => /^(-v|-h|--version|--help)$/.test(a)) ? [['npm', 'install']] : [];
   if (RUN.includes(sub)) {
     let j = 0;
     while (j < rest.length && rest[j].startsWith('-')) j++;
@@ -81,7 +84,7 @@ function pmForms(argv) {
   if (CI.includes(sub)) return [['npm', 'ci', ...rest]];
   if (name === 'yarn' && sub === 'workspace') return rest[1] ? pmForms(['yarn', ...rest.slice(1)]) : [];
   if (name !== 'npm' && !BUILTIN.has(sub) && !sub.startsWith('-'))
-    return name === 'bun' ? [['npm', 'run', sub, ...rest]] : [['npm', 'run', sub, ...rest], ['npx', sub, ...rest]];
+    return name === 'bun' ? [['npm', 'run', sub, ...rest]] : [['npm', 'run', sub, ...rest], ['npx', sub, ...rest], [sub, ...rest]];
   return [];
 }
 
@@ -98,6 +101,9 @@ function views(cmd, cwd) {
   };
   for (const e of r.execs) {
     line(e.env, e.argv);
+    // A word known only at run time stays a word ($…), not nothing: `vitest run $(cat list)` is not a full run.
+    if (e.opaque) lines.push({ text: Object.entries(e.env).map(([k, v]) => `${k}=${v} `).join('')
+      + e.argv.map((a, k) => (e.dyn[k] && a === '' ? '$…' : a)).join(' '), cf: null });
     if (e.bin) line(e.env, ['npx', ...e.argv]);
     if (PM.has(path.basename(e.argv[0]))) for (const f of pmForms(e.argv)) line(e.env, f);
   }
@@ -111,7 +117,7 @@ function commandHit(src, cmd, how) {
   if (!how.v) how.v = views(cmd, how.cwd);
   const bs = branches(src);
   for (const l of how.v.lines) {
-    for (const b of bs) if (b.test(l.text) && (!b.test(l.cf) || b.test('_'))) return { program: l.text };
+    for (const b of bs) if (b.test(l.text) && (l.cf === null || !b.test(l.cf) || b.test('_'))) return { program: l.text };
   }
   if (how.v.why && new RegExp(src, 'i').test(cmd)) return { text: how.v.why };
   return null;

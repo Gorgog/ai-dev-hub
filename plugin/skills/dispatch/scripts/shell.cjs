@@ -17,7 +17,26 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const LIMITS = { depth: 3, execs: 400, hops: 12, scriptBytes: 256 * 1024 };
+const LIMITS = { depth: 3, execs: 400, hops: 12, scriptBytes: 256 * 1024, parses: 300 };
+// Programs whose arguments are data — they never run them as commands: a rule word among their arguments is a
+// mention (grep "npx jest", git commit -m "kubb generate"). Any other program the reader does not unwrap is
+// `opaque`: it may run its arguments (xvfb-run, tmux, su -c, concurrently), the lock judges its line as text.
+const INERT = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'gawk', 'mawk', 'perl', 'cat', 'tac', 'head',
+  'tail', 'less', 'more', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'ls', 'stat', 'file', 'echo', 'printf', 'git', 'diff', 'cmp',
+  'comm', 'jq', 'yq', 'base64', 'sha256sum', 'sha1sum', 'md5sum', 'touch', 'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'ln', 'chmod',
+  'chown', 'basename', 'dirname', 'realpath', 'readlink', 'date', 'sleep', 'true', 'false', 'test', '[', ':', 'cd', 'pushd',
+  'popd', 'export', 'declare', 'typeset', 'local', 'readonly', 'set', 'unset', 'read', 'shift', 'return', 'exit', 'wait',
+  'kill', 'pkill', 'pgrep', 'ps', 'curl', 'wget', 'tar', 'gzip', 'gunzip', 'zip', 'unzip', 'xxd', 'od', 'hexdump', 'strings',
+  'iconv', 'column', 'paste', 'join', 'split', 'nl', 'fold', 'fmt', 'expand', 'seq', 'yes', 'printenv', 'which', 'type',
+  'whereis', 'hash', 'alias', 'unalias', 'history', 'sqlite3', 'gh', 'du', 'df', 'free', 'uptime', 'id', 'whoami', 'hostname',
+  'uname', 'nproc', 'lsof', 'netstat', 'ss', 'systemctl', 'journalctl', 'tree', 'mktemp', 'install', 'patch', 'shuf',
+  'truncate', 'sync', 'clear', 'tput', 'stty', 'umask', 'ulimit', 'trap', 'getopts', 'let', 'mapfile', 'readarray', 'source', '.',
+  'shopt', 'prettier', 'eslint']);
+// Wrappers and runners the reader unwraps itself (their own line is not judged as text).
+const UNWRAPS = new Set(['env', 'sudo', 'doas', 'nice', 'ionice', 'nohup', 'setsid', 'unbuffer', 'chronic', 'builtin', 'stdbuf',
+  'caffeinate', 'time', 'exec', 'command', 'timeout', 'taskset', 'strace', 'ltrace', 'systemd-run', 'flock', 'xargs', 'watch',
+  'find', 'dotenv', 'dotenv-cli', 'cross-env', 'cross-env-shell', 'env-cmd', 'hub-run.sh', 'docker', 'docker-compose', 'podman',
+  'eval', 'npx', 'pnpx', 'bunx', 'npm', 'pnpm', 'yarn', 'bun', 'node', 'python', 'python3', 'bash', 'sh', 'zsh', 'dash', 'ksh', 'ash']);
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '{', '}', '!', 'time', 'coproc']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash']);
 // Wrapper scripts the lock knows by name: what they run is after `--`, their own body is not read.
@@ -96,7 +115,7 @@ class Parser {
         continue;
       }
       if (c === '(') {
-        if (atStart && s[this.i + 1] === '(') { this.skipArith(); continue; }
+        if (atStart && s[this.i + 1] === '(') { this.skipArith(scope); continue; }
         const def = cur.words.length === 1 && this.at(/\(\s*\)/y);
         if (def) { // name() — a function definition
           this.i += def[0].length;
@@ -115,7 +134,7 @@ class Parser {
         if (asg) {
           this.i += asg[0].length;
           let value;
-          if (s[this.i] === '(') { this.skipBalanced('(', ')'); value = { text: '', dyn: true }; }
+          if (s[this.i] === '(') { this.skipBalanced('(', ')', scope); value = { text: '', dyn: true }; }
           else if (this.i >= s.length || META.test(s[this.i])) value = lit('');
           else value = join(this.readWord(scope, false));
           cur.assigns.push({ name: asg[1], value });
@@ -153,7 +172,7 @@ class Parser {
     if (w === 'esac') { this.caseDepth = Math.max(0, this.caseDepth - 1); this.expectPattern = false; return true; }
     if (w === 'for' || w === 'select') {
       this.skipBlank();
-      if (s.startsWith('((', this.i)) { this.skipArith(); return true; }
+      if (s.startsWith('((', this.i)) { this.skipArith(scope); return true; }
       const name = this.at(/[A-Za-z_][A-Za-z0-9_]*/y);
       if (name) { this.i += name[0].length; scope.vars.set(name[0], { text: '', dyn: true, exported: false }); }
       this.skipBlank();
@@ -194,6 +213,7 @@ class Parser {
     if (this.i >= s.length) return false;
     const esac = this.at(/esac(?=[\s;&|)]|$)/y);
     if (esac) { this.i += 4; this.caseDepth = Math.max(0, this.caseDepth - 1); this.expectPattern = false; return true; }
+    if (s[this.i] === '(') this.i++; // (a) — the optional opening parenthesis of a pattern
     let depth = 0;
     while (this.i < s.length) {
       const c = s[this.i];
@@ -207,17 +227,21 @@ class Parser {
     return true;
   }
 
-  skipArith() { // (( … )) or $(( … ))
+  // (( … )) or $(( … )): not commands, but $( ) and ` ` inside them run.
+  skipArith(scope) {
+    const start = this.i;
     let depth = 0;
     while (this.i < this.s.length) {
       const c = this.s[this.i++];
       if (c === '(') depth++;
-      else if (c === ')' && --depth === 0) return;
+      else if (c === ')' && --depth === 0) { this.ctx.expansions(this.s.slice(start, this.i), scope, this.depth); return; }
     }
     throw new ShellError('не закрыта «((»');
   }
 
-  skipBalanced(open, close) {
+  // An array value a=( … ): words, not commands; their substitutions run.
+  skipBalanced(open, close, scope) {
+    const start = this.i;
     let depth = 0;
     while (this.i < this.s.length) {
       const c = this.s[this.i];
@@ -225,9 +249,22 @@ class Parser {
       if (c === "'" || c === '"') { const e = this.s.indexOf(c, this.i + 1); if (e < 0) throw new ShellError('не закрыта кавычка'); this.i = e + 1; continue; }
       this.i++;
       if (c === open) depth++;
-      else if (c === close && --depth === 0) return;
+      else if (c === close && --depth === 0) { this.ctx.expansions(this.s.slice(start, this.i), scope, this.depth); return; }
     }
     throw new ShellError(`не закрыта «${open}»`);
+  }
+
+  // Only the expansions of a text: $( ), ` `, ${ } — a heredoc body without quotes, an arithmetic, a default value.
+  scan(scope) {
+    const s = this.s;
+    while (this.i < s.length) {
+      const c = s[this.i];
+      if (c === '\\') { this.i += 2; continue; }
+      if (c === '$') { this.expand(scope, true); continue; }
+      if (c === '`') { this.backtick(scope); continue; }
+      this.i++;
+    }
+    this.drain();
   }
 
   redirect(m, cur, scope) {
@@ -239,7 +276,8 @@ class Parser {
       const fields = this.readWord(scope, false);
       const raw = this.s.slice(start, this.i);
       const delim = (fields[0] && fields[0].text) || raw.replace(/['"\\]/g, '');
-      const pending = { delim, strip: op === '<<-', cmd: cur };
+      // Unquoted delimiter: the body is expanded — its $( ) and ` ` run.
+      const pending = { delim, strip: op === '<<-', cmd: cur, expand: !/['"\\]/.test(raw), scope };
       this.heredocs.push(pending);
       return;
     }
@@ -259,7 +297,9 @@ class Parser {
         if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break;
         lines.push(line);
       }
-      h.cmd.heredocs.push(lines.join('\n'));
+      const body = lines.join('\n');
+      if (h.expand && /[$`]/.test(body)) this.ctx.expansions(body, h.scope, this.depth);
+      h.cmd.heredocs.push(body);
     }
   }
 
@@ -334,7 +374,7 @@ class Parser {
     const s = this.s;
     const n = s[this.i + 1];
     if (n === '(') {
-      if (s[this.i + 2] === '(') { this.i++; this.skipArith(); return { text: '', dyn: true }; }
+      if (s[this.i + 2] === '(') { this.i++; this.skipArith(scope); return { text: '', dyn: true }; }
       this.i += 2;
       this.list(')', childScope(scope));
       return { text: '', dyn: true };
@@ -362,6 +402,7 @@ class Parser {
         const set = !v.dyn && !v.list && (alt[1] ? v.text !== '' : true) && scope.vars.has(m[1]);
         if (alt[2] === '+') return set ? { text: alt[3], dyn: false } : { text: '', dyn: !scope.vars.has(m[1]) && !/^\d+$/.test(m[1]) };
         if (set) return v;
+        if (/[$`]/.test(alt[3])) this.ctx.expansions(alt[3], scope, this.depth); // ${X:-$(cmd)} runs cmd
         return { text: alt[3], dyn: true };
       }
       return { text: '', dyn: true };
@@ -434,6 +475,7 @@ class Parser {
       if (dd >= 0) scope.pos = args.slice(dd + 1);
     } else if (name === 'source' || name === '.') {
       if (args[0] && !args[0].dyn) this.ctx.script(path.resolve(scope.cwd, args[0].text), scope, args.length > 1 ? args.slice(1) : null, this.depth);
+      else this.ctx.unknown.push(`${name}: файл известен только при запуске`);
     }
     this.queue.push({ cmd, snap: childScope(scope) });
   }
@@ -481,34 +523,57 @@ function binOfPath(p) {
   return pkgBin(pkg);
 }
 
+// Whatever the reader could not see — a script not on disk, a limit reached — is «unknown», never «nothing runs»:
+// the lock then judges the command by its text.
 class Ctx {
-  constructor(opts) { this.execs = []; this.unknown = []; this.opts = opts; }
+  constructor(opts) { this.execs = []; this.unknown = []; this.opts = opts; this.parses = 0; this.sourcing = 0; }
+
+  // Room for one more parse: depth and the total number of parses are bounded (a script sourcing itself).
+  room(depth) {
+    if (depth + 1 > LIMITS.depth) { this.unknown.push(`вложенность больше ${LIMITS.depth}`); return false; }
+    if (++this.parses > LIMITS.parses) { this.unknown.push(`разборов больше ${LIMITS.parses}`); return false; }
+    return true;
+  }
 
   // A string run as shell code (bash -c, eval, npx -c, …).
   sub(src, scope, depth, opts = {}) {
-    if (depth + 1 > LIMITS.depth) return;
+    if (!this.room(depth)) return;
     try { new Parser(src, scope, this, depth + 1, opts).run(); }
     catch (e) { if (!(e instanceof ShellError)) throw e; this.unknown.push(`строка-код не разбирается: ${e.message}`); }
   }
 
+  // Only the substitutions of a text ($( ), ` `) — they run; the text itself is data.
+  expansions(text, scope, depth) {
+    if (!this.room(depth)) return;
+    try { new Parser(text, childScope(scope), this, depth + 1).scan(scope); }
+    catch (e) { if (!(e instanceof ShellError)) throw e; this.unknown.push(`подстановка не разбирается: ${e.message}`); }
+  }
+
   // A shell script from disk: `bash f`, `./f`, `source f` (sourced — in the caller's scope).
   script(file, scope, pos, depth, sourced = true) {
-    if (depth + 1 > LIMITS.depth || OPAQUE.has(path.basename(file))) return;
+    if (OPAQUE.has(path.basename(file))) return;
+    const miss = (why) => this.unknown.push(`скрипт ${file} ${why}`);
+    if (/^\/(proc|sys|dev)\//.test(file)) return miss('— не файл скрипта');
     let text;
     try {
       const st = fs.statSync(file);
-      if (!st.isFile() || st.size > LIMITS.scriptBytes) return;
+      if (!st.isFile()) return miss('— не обычный файл');
+      if (st.size > LIMITS.scriptBytes) return miss(`больше ${LIMITS.scriptBytes} байт`);
       text = fs.readFileSync(file, 'utf8');
-    } catch { return; }
-    if (text.includes('\0')) return;
+    } catch { return miss('не прочитан'); }
+    if (text.includes('\0')) return miss('— не текст');
     const sc = sourced ? scope : exportedScope(scope, { pos: pos || [], script: file });
     if (sourced && pos) sc.pos = pos;
-    this.sub(text, sc, depth);
+    // source loads an environment: its variables and cd apply, its commands (library functions mostly) are not
+    // judged one by one — if it runs anything but data, the command is «unknown», judged by its text.
+    if (sourced) this.sourcing++;
+    try { this.sub(text, sc, depth); } finally { if (sourced) this.sourcing--; }
   }
 
   // Shebang of an executable path: 'shell' | 'node' | null (not a readable text file).
   kind(file) {
     try {
+      if (!fs.statSync(file).isFile()) return null; // a FIFO or a device would block the open
       const fd = fs.openSync(file, 'r');
       const buf = Buffer.alloc(128);
       const n = fs.readSync(fd, buf, 0, 128, 0);
@@ -521,15 +586,23 @@ class Ctx {
   }
 
   exec(words, env, snap, o) {
-    if (!words.length || this.execs.length >= LIMITS.execs) return;
+    if (!words.length) return;
+    if (this.execs.length >= LIMITS.execs) { if (this.execs.length === LIMITS.execs) this.unknown.push(`программ больше ${LIMITS.execs}`); return; }
     const w0 = words[0];
     if (w0.dyn) { this.unknown.push(`программа известна только при запуске: ${w0.text || '$…'}`); return; }
     const argv = words.map((w) => w.text);
-    this.execs.push({ argv, env: { ...env }, bin: Boolean(o.bin) });
-    if (o.hops >= LIMITS.hops) return;
     const name = path.basename(argv[0]);
+    // opaque — a program the reader neither unwraps nor knows as data-only: it may run its arguments.
+    if (this.sourcing) {
+      if (!INERT.has(name) && !this.sourcedRuns) { this.sourcedRuns = true; this.unknown.push(`source: файл запускает ${name}`); }
+      return;
+    }
+    // dyn — per word, known only at run time (its text is what was known: '' for $(…), the literal part of a$X).
+    const e = { argv, dyn: words.map((w) => w.dyn), env: { ...env }, bin: Boolean(o.bin), opaque: !o.data && !INERT.has(name) && !UNWRAPS.has(name) };
+    this.execs.push(e);
+    if (o.hops >= LIMITS.hops) { this.unknown.push(`обёрток больше ${LIMITS.hops}`); return; }
     // What a wrapper starts: a package binary stays one (npx cross-env … jest — jest from node_modules/.bin).
-    const next = (rest, more = {}, extra = {}) => this.exec(rest, { ...env, ...more }, snap, { ...o, read: true, hops: o.hops + 1, ...extra });
+    const next = (rest, more = {}, extra = {}) => this.exec(rest, { ...env, ...more }, snap, { ...o, read: true, data: false, hops: o.hops + 1, ...extra });
     const code = (src, extra = {}) => {
       if (src.dyn) this.unknown.push(`строка-код известна только при запуске: ${argv[0]}`);
       this.sub(src.text, extra.scope || childScope(snap), o.depth, { bin: extra.bin });
@@ -605,7 +678,7 @@ class Ctx {
         }
         return;
       }
-      case 'dotenv': return next(at(skipOpts(words, 1, ['-e', '-v', '-c'])));
+      case 'dotenv': case 'dotenv-cli': return next(at(skipOpts(words, 1, ['-e', '-v', '-c'])));
       case 'cross-env': case 'cross-env-shell': {
         const [j, more] = assignsThen(1);
         return name === 'cross-env-shell' ? code(join(at(j))) : next(at(j), more);
@@ -665,7 +738,7 @@ class Ctx {
         const bin = file && !file.dyn && binOfPath(file.text);
         if (bin) return next([lit(bin), ...at(i + 1)], {}, { bin: true });
         // The script is the program the rules name (polygon/run.cjs --model); its JS is not read.
-        if (file && !file.dyn) return next(at(i), {}, { read: false });
+        if (file && !file.dyn) return next(at(i), {}, { read: false, data: true });
         return;
       }
       case 'python': case 'python3': {
@@ -673,10 +746,10 @@ class Ctx {
         while (i < words.length && words[i].text.startsWith('-')) {
           const a = words[i].text;
           if (a === '-c' || a === '-V' || a === '--version' || a === '-h' || a === '--help') return;
-          if (a === '-m') return words[i + 1] && !words[i + 1].dyn ? next(at(i + 1), {}, { read: false }) : undefined;
+          if (a === '-m') return words[i + 1] && !words[i + 1].dyn ? next(at(i + 1), {}, { read: false, data: true }) : undefined;
           i += ['-W', '-X', '-Q'].includes(a) ? 2 : 1;
         }
-        if (words[i] && !words[i].dyn) return next(at(i), {}, { read: false });
+        if (words[i] && !words[i].dyn) return next(at(i), {}, { read: false, data: true });
         return;
       }
     }
@@ -700,7 +773,7 @@ class Ctx {
         const f = words[i];
         if (f.dyn) { this.unknown.push(`скрипт известен только при запуске: ${argv[0]} ${f.text || '$…'}`); return; }
         // The script is a program too (rules name scripts); its body is read here, whatever its shebang.
-        next(at(i), {}, { read: false });
+        next(at(i), {}, { read: false, data: true });
         return this.script(path.resolve(snap.cwd, f.text), snap, at(i + 1), o.depth, false);
       }
       if (o.stdin && o.stdin.length) { for (const t of o.stdin) this.sub(t, exportedScope(snap), o.depth); return; }
@@ -711,9 +784,9 @@ class Ctx {
     // A path: a package binary, or a script read from disk.
     if (argv[0].includes('/')) {
       const bin = binOfPath(argv[0]);
-      if (bin) return next([lit(bin), ...at(1)], {}, { bin: true });
+      if (bin) { e.opaque = false; return next([lit(bin), ...at(1)], {}, { bin: true }); }
       const file = path.resolve(snap.cwd, argv[0]);
-      if (o.read !== false && this.kind(file) === 'shell') this.script(file, snap, at(1), o.depth, false);
+      if (this.kind(file) === 'shell') { e.opaque = false; if (o.read !== false) this.script(file, snap, at(1), o.depth, false); }
     }
   }
 

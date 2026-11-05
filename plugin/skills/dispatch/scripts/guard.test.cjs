@@ -92,8 +92,9 @@ test('decide by program: незнакомая обёртка или скрипт
     'script -qc "npx jest" /dev/null', 'pm2 start npx jest', 'prlimit --as=1 npx jest', 'chrt 0 npx jest', 'parallel ::: "npx jest"',
     "cat > /tmp/zz.sh <<'EOF'\nnpx jest src\nEOF\nbash /tmp/zz.sh", 'printf "npx jest\\n" > ./zz.sh && sh ./zz.sh'])
     assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
-  // данные — по-прежнему не блок
-  for (const cmd of ['grep -rn "npx jest" .', 'git commit -m "npx jest"', 'echo npx jest', 'sed -n 1p test-all-batches.sh'])
+  // данные — по-прежнему не блок; файлы, известные при запуске, — не «полный прогон»; source — окружение
+  for (const cmd of ['grep -rn "npx jest" .', 'git commit -m "npx jest"', 'echo npx jest', 'sed -n 1p test-all-batches.sh',
+    'npx vitest run --project unit $(cat list.txt)', 'for f in a.test.ts b.test.ts; do npx vitest run $f; done'])
     assert.strictEqual(prog(p, cmd), null, cmd);
 });
 

@@ -135,6 +135,12 @@ test('executions: скрипт читается и разбирается — ba
   has('bash scripts/outer.sh npx playwright test', 'bin:playwright test', o);
   has('source scripts/env.sh; npx $RUN test', 'bin:playwright test', o);
   has('. scripts/env.sh && npx $RUN test', 'bin:playwright test', o);
+  // source — загрузка окружения: функции и команды библиотеки не судятся, а если она что-то запускает — «не знаю»
+  fs.writeFileSync(path.join(d, 'lib.sh'), 'export L=1\ninst() { npm install -g x; }\n');
+  const lib = executions('. ./lib.sh; echo $L', o);
+  runsNo('. ./lib.sh; echo $L', 'npm', o);
+  assert.ok(lib.unknown.length > 0);
+  assert.strictEqual(executions('source scripts/env.sh', o).unknown.length, 0, 'только export — не «не знаю»');
   // скрипт — тоже программа (правила называют скрипты по имени)
   has('bash scripts/batch.sh', 'scripts/batch.sh', o);
   runsNo('cat scripts/batch.sh; sed -n 1p scripts/batch.sh', 'npx', o);
@@ -171,7 +177,10 @@ test('executions: не знаю — unknown, а не тишина: скрипт 
 
 test('executions: незнакомая программа помечена opaque, данные (grep, git, echo) — нет', () => {
   const op = (cmd) => executions(cmd).execs.map((e) => `${e.argv[0]}:${Boolean(e.opaque)}`);
-  assert.deepStrictEqual(op('xvfb-run npx playwright test'), ['xvfb-run:true', 'npx:false', 'playwright:true']);
+  // незнакомая обёртка не раскрывается: её строку замок судит по тексту целиком
+  assert.deepStrictEqual(op('xvfb-run npx playwright test'), ['xvfb-run:true']);
+  assert.deepStrictEqual(op('npx playwright test'), ['npx:false', 'playwright:true']);
+  assert.deepStrictEqual(op('node scripts/x.cjs "npx jest"'), ['node:false', 'scripts/x.cjs:false'], 'аргументы скрипта node — данные');
   assert.deepStrictEqual(op('grep -n x a; git commit -m y; echo z'), ['grep:false', 'git:false', 'echo:false']);
 });
 
