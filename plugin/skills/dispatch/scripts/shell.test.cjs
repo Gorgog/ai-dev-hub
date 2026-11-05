@@ -135,12 +135,16 @@ test('executions: скрипт читается и разбирается — ba
   has('bash scripts/outer.sh npx playwright test', 'bin:playwright test', o);
   has('source scripts/env.sh; npx $RUN test', 'bin:playwright test', o);
   has('. scripts/env.sh && npx $RUN test', 'bin:playwright test', o);
-  // source — загрузка окружения: функции и команды библиотеки не судятся, а если она что-то запускает — «не знаю»
-  fs.writeFileSync(path.join(d, 'lib.sh'), 'export L=1\ninst() { npm install -g x; }\n');
-  const lib = executions('. ./lib.sh; echo $L', o);
+  // функция запускается при вызове, не при определении — и в source-библиотеке
+  fs.writeFileSync(path.join(d, 'lib.sh'), 'export L=1\ninst() { npm install -g x; }\nfunction other { npx jest; }\n');
   runsNo('. ./lib.sh; echo $L', 'npm', o);
-  assert.ok(lib.unknown.length > 0);
-  assert.strictEqual(executions('source scripts/env.sh', o).unknown.length, 0, 'только export — не «не знаю»');
+  has('. ./lib.sh; inst', 'npm install -g x', o);
+  has('. ./lib.sh; other', 'bin:jest', o);
+  runsNo('f() { npx jest; }; echo', 'npx');
+  has('f() { npx jest; }; f', 'bin:jest');
+  has('g() { npx jest; }; h() { g; }; h', 'bin:jest');
+  runsNo('r() { r; }; r', 'npx'); // рекурсия не вешает
+  assert.strictEqual(executions('source scripts/env.sh', o).unknown.length, 0);
   // скрипт — тоже программа (правила называют скрипты по имени)
   has('bash scripts/batch.sh', 'scripts/batch.sh', o);
   runsNo('cat scripts/batch.sh; sed -n 1p scripts/batch.sh', 'npx', o);
@@ -190,11 +194,15 @@ test('executions: не виснет — FIFO вместо скрипта, сам
   let t0 = Date.now();
   executions('./p', { cwd: d });
   assert.ok(Date.now() - t0 < 2000, 'FIFO не открывается');
-  fs.writeFileSync(path.join(d, 'x.sh'), '. ./x.sh\n'.repeat(200));
-  t0 = Date.now();
-  const r = executions('. ./x.sh', { cwd: d });
-  assert.ok(Date.now() - t0 < 2000, `self-source: ${Date.now() - t0} мс`);
-  assert.ok(r.unknown.length > 0, 'упор в лимит — не знаю');
+  for (const n of [200, 3000, 28000]) {
+    fs.writeFileSync(path.join(d, 'x.sh'), '. ./x.sh\n'.repeat(n));
+    t0 = Date.now();
+    const r = executions('. ./x.sh', { cwd: d });
+    assert.ok(Date.now() - t0 < 2000, `self-source ×${n}: ${Date.now() - t0} мс`);
+    assert.ok(r.unknown.length > 0 && r.unknown.length < 20, `упор в лимит — не знаю, без тысяч записей (${r.unknown.length})`);
+  }
+  // путь, которого нет, — не знаю (скрипт пишется в той же команде)
+  assert.ok(executions('./z.sh', { cwd: d }).unknown.length > 0);
 });
 
 test('executions: незакрытая кавычка — error, без исключения', () => {

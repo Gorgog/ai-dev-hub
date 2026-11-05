@@ -98,6 +98,20 @@ test('decide by program: незнакомая обёртка или скрипт
     assert.strictEqual(prog(p, cmd), null, cmd);
 });
 
+test('decide by program: source файла, запуск по пути, программы, исполняющие аргументы (ревью р2)', () => {
+  const p = projectWith(SETS.polygon, { 'run-tests.sh': '#!/bin/sh\nnpx jest src\n', 'lib.sh': 'export L=1\nt() { npx jest; }\n',
+    'noshebang': 'npx jest\n' });
+  fs.chmodSync(path.join(p, 'worktrees', 'K-1', 'noshebang'), 0o755);
+  for (const cmd of ['. ./run-tests.sh', 'source ./run-tests.sh', '. ./lib.sh; t',
+    "printf '#!/bin/sh\\nnpx jest\\n' > z.sh && chmod +x z.sh && ./z.sh", './noshebang',
+    'git bisect run npx jest', 'git rebase -x "npx jest" HEAD~3', 'git submodule foreach "npx jest"',
+    "git -c alias.t='!npx jest' t", 'trap "npx jest" EXIT; true', "sed -n '1e npx jest' a.txt", 'sqlite3 :memory: ".shell npx jest"',
+    'tar --to-command="npx jest" -xf a.tar', "rg --pre 'npx jest' x .", "node polygon/run.cjs --only 'M01|M02' --model opus"])
+    assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
+  for (const cmd of ['. ./lib.sh; echo $L', 'git log --oneline -3', "sed -n '1,5p' a.txt", "sed -i 's/npx jest/x/' a.txt", 'tar -xf a.tar'])
+    assert.strictEqual(prog(p, cmd), null, cmd);
+});
+
 test('decide by program: yarn|pnpm <бинарь> — бинарь; yarn --version — не установка (ревью р1)', () => {
   const a = projectWith(SETS['project-a']);
   assert.strictEqual(prog(a, 'yarn next dev'), 'дев-серверы');
