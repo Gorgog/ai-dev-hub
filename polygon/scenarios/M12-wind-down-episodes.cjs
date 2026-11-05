@@ -65,9 +65,22 @@ const TASKS = [
         detail: `новые строки errors.md: ${v1New.join(' | ').slice(0, 200) || 'нет'}` }] },
 ];
 
-// Bash that writes into the memory: a redirect, heredoc, tee, sed -i or a script writing files, aimed at errors.md or lessons/.
+// Bash that writes into the memory (errors.md, decisions.md, lessons/, events/), judged by the TARGET of the write: a
+// redirect, tee, sed -i, the last argument of cp/mv/install/rsync, dd of=, or a script that writes files and names
+// the memory. Reading the memory with a redirect elsewhere (`grep … errors.md > /dev/null`) is not a write.
 const MEM_TARGET = /errors(-index)?\.md|lessons\/|decisions\.md|events\//;
-const WRITES = /(^|[^<>&0-9])>>?\s*\S|<<|\btee\b|\bsed\s+-i|writeFileSync|appendFileSync|\bcat\s*>/;
+const mem = (t) => MEM_TARGET.test(String(t || '').replace(/^['"]|['"]$/g, ''));
+function writesMemory(cmd) {
+  for (const m of cmd.matchAll(/(?:^|[^<>&0-9])>>?\|?\s*([^\s;|&<>]+)/g)) if (mem(m[1])) return true;
+  for (const m of cmd.matchAll(/\btee\b((?:\s+-[a-z]+)*)\s+([^\s;|&]+)/g)) if (mem(m[2])) return true;
+  for (const m of cmd.matchAll(/\bdd\b[^;|&]*\bof=([^\s;|&]+)/g)) if (mem(m[1])) return true;
+  if (/\bsed\b[^;|&]*\s-i/.test(cmd) && MEM_TARGET.test(cmd)) return true;
+  for (const m of cmd.matchAll(/\b(?:cp|mv|install|rsync|ln)\b([^;|&]*)/g)) {
+    const args = m[1].trim().split(/\s+/).filter((x) => x && !x.startsWith('-'));
+    if (args.length >= 2 && mem(args[args.length - 1])) return true;
+  }
+  return /writeFileSync|appendFileSync|\bopen\([^)]*['"][wax]\+?['"]|\.write_text\(/.test(cmd) && MEM_TARGET.test(cmd);
+}
 function bashMemoryWrites(events) {
   const out = [];
   for (const e of events || []) {
@@ -75,7 +88,7 @@ function bashMemoryWrites(events) {
     for (const b of e.message.content) {
       if (b.type !== 'tool_use' || b.name !== 'Bash') continue;
       const cmd = String((b.input && b.input.command) || '');
-      if (MEM_TARGET.test(cmd) && WRITES.test(cmd)) out.push(cmd.slice(0, 160));
+      if (writesMemory(cmd)) out.push(cmd.slice(0, 160));
     }
   }
   return out;

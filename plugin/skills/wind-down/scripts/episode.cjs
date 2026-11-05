@@ -74,25 +74,29 @@ function add(mem, file, a) {
     throw refuse(`${id}: правило — по повтору (правило 7). Первый эпизод — kind: knowledge; сразу правило — класс «одного раза» `
       + '(kind: once: данные, права, деньги, пуш и внешние действия, .env и секреты, миграции) или по слову пользователя (--user-said)');
   }
-  if (!a.fresh) {
-    const mine = wordsOf(meta, body);
-    const near = S.similar(mem, file, { top: 3 }).hits
-      .filter((h) => h.dir === 'lessons' && h.id !== id)
-      .map((h) => {
-        const p = parseLesson(fs.readFileSync(h.file, 'utf8'));
-        return { h, j: overlap(mine, wordsOf(p.meta, p.body)) };
-      })
-      .filter((x) => x.j >= MIN_OVERLAP);
-    if (near.length) {
-      throw refuse([`${id}: черновик похож на урок, который уже есть — это повтор, а не новый эпизод:`,
-        ...near.map(({ h, j }) => `- ${h.id} (общих слов ${Math.round(j * 100)} %): ${h.first}`),
-        `Повтор: episode.cjs repeat ${near[0].h.id} --note "<что было>". Прочитал оба и это разное — add … --new.`].join('\n'));
-    }
+  // Nearest lessons by the search, with their share of common words: at the bar — refused as a repeat; below it —
+  // named after the write, since the same thing in other words shares few words (the agent reads and decides).
+  const mine = wordsOf(meta, body);
+  const nearest = S.similar(mem, file, { top: 3 }).hits
+    .filter((h) => h.dir === 'lessons' && h.id !== id)
+    .map((h) => {
+      const p = parseLesson(fs.readFileSync(h.file, 'utf8'));
+      return { h, j: overlap(mine, wordsOf(p.meta, p.body)) };
+    });
+  const line = ({ h, j }) => `- ${h.id} (общих слов ${Math.round(j * 100)} %): ${h.first}`;
+  const near = nearest.filter((x) => x.j >= MIN_OVERLAP);
+  if (!a.fresh && near.length) {
+    throw refuse([`${id}: черновик похож на урок, который уже есть — это повтор, а не новый эпизод:`, ...near.map(line),
+      `Повтор: episode.cjs repeat ${near[0].h.id} --note '<что было>'. Прочитал оба и это разное — add … --new.`].join('\n'));
   }
   const r = S.addLesson(mem, text);
   if (!r.ok) throw refuse(`${id || path.basename(file)}: урок не записан — ${r.problems.join('; ')}`);
   appendV1(mem, v1Line(mem, r.id));
   const out = [`эпизод ${r.id} записан: ${r.file} + строка в errors.md`];
+  if (nearest.length && !near.length) {
+    out.push(`ближайшие уроки (ниже порога похожести) — прочитай. Это то же другими словами — значит повтор: `
+      + `recall.cjs merge ${r.id} <старый> и episode.cjs repeat <старый> --note '<что было>':`, ...nearest.map(line));
+  }
   if (meta.kind === 'once') {
     out.push('класс «одного раза»: это механизм, в отставку не уходит — в заметку «Кандидат в механизм»: триггер `when` урока, '
       + 'правило rules.json или модуль хука, который не даст повторить');
@@ -105,13 +109,13 @@ function repeat(mem, id, a) {
   const w = S.why(mem, id); // throws for an unknown id
   S.repeat(mem, id, who(a));
   const first = w.lesson.body.find((l) => l.trim()) || '';
-  const note = a.note.replace(/[.\s]+$/, '');
+  const note = a.note.replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, ''); // one v1 record line, whatever the note held
   appendV1(mem, `- Повтор: ${note}. ${first} (${new Date().toISOString().slice(0, 10)}, урок ${id}, повтор)`);
   const n = w.events.filter((e) => e.kind === 'repeat').length + 1;
   const kind = w.lesson.meta.kind;
   const out = [`повтор ${id} записан (повторов ${n}) + строка в errors.md`];
   if (kind === 'knowledge') {
-    out.push(`2-й эпизод: урок становится правилом — Edit ${w.file}: kind: rule и триггер when (поля tool, cmd, path, body, out), `
+    out.push(`${n + 1}-й эпизод: урок становится правилом — Edit ${w.file}: kind: rule и триггер when (поля tool, cmd, path, body, out), `
       + 'по которому хук подаст его в момент ошибки. Вместо нового текста — кандидат-правка механизма в заметку.');
   } else {
     out.push(`правило уже есть и повторилось (${n}): текст не держит — в заметку «Кандидат в механизм»: точнее when, `

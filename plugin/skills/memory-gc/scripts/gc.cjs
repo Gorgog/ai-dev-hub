@@ -148,7 +148,9 @@ function reviewed(mem, id, a) {
 // stays except `shown` — of those only the last per lesson (or rule). So repeats, merges, retirements and `last` stay
 // exact; `shown` of a folded month means «was shown in that month», not how often (delivery effect — by the delivery
 // log, not by folded memory events). The month as it was goes to events/archive/<ГГГГ-ММ>.jsonl byte for byte (the
-// reader does not see it); an archive already there is never overwritten. Lines are kept as written, in their order.
+// reader does not see it); an archive already there is never overwritten — lines of the month it lacks (a crash
+// between the two writes, a late writer) are appended to it first. Lines are kept as written, in their order. A shown
+// with no lesson/rule or no `at` is not folded: there is nothing to tell which one is the last.
 function foldMonth(text) {
   const rows = [];
   let broken = 0;
@@ -160,13 +162,15 @@ function foldMonth(text) {
   }
   const lastShown = new Map();
   rows.forEach((r, i) => {
-    if (r.e.kind !== 'shown') return;
-    const key = typeof r.e.lesson === 'string' ? `l:${r.e.lesson}` : `r:${r.e.rule}`;
+    if (r.e.kind !== 'shown' || typeof r.e.at !== 'string') return;
+    const key = typeof r.e.lesson === 'string' ? `l:${r.e.lesson}` : typeof r.e.rule === 'string' ? `r:${r.e.rule}` : null;
+    if (!key) return;
     const cur = lastShown.get(key);
     if (cur === undefined || String(r.e.at) >= String(rows[cur].e.at)) lastShown.set(key, i);
   });
   const keep = new Set(lastShown.values());
-  const kept = rows.filter((r, i) => r.e.kind !== 'shown' || keep.has(i)).map((r) => r.l);
+  const folded = (r) => r.e.kind === 'shown' && typeof r.e.at === 'string' && (typeof r.e.lesson === 'string' || typeof r.e.rule === 'string');
+  const kept = rows.filter((r, i) => !folded(r) || keep.has(i)).map((r) => r.l);
   return { total: rows.length + broken, kept, broken };
 }
 
@@ -190,11 +194,19 @@ function fold(mem, a) {
     const r = foldMonth(src.toString('utf8'));
     if (!r.broken && r.kept.length === r.total) continue; // at most one shown per lesson already
     const arch = path.join(dir, 'archive', f);
-    if (fs.existsSync(arch)) { out.push(`${month}: архив events/archive/${f} уже есть — не трогаю`); continue; }
-    out.push(`${month}: событий ${r.total} → ${r.kept.length}${r.broken ? ` (битых строк ${r.broken} — только в архиве)` : ''}`);
+    const had = fs.existsSync(arch) ? fs.readFileSync(arch, 'utf8') : null;
+    const inArch = new Set(had === null ? [] : had.split('\n'));
+    const missing = had === null ? [] : src.toString('utf8').split('\n').filter((l) => l.trim() && !inArch.has(l));
+    out.push(`${month}: событий ${r.total} → ${r.kept.length}${r.broken ? ` (битых строк ${r.broken} — только в архиве)` : ''}`
+      + (had === null ? '' : ` (архив уже был — дописано строк ${missing.length})`));
     if (!a.apply) continue;
-    fs.mkdirSync(path.dirname(arch), { recursive: true });
-    writeVia(arch, src); // the source first: a crash between the two writes leaves the month whole
+    // The source first: a crash between the two writes leaves the month whole, and the next run finishes it.
+    if (had === null) {
+      fs.mkdirSync(path.dirname(arch), { recursive: true });
+      writeVia(arch, src);
+    } else if (missing.length) {
+      writeVia(arch, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
+    }
     writeVia(file, r.kept.length ? `${r.kept.join('\n')}\n` : '');
   }
   if (!out.length) return `сворачивать нечего: в месяцах до ${edge} по одному показу на урок`;

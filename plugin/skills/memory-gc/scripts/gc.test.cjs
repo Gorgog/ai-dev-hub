@@ -174,5 +174,5 @@ test('fold: shown events without lesson or rule, or without at, are kept, not me
     + '{"at":"2026-05-04T10:00:00.000Z","kind":"shown","key":"y"}\n{"kind":"shown","lesson":"dev-port"}\n');
   assert.strictEqual(run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']).code, 0);
   const month = fs.readFileSync(path.join(mem, 'events', '2026-05.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  assert.deepStrictEqual(month.map((e) => `${e.key || e.lesson}:${(e.at || '-').slice(8, 10)}`), ['dev-port:02', 'x:03', 'y:04', 'dev-port:-']);
+  assert.deepStrictEqual(month.map((e) => `${e.key || e.lesson}:${e.at ? e.at.slice(8, 10) : '-'}`), ['dev-port:02', 'x:03', 'y:04', 'dev-port:-']);
 });
