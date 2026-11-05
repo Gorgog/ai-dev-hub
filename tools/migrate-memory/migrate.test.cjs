@@ -146,6 +146,57 @@ test('a refusal leaves an earlier --out as it was', () => {
   assert.deepStrictEqual(tree(r.out), before);
 });
 
+test('--out that is no earlier run, or holds the inputs, is refused and left as it was', () => {
+  // a folder of other things: the map, notes — replacing it would delete them
+  const d = tmp();
+  fs.cpSync(path.join(HERE, 'example'), path.join(d, 'example'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'notes.txt'), 'x');
+  const before = tree(d);
+  const r = run(['--snapshot', path.join(d, 'example', 'snapshot'), '--map', path.join(d, 'example', 'map.json'), '--out', d]);
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /--out/);
+  assert.deepStrictEqual(tree(d), before);
+  // inside the snapshot: the run would land in the memory it reads
+  const inside = path.join(d, 'example', 'snapshot', 'projects', 'demo', 'memory', 'run');
+  const r2 = run(['--snapshot', path.join(d, 'example', 'snapshot'), '--map', path.join(d, 'example', 'map.json'), '--out', inside]);
+  assert.strictEqual(r2.code, 1, r2.log);
+  assert.ok(!fs.existsSync(inside));
+  // a non-empty folder without the run's marker
+  const other = path.join(d, 'other');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'keep.md'), 'k');
+  const r3 = run(['--snapshot', SNAP, '--map', path.join(HERE, 'example', 'map.json'), '--out', other]);
+  assert.strictEqual(r3.code, 1, r3.log);
+  assert.deepStrictEqual(fs.readdirSync(other), ['keep.md']);
+});
+
+test('an earlier run in --out is replaced', () => {
+  const r = migrate();
+  assert.strictEqual(r.code, 0, r.log);
+  const again = run(['--snapshot', SNAP, '--map', path.join(r.dir, 'map.json'), '--out', r.out]);
+  assert.strictEqual(again.code, 0, again.log);
+});
+
+test('records: code blocks, «#» lines without a space and text after a comment are kept', () => {
+  const d = tmp();
+  const mem = path.join(d, 'snap', 'projects', 'p', 'memory');
+  fs.mkdirSync(mem, { recursive: true });
+  fs.writeFileSync(path.join(mem, 'recipes.md'), [
+    '# Рецепты', '', '## Стенд', '- Поднять базу:', '```bash', '# поднять базу', 'docker compose up -d db', '```',
+    '#!/usr/bin/env bash', '<!-- c --> после комментария текст', ''].join('\n'));
+  fs.writeFileSync(path.join(mem, 'decisions.md'), [
+    '# Журнал', '', '## 2026-09-01: решение', '**Выбрали:** скрипт', '```', '# комментарий в коде', 'echo 1', '```',
+    '**Почему:** так', ''].join('\n'));
+  const r = run(['--snapshot', path.join(d, 'snap'), '--list']);
+  assert.strictEqual(r.code, 0, r.log);
+  const all = r.log.trim().split('\n').map((l) => JSON.parse(l)).map((x) => x.text).join('\n');
+  for (const s of ['# поднять базу', 'docker compose up -d db', '#!/usr/bin/env bash', 'после комментария текст', '# комментарий в коде', '**Почему:** так']) {
+    assert.ok(all.includes(s), `потеряно: ${s}`);
+  }
+  const rows = r.log.trim().split('\n').map((l) => JSON.parse(l));
+  assert.strictEqual(rows.filter((x) => x.file === 'decisions.md').length, 1, 'a code block does not cut the section');
+});
+
 test('--list prints every record with its ref, line and text as JSON lines (the map author works from it)', () => {
   const r = run(['--snapshot', SNAP, '--list']);
   assert.strictEqual(r.code, 0, r.log);

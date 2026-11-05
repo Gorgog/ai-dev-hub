@@ -96,3 +96,22 @@ test('triggers.cjs: deliveries once per (session, agent, epoch, lesson), per 20 
   assert.match(r.log, /demo: вызовов 30, подач 4 \(2\.67 на 20\), медиана уроков на сессию 2/);
   assert.match(r.log, /replay: 1\/3/);
 });
+
+test('triggers.cjs: a db without body/out — such lessons are counted as unmeasured, and an upper bound is given', () => {
+  const run = path.join(tmp(), 'run');
+  fs.cpSync(RUN, run, { recursive: true });
+  const { formatLesson } = require('../../plugin/lib/memory/format.cjs');
+  fs.writeFileSync(path.join(run, 'projects', 'demo', 'memory', 'lessons', 'body-only.md'), formatLesson({
+    id: 'body-only', kind: 'rule', when: [{ tool: '^Bash$', out: 'boom' }], keys: ['x'], status: 'active', supersedes: [],
+    source: 'модель (миграция)', created: '2026-09-01' }, ['Урок по выводу.', 'Вторая строка.']));
+  const out = path.join(tmp(), 'report.json');
+  const r = node('triggers.cjs', ['--out', run, '--calls', callsDb(), '--noisy-rate', '0.05', '--json', out]);
+  assert.strictEqual(r.code, 0, r.log);
+  const p = JSON.parse(fs.readFileSync(out, 'utf8')).projects.demo;
+  assert.strictEqual(p.deliveries, 4, 'the lower bound: a missing field never matches');
+  assert.strictEqual(p.unmeasured, 1);
+  assert.strictEqual(p.deliveries_upper, 4 + 2, 'the upper bound: a missing field matches — once per session-epoch on Bash (s1, s2)');
+  assert.strictEqual(p.per20_upper, 4);
+  assert.ok(p.median_lessons_per_session_upper >= p.median_lessons_per_session);
+  assert.match(r.log, /без body\/out в базе: 1 урок не измерен; верхняя граница — подач 6 \(4 на 20\)/);
+});
