@@ -43,7 +43,7 @@ function calls() {
   // failures: npx jest ×3 (one behind a wrapper), Edit ×2, git push ×1
   add('s1', PD_A, 'Bash', 'npx jest a', { err: 1 });
   add('s1', PD_A, 'Bash', 'timeout 600 npx jest b', { err: 1 });
-  add('s1', PD_A, 'Bash', 'npx jest c', { err: 1, agent: 'r1' });
+  add('s1', PD_A, 'Bash', 'cd /w && npx jest c 2>&1 | tail -5', { err: 1, agent: 'r1' });
   add('s1', PD_A, 'Edit', null, { file: '/w/a.ts', err: 1 });
   add('s1', PD_A, 'Edit', null, { file: '/w/b.ts', err: 1 });
   // dispatcher d1: a bare push with no gate (skip), parallel-check then a bare push, a push through push-slice
@@ -167,7 +167,8 @@ test('недельный аудит на снимке: действенност�
   // v2 lessons: shows and repeats in the window
   assert.deepStrictEqual(w.effect.lessons['proj-b']['once-x'], { kind: 'once', shown: 1, repeat: 2 });
 
-  // failures clustered by what ran: a wrapper is not the program, the subagent's failure counts too
+  // failures clustered by what ran: a wrapper, a cd before it and a filter after it are not the program; the
+  // subagent's failure counts too
   assert.deepStrictEqual(w.clusters[0], { key: 'Bash: npx jest', count: 3, sessions: 1 });
   assert.deepStrictEqual(find(w.clusters, (c) => c.key === 'Edit'), { key: 'Edit', count: 2, sessions: 1 });
 
