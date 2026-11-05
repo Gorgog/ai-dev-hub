@@ -227,6 +227,105 @@ test('agent-roles: память агента в рабочем репозито�
   quiet(P.agentRoles(as('general-purpose', edit('src/a.ts', 'Write')), ctx));
 });
 
+// --- review round 1 -------------------------------------------------------------------------------------------------
+
+const { spawnSync } = require('child_process');
+// A committed repo under <tmp>/<parents…>/repo with the given files.
+function repoUnder(parents, files) {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'protect-up-')), ...parents, 'repo');
+  for (const [rel, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), body);
+  }
+  git(dir, 'init', '-q', '-b', 'main');
+  git(dir, '-c', 'user.email=t@example.test', '-c', 'user.name=t', 'add', '--', ...Object.keys(files));
+  git(dir, '-c', 'user.email=t@example.test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init');
+  return dir;
+}
+// Run the ready command of an inline-script deny: write `body` to the file it names, run the command in cwd.
+function runReady(res, body, cwd, input) {
+  const file = res.reason.match(/Write в (\S+) /)[1];
+  const cmd = res.reason.match(/выполни Bash: `([^`]+)`/)[1];
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, body);
+  const r = spawnSync('bash', ['-c', cmd], { cwd, encoding: 'utf8', input, env: clean });
+  return (r.stdout + r.stderr).trim();
+}
+
+test('ревью H1: готовая команда inline-script выполняется — модули от cwd, stdin и флаги сохранены', () => {
+  const dir = repoUnder([], { 'package.json': '{"version":"1.2.3"}\n', 'mymod.py': 'X = 5\n' });
+  const ev = (command) => ({ tool_name: 'Bash', cwd: dir, tool_input: { command } });
+  const nodeBody = "const p=require('./package.json'); console.log(`v${p.version}`)";
+  assert.strictEqual(runReady(P.inlineScript(ev(`node -e "${nodeBody}"`)), nodeBody, dir), 'v1.2.3');
+  const stdinBody = "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).a, `x`))";
+  assert.strictEqual(runReady(P.inlineScript(ev(`node -e "${stdinBody}"`)), stdinBody, dir, '{"a":7}'), '7 x', 'stdin данных — на месте');
+  const py = P.inlineScript(ev('python3 - one <<EOF\nfrom mymod import X\nprint(X, "a\\\\b")\nEOF'));
+  assert.strictEqual(runReady(py, 'import sys\nfrom mymod import X\nprint(X, sys.argv[1])\n', dir), '5 one');
+  const pl = P.inlineScript(ev('perl -E "say \'a\\\\b\'"'));
+  assert.strictEqual(runReady(pl, "say 'ok'\n", dir), 'ok', '-E сохранён (say)');
+});
+
+test('ревью H2, L1: экранированный \\${…} и $\'…\' — тишина', () => {
+  quiet(P.inlineScript(bash('node -e "const o={a:1}; console.log(\\`v\\${o.a}\\`)"')));
+  quiet(P.inlineScript(bash("node -e $'console.log(`a`)'")));
+});
+
+test('ревью M1: миграция — по пути от корня репозитория и не документация', () => {
+  const up = repoUnder(['migrations'], { 'src/a.ts': 'x\n', 'docs/migrations/guide.md': '# how\n', 'db/migrations/001.sql': 'x\n' });
+  const ed = (rel) => ({ tool_name: 'Edit', cwd: up, tool_input: { file_path: path.join(up, rel) } });
+  quiet(P.protectFiles(ed('src/a.ts')), 'папка migrations выше корня:');
+  quiet(P.protectFiles(ed('docs/migrations/guide.md')), 'документация:');
+  deny(P.protectFiles(ed('db/migrations/001.sql')), /миграц/i);
+});
+
+test('ревью M2: cd в неизвестное место — относительные пути не судятся', () => {
+  quiet(P.agentRoles(as('hub:reviewer', bash('cd "$(mktemp -d)" && git init -q && git commit -q --allow-empty -m x')), ctx));
+  quiet(P.agentRoles(as('hub:reviewer', bash('cd $(mktemp -d) && echo x > probe.txt')), ctx));
+});
+
+test('ревью M3: чтение git — не запись', () => {
+  for (const c of ["git tag -l 'v*'", 'git tag --contains HEAD', 'git apply --check /tmp/x.diff', 'git notes', 'git stash list']) {
+    quiet(P.agentRoles(as('hub:explorer', bash(c)), ctx), `${c}:`);
+  }
+  deny(P.agentRoles(as('hub:reviewer', bash('git tag v1')), ctx), /git tag/);
+  deny(P.agentRoles(as('hub:reviewer', bash('git apply /tmp/x.diff')), ctx), /git apply/);
+});
+
+test('ревью M4: память агента — только в репозитории и только запись', () => {
+  quiet(P.agentRoles(bash('rm -rf .claude/agent-memory'), ctx), 'уборка:');
+  quiet(P.agentRoles(bash('echo x >> ~/.claude/agent-memory/foo/MEMORY.md'), ctx), 'память уровня пользователя:');
+  deny(P.agentRoles(as('general-purpose', edit('.claude/agent-memory-local/r/MEMORY.md', 'Write')), ctx), /agent-memory/);
+});
+
+test('ревью M5: «это тест» — по пути от корня репозитория', () => {
+  const up = repoUnder(['tests'], { 'src/a.ts': 'x\n', 'src/a.test.ts': 'x\n' });
+  const ed = (rel) => as('hub:tester', { tool_name: 'Edit', cwd: up, tool_input: { file_path: path.join(up, rel) } });
+  deny(P.agentRoles(ed('src/a.ts'), ctx), /тест/i);
+  quiet(P.agentRoles(ed('src/a.test.ts'), ctx));
+});
+
+test('ревью M6, L2: git rm --cached .env и perl -Ilib — не правка', () => {
+  quiet(P.protectFiles(bash('git rm --cached .env')));
+  quiet(P.protectFiles(bash('perl -Ilib tools/check.pl .env')));
+});
+
+test('ревью M7: rm папки миграций и глоб — deny', () => {
+  deny(P.protectFiles(bash('rm -rf prisma/migrations')), /миграц/i);
+  deny(P.protectFiles(bash("sed -i 's/x/y/' prisma/migrations/*/migration.sql")), /миграц/i);
+  quiet(P.protectFiles(bash('rm -rf db/migrations/002_new.sql')), 'новая, не в HEAD:');
+});
+
+test('ревью, опасения: арифметика и [[ ]] — не heredoc и не перенаправление', () => {
+  deny(P.protectFiles(bash('echo $((1<<3))\necho KEY >> .env')), /\.env/);
+  quiet(P.agentRoles(as('hub:reviewer', bash('[[ $a > b ]] && (( x > y )) && echo ok')), ctx));
+});
+
+test('ревью (В): модель с отрицанием — не названа', () => {
+  deny(P.agentModel(reviewerOn('sonnet', transcript(human('ревью, только не на sonnet — на opus')))), /другая модель/);
+  deny(P.agentModel(reviewerOn('sonnet', transcript(human('без sonnet, пожалуйста')))), /другая модель/);
+  quiet(P.agentModel(reviewerOn('sonnet', transcript(human('на sonnet, не на opus')))));
+});
+
 // --- modules --------------------------------------------------------------------------------------------------------
 
 test('модули pretool.d: id = запись реестра, run отдаёт решение механизма', () => {
