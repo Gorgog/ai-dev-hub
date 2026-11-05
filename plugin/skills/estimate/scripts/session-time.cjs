@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Real time of a task, measured from Claude Code session transcripts (~/.claude/projects/<folder>/<session>.jsonl).
 // usage:
-//   node session-time.cjs key <KEY> [--root <projects-dir>]   all rounds marked «EST-START <KEY>» … «EST-END <KEY>»
+//   node session-time.cjs key <KEY> [--root <projects-dir>] [--marks <est-marks.jsonl>] [--scan]
+//                                                             all rounds marked «EST-START <KEY>» … «EST-END <KEY>»
 //   node session-time.cjs dir <working-folder> [--root <dir>]  every session started in that folder (a worktree)
 //   node session-time.cjs file <transcript.jsonl> [--key <KEY>]
 // Every gap between two events goes to «active» (Claude, agents, tests running), to «wait» (the gap that ends
@@ -12,6 +13,9 @@
 // «⏱ EST-START <KEY>» in its «принял бриф» there), in a message only on a line of its own. Other tool input does
 // not count: a brief written with Write or start_session quotes the marker mid-sentence for the task session.
 // A window without EST-END runs to the end of its transcript (ended: false).
+// `key` first reads the index of marks the Stop hook keeps (projects/<name>/memory/est-marks.jsonl of the working
+// folder, or --marks; marks.cjs) and opens only the transcripts it names; a key not in the index, or whose indexed
+// transcripts are gone, falls back to scanning every transcript (--scan forces the scan). The output says which.
 // Next to active time the output shows it +20% (--buffer <pct>): a reserve for what transcripts do not see.
 'use strict';
 const fs = require('fs');
@@ -138,14 +142,17 @@ function candidates(root, needle) {
   return g.stdout.split('\n').filter((f) => f && path.dirname(path.dirname(path.resolve(f))) === top);
 }
 
-function findByKey(root, key) {
+function findByKey(root, key, { marks, scan = false } = {}) {
+  let files = !scan && marks ? require('./marks.cjs').transcriptsFor(marks, key).filter((f) => fs.existsSync(f)) : [];
+  const source = files.length ? 'marks' : 'scan';
+  if (!files.length) files = candidates(root, `EST-START ${key}`);
   const rounds = [];
-  for (const f of candidates(root, `EST-START ${key}`)) {
+  for (const f of files) {
     const r = measure(parseFile(f), { key });
     if (r) rounds.push({ file: f, ...r });
   }
   rounds.sort((a, b) => a.start.localeCompare(b.start));
-  return { rounds, total: total(rounds) };
+  return { rounds, total: total(rounds), source };
 }
 
 // The folder name Claude Code gives a working directory: every non-alphanumeric character becomes «-».
@@ -176,6 +183,7 @@ function print(result, pct = BUFFER_PCT) {
   const t = result.total;
   console.log(`TOTAL  active ${t.activeMin} min  ${plus(t.activeMin)}  wait ${t.waitMin} min  pause ${t.pauseMin} min  ` +
     `human ${t.humanMessages}  rounds ${result.rounds.length}`);
+  if (result.source) console.log(`source: ${result.source === 'marks' ? 'marks (index of the Stop hook)' : 'scan (every transcript)'}`);
 }
 
 if (require.main === module) {
@@ -183,17 +191,19 @@ if (require.main === module) {
   const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
   const root = opt('--root') || path.join(os.homedir(), '.claude', 'projects');
   const key = opt('--key');
+  const scan = args.includes('--scan') && !!args.splice(args.indexOf('--scan'), 1);
+  const marks = opt('--marks') || require('./marks.cjs').marksFileFor(process.cwd());
   const die = (m) => { process.stderr.write(m + '\n'); process.exit(1); };
   const pct = Number(opt('--buffer') ?? BUFFER_PCT);
   if (!Number.isFinite(pct) || pct < 0) die('--buffer: a percentage, e.g. 20');
   const [cmd, arg] = args;
-  if (cmd === 'key' && arg) print(findByKey(root, arg), pct);
+  if (cmd === 'key' && arg) print(findByKey(root, arg, { marks, scan }), pct);
   else if (cmd === 'dir' && arg) print(byDir(root, arg), pct);
   else if (cmd === 'file' && arg) {
     const r = measure(parseFile(arg), { key });
     if (!r) die(`no EST-START ${key} in ${arg}`);
     print({ rounds: [{ file: arg, ...r }], total: total([r]) }, pct);
-  } else die('usage: session-time.cjs key <KEY> | dir <working-folder> | file <transcript.jsonl> [--key KEY]  [--root <dir>]  [--buffer 20]');
+  } else die('usage: session-time.cjs key <KEY> | dir <working-folder> | file <transcript.jsonl> [--key KEY]  [--root <dir>]  [--marks <file>] [--scan]  [--buffer 20]');
 }
 
 module.exports = { parseFile, measure, slugFor, findByKey, byDir, candidates, withBuffer, BUFFER_PCT };

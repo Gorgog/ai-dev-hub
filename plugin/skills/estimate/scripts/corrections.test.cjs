@@ -53,6 +53,8 @@ test('open, retro and cancelled rows are not closed; real formats of the column 
   assert.strictEqual(one('1,5–3 ч', '45 / 4 мин, 1 раунд').active, 45);
   assert.strictEqual(one('30–50 мин', '≈25 мин (`dir` 123 минус 98)').active, 25);
   assert.strictEqual(one('60–100 мин', '56 мин / 15 мин ожидания, 2 раунда').active, 56);
+  assert.strictEqual(one('9–16 ч', '≈ 5 ч активно (сумма срезов)').active, 300);
+  assert.strictEqual(one('1–2 ч', '1,5 ч / 10 мин').active, 90);
   assert.deepStrictEqual(one('2–4 ч (поле); 4–8 ч (сетка)', '60 / 0 мин').forecast, { min: 120, max: 240 });
   assert.deepStrictEqual(one('45-90 мин', '60 / 0 мин').forecast, { min: 45, max: 90 });
 });

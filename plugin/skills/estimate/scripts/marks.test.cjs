@@ -65,8 +65,10 @@ test('record: one line per (session, kind, key); transcriptsFor lists the sessio
   assert.deepStrictEqual(readMarks(path.join(d, 'none.jsonl')), []);
 });
 
-test('marksFileFor: the memory of the hub project above the working folder, null outside projects/', () => {
-  assert.strictEqual(marksFileFor('/h/projects/demo/worktrees/K-1/src'), '/h/projects/demo/memory/est-marks.jsonl');
-  assert.strictEqual(marksFileFor('/h/projects/demo'), '/h/projects/demo/memory/est-marks.jsonl');
-  assert.strictEqual(marksFileFor('/home/x/code'), null);
+test('marksFileFor: the memory of the hub project above the working folder, null outside the hub projects', () => {
+  assert.strictEqual(marksFileFor('/h/projects/demo/worktrees/K-1/src', '/h'), '/h/projects/demo/memory/est-marks.jsonl');
+  assert.strictEqual(marksFileFor('/h/projects/demo', '/h'), '/h/projects/demo/memory/est-marks.jsonl');
+  // A folder named projects inside a project's repo is not another project; another tree is not the hub.
+  assert.strictEqual(marksFileFor('/h/projects/demo/repo/projects/x', '/h'), '/h/projects/demo/memory/est-marks.jsonl');
+  assert.strictEqual(marksFileFor('/home/x/projects/demo', '/h'), null);
 });
