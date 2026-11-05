@@ -1,0 +1,8 @@
+[
+ {"id": "heredoc-hit", "src": "demo:6", "date": "2026-10-01", "gold": "heredoc|Write-ом",
+  "probe": {"tool": "Bash", "cmd": "python3 - <<'EOF'\nprint(1)\nEOF", "path": "", "body": "", "out": ""}},
+ {"id": "cd-before-lesson", "src": "demo:8", "date": "2026-09-01", "gold": "подоболочк",
+  "probe": {"tool": "Bash", "cmd": "cd /repo && npm test", "path": "", "body": "", "out": ""}},
+ {"id": "no-trigger", "src": "demo:13", "date": "2026-10-01", "gold": "отдельной базе",
+  "probe": {"tool": "Bash", "cmd": "npm run test:e2e", "path": "", "body": "", "out": ""}}
+]

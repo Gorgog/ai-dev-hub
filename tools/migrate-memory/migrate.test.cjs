@@ -15,7 +15,9 @@ const SNAP = path.join(HERE, 'example', 'snapshot');
 const MAP = JSON.parse(fs.readFileSync(path.join(HERE, 'example', 'map.json'), 'utf8'));
 const MEM = 'projects/demo/memory';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-memory-'));
+const dirs = [];
+test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-memory-')); dirs.push(d); return d; };
 function run(args, opts = {}) {
   const r = spawnSync('python3', [SCRIPT, ...args], {
     encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }, ...opts,
