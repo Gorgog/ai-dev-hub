@@ -300,3 +300,26 @@ test('--verify-live: a project the map does not know — code 1; no --map — co
   assert.strictEqual(run(['--verify-live', other, '--map', l.mapFile]).code, 1);
   assert.strictEqual(run(['--verify-live', l.mem]).code, 2);
 });
+
+test('--verify-live: lines of the real writer — episode.cjs add and repeat («, повтор» in Cyrillic) — are double writes', () => {
+  const l = live();
+  const E = path.join(HERE, '..', '..', 'plugin', 'skills', 'wind-down', 'scripts', 'episode.cjs');
+  const id = demo(MAP).lessons[0].id;
+  const r1 = spawnSync(process.execPath, [E, '--memory', l.mem, 'repeat', id, '--note', 'снова то же'], { encoding: 'utf8', timeout: 30000 });
+  assert.strictEqual(r1.status, 0, `${r1.stdout}${r1.stderr}`);
+  assert.match(fs.readFileSync(path.join(l.mem, 'errors.md'), 'utf8'), new RegExp(`урок ${id}, повтор\\)\\n$`));
+  const r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /двойная запись 1/);
+});
+
+test('--verify-live: a --map that is missing or not JSON — a usage error, code 2, no traceback', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'bad.json');
+  fs.writeFileSync(bad, '{ не json');
+  for (const m of [path.join(path.dirname(l.mapFile), 'nope.json'), bad]) {
+    const r = run(['--verify-live', l.mem, '--map', m]);
+    assert.strictEqual(r.code, 2, r.log);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+});

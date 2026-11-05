@@ -158,9 +158,39 @@ test('append: a lock held by a stuck process (stopped, hung) — no long wait: t
   try {
     const t0 = Date.now();
     appendEvent(d, { kind: 'shown', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });
-    assert.ok(Date.now() - t0 < 1000, `ждал ${Date.now() - t0} мс`);
+    assert.ok(Date.now() - t0 < 600, `ждал ${Date.now() - t0} мс`);
   } finally { holder.kill('SIGKILL'); }
   const { events, problems } = readEvents(d);
   assert.deepStrictEqual(events.map((e) => e.lesson), ['a', 'b']);
   assert.deepStrictEqual(problems, []);
+});
+
+test('append: a stuck lock costs one wait per process — 20 events of one hook process within a second', async () => {
+  const d = mem();
+  const { LOCK } = require('./events.cjs');
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  const holder = spawn(process.execPath, ['-e', `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(path.join(d, LOCK))});db.exec('BEGIN EXCLUSIVE');process.stdout.write('held');setTimeout(()=>{},8000)`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((ok) => holder.stdout.once('data', ok));
+  const lib = path.join(__dirname, 'events.cjs');
+  try {
+    const t0 = Date.now();
+    execFileSync(process.execPath, ['-e', `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<20;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'b',epoch:i,at:'2026-11-05T00:00:01.000Z'})`]);
+    assert.ok(Date.now() - t0 < 1000, `20 событий за ${Date.now() - t0} мс`);
+  } finally { holder.kill('SIGKILL'); }
+  assert.strictEqual(readEvents(d).events.length, 21);
+});
+
+test('append under the lock: a fragment of an unlocked writer that lands between the size check and the write never glues', () => {
+  const d = mem();
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  const f = path.join(d, 'events', '2026-11.jsonl');
+  const orig = fs.writeSync;
+  let once = true;
+  fs.writeSync = function (fd, ...rest) {
+    if (once) { once = false; fs.appendFileSync(f, '\n{"at":"2026-11-05T00:00:00.500Z","kind":"sho'); } // a killed frame writer
+    return orig.call(fs, fd, ...rest);
+  };
+  try { appendEvent(d, { kind: 'repeat', lesson: 'b', at: '2026-11-05T00:00:01.000Z' }); } finally { fs.writeSync = orig; }
+  assert.ok(!once, 'the fragment was put in');
+  assert.deepStrictEqual(readEvents(d).events.map((e) => e.lesson), ['a', 'b']);
 });
