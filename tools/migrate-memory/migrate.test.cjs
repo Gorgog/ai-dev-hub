@@ -20,7 +20,7 @@ function run(args, opts = {}) {
   const r = spawnSync('python3', [SCRIPT, ...args], {
     encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }, ...opts,
   });
-  return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
+  return { code: r.status, log: `${r.stdout || ''}${r.stderr || ''}` };
 }
 function migrate(map = MAP, extra = [], snap = SNAP) {
   const dir = tmp();
@@ -45,7 +45,7 @@ function tree(dir) {
 
 test('example map: lessons and decisions written, each passes validateLesson, source «модель (миграция)»', () => {
   const r = migrate();
-  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(r.code, 0, r.log);
   const lessons = fs.readdirSync(path.join(r.out, MEM, 'lessons')).sort();
   const decisions = fs.readdirSync(path.join(r.out, MEM, 'decisions')).sort();
   assert.deepStrictEqual(lessons, demo(MAP).lessons.map((l) => `${l.id}.md`).sort());
@@ -70,7 +70,7 @@ test('example map: lessons and decisions written, each passes validateLesson, so
 
 test('anchor: every record of every source file is addressed, orphans 0, counts add up', () => {
   const r = migrate();
-  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(r.code, 0, r.log);
   const anchor = JSON.parse(fs.readFileSync(path.join(r.out, 'anchor.json'), 'utf8'));
   const addr = JSON.parse(fs.readFileSync(path.join(r.out, 'addresses.json'), 'utf8'));
   assert.strictEqual(anchor.records, 12, JSON.stringify(anchor));
@@ -94,11 +94,11 @@ test('anchor: every record of every source file is addressed, orphans 0, counts 
 test('two runs on one snapshot are byte-identical; --check-twice says so and leaves one tree', () => {
   const a = migrate();
   const b = migrate();
-  assert.strictEqual(a.code, 0, a.out);
+  assert.strictEqual(a.code, 0, a.log);
   assert.deepStrictEqual(tree(a.out), tree(b.out));
   const c = migrate(MAP, ['--check-twice']);
-  assert.strictEqual(c.code, 0, c.out);
-  assert.match(c.out, /два прогона: побайтно равны/);
+  assert.strictEqual(c.code, 0, c.log);
+  assert.match(c.log, /два прогона: побайтно равны/);
   assert.deepStrictEqual(tree(c.out), tree(a.out));
   assert.deepStrictEqual(fs.readdirSync(c.dir).sort(), ['map.json', 'out'], 'no temporary run left next to --out');
 });
@@ -125,29 +125,29 @@ for (const [name, mutate, re] of refusals) {
     const m = clone(MAP);
     mutate(m);
     const r = migrate(m);
-    assert.strictEqual(r.code, 1, r.out);
-    assert.match(r.out, re);
+    assert.strictEqual(r.code, 1, r.log);
+    assert.match(r.log, re);
     assert.ok(!fs.existsSync(r.out), 'nothing written on a refusal');
   });
 }
 
 test('a refusal leaves an earlier --out as it was', () => {
   const r = migrate();
-  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(r.code, 0, r.log);
   const before = tree(r.out);
   const m = clone(MAP);
   demo(m).archive.pop();
   const mapFile = path.join(r.dir, 'bad.json');
   fs.writeFileSync(mapFile, JSON.stringify(m));
   const again = run(['--snapshot', SNAP, '--map', mapFile, '--out', r.out]);
-  assert.strictEqual(again.code, 1, again.out);
+  assert.strictEqual(again.code, 1, again.log);
   assert.deepStrictEqual(tree(r.out), before);
 });
 
 test('--list prints every record with its ref, line and text as JSON lines (the map author works from it)', () => {
   const r = run(['--snapshot', SNAP, '--list']);
-  assert.strictEqual(r.code, 0, r.out);
-  const rows = r.out.trim().split('\n').map((l) => JSON.parse(l));
+  assert.strictEqual(r.code, 0, r.log);
+  const rows = r.log.trim().split('\n').map((l) => JSON.parse(l));
   assert.strictEqual(rows.length, 12);
   const sec = rows.find((x) => x.ref === 'decisions.md#d532e6d17628');
   assert.strictEqual(sec.project, 'demo');
