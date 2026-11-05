@@ -222,8 +222,9 @@ function foldOne(dir, f, month, a, out, locked) {
       writeVia(arch, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
     }
     writeVia(file, r.kept.length ? `${r.kept.join('\n')}\n` : '');
-    // Lines the old inode got after the read (a framed writer): into the new month, on a line of their own. They are
-    // not in the archive yet — the next fold of the month adds them there (the «missing» lines above).
+    // Lines the old inode got after the read (a framed writer): into the new month and into the archive, each on a line
+    // of its own — the archive stays «the month as it was» (review 1: a later fold may have nothing to fold and never
+    // reach the «missing» lines above).
     const size = fs.fstatSync(fd).size;
     let late = '';
     if (size > src.length) {
@@ -231,6 +232,7 @@ function foldOne(dir, f, month, a, out, locked) {
       fs.readSync(fd, extra, 0, extra.length, src.length);
       late = ` (во время свёртки дописано ${extra.toString('utf8').split('\n').filter((l) => l.trim()).length} строк — перенесены)`;
       fs.appendFileSync(file, Buffer.concat([Buffer.from('\n'), extra]));
+      fs.appendFileSync(arch, Buffer.concat([Buffer.from('\n'), extra]));
     }
     out.push(`${line}${late}${locked ? '' : ' (без замка событий)'}`);
   } finally { fs.closeSync(fd); }

@@ -88,7 +88,7 @@ function takeLock(memDir) {
   } catch (e) {
     stuckUntil = Date.now() + STUCK_MS;
     try { if (db) db.close(); } catch { /* closed */ }
-    if (!e.stuck) warn(file, `не открывается (${e.code || e.errcode || e.message})`);
+    if (!e.stuck) warn(file, `не открывается (${[e.errcode, e.errstr || e.message].filter((x) => x !== undefined).join(' ')})`);
     return null;
   }
 }

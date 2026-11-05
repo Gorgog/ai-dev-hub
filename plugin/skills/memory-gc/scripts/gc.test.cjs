@@ -266,6 +266,9 @@ test('fold: an event appended to the month while it is being rewritten is not lo
   const kinds = readEvents(mem).events.filter((e) => e.at.startsWith('2026-05')).map((e) => `${e.kind}:${e.at.slice(8, 10)}`);
   assert.deepStrictEqual(kinds, ['shown:03', 'repeat:04']);
   assert.deepStrictEqual(readEvents(mem).problems, []);
+  // The archive is «the month as it was», the late line included: a later fold has nothing to fold (review 1).
+  assert.match(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-05.jsonl'), 'utf8'), /"note":"поздний"/);
+  assert.match(require('./gc.cjs').main(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']), /сворачивать нечего/);
 });
 
 test('fold: the month is rewritten under the events lock — a locked writer cannot get in between (slice 32)', { skip: !require('../../../lib/memory/sqlite.cjs')() && 'no node:sqlite' }, () => {
