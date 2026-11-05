@@ -12,12 +12,31 @@
 // Решение 05.11 по тесту 6: здесь проверка — попадание (≥ 17/32); шум и «разных уроков на сессию» на памяти v1 — база
 // (наблюдение), их порог — на мигрированной копии (срез 23); подача урока на настоящем нарушении шумом не считается
 // (вторая цифра: голый `cd` по отметке bare_cd из calls.db и урок о нём, метка violation корпуса).
+// Тело (Write/Edit, вход прочих инструментов) и вывод вызовов сессий шума корпус берёт из журналов (~/hub-data/journals).
+// Параметры (окружение): HUB_REPLAY_CORPUS — файл корпуса (по умолчанию $HUB_DATA/polygon/corpus/H44-replay.json);
+// HUB_REPLAY_MEMORY — папка памяти v2 (например, мигрированная копия 23): уроки и их `when` — из её .triggers.json, дата —
+// `created` файла урока, вариант «как есть» заменяется ею; HUB_REPLAY_GOLD — JSON «id урока v1 (evo:N) → id урока
+// памяти» (строка или список): по нему золото случаев и метка violation переходят на уроки этой памяти.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { realFile } = require('../lib/corpus.cjs');
 
 const SRC = 'acceptance §2 тест 6 [П]: «попадание ≥ 17/32 при шуме ≤ 1 подачи на 20 вызовов и медиане ≤ 10 разных уроков на сессию; цель 22/32»';
+// The corpus with its lessons taken from a memory v2 folder: gold and violation marks carried over by the map v1 → id.
+function fromMemory(corpus, memDir, goldFile) {
+  const t = JSON.parse(fs.readFileSync(path.join(memDir, '.triggers.json'), 'utf8'));
+  const map = goldFile ? JSON.parse(fs.readFileSync(goldFile, 'utf8')) : {};
+  const to = (id) => [].concat(map[id] || []);
+  const created = (id) => {
+    try { return (/^created:\s*(\S+)/m.exec(fs.readFileSync(path.join(memDir, 'lessons', `${id}.md`), 'utf8')) || [])[1] || '0000-00-00'; } catch { return '0000-00-00'; }
+  };
+  const violation = new Set(corpus.lessons.filter((l) => l.violation).flatMap((l) => to(l.id)));
+  const lessons = (t.lessons || []).map((l) => ({ id: l.id, date: created(l.id), first: l.first, when: l.when || [], ...(violation.has(l.id) ? { violation: 'cd' } : {}) }));
+  const cases = corpus.cases.map((c) => ({ ...c, gold: [...new Set(c.gold.flatMap(to))] }));
+  return { ...corpus, lessons, cases, families: [] };
+}
+
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0; };
 
 function replay(pluginDir, work, corpus, { merged = false } = {}) {
@@ -126,14 +145,16 @@ function replay(pluginDir, work, corpus, { merged = false } = {}) {
 module.exports = {
   id: 'H44', level: 'hook', mech: 'memory-hooks', title: 'Replay 32 повторов через подачу: попадание и шум (21)',
   async run({ pluginDir, work }) {
-    const file = realFile('H44-replay.json');
-    if (!file) {
-      return [{ id: 'real:hit', real: true, source: SRC, pass: false, skip: 'нет $HUB_DATA/polygon/corpus/H44-replay.json', detail: 'корпус не найден' }];
+    const file = process.env.HUB_REPLAY_CORPUS || realFile('H44-replay.json');
+    if (!file || !fs.existsSync(file)) {
+      return [{ id: 'real:hit', real: true, source: SRC, pass: false, skip: 'нет корпуса (HUB_REPLAY_CORPUS или $HUB_DATA/polygon/corpus/H44-replay.json)', detail: 'корпус не найден' }];
     }
     if (!fs.existsSync(path.join(pluginDir, 'hooks', 'memory-hooks.cjs'))) {
       return [{ id: 'real:hit', real: true, source: SRC, pass: false, detail: 'в версии нет модулей памяти (memory-hooks.cjs)' }];
     }
-    const corpus = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const memDir = process.env.HUB_REPLAY_MEMORY;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const corpus = memDir ? fromMemory(raw, memDir, process.env.HUB_REPLAY_GOLD) : raw;
     const saved = process.env.HUB_LOG_DIR;
     const t0 = Date.now();
     let r1, rm;
@@ -141,7 +162,7 @@ module.exports = {
       process.env.HUB_LOG_DIR = path.join(work, 'data');
       r1 = replay(pluginDir, work, corpus);
       process.env.HUB_LOG_DIR = path.join(work, 'data-merged');
-      rm = replay(pluginDir, work, corpus, { merged: true });
+      rm = memDir ? r1 : replay(pluginDir, work, corpus, { merged: true });
     } finally {
       if (saved === undefined) delete process.env.HUB_LOG_DIR; else process.env.HUB_LOG_DIR = saved;
     }
@@ -153,10 +174,11 @@ module.exports = {
     const misses = (r) => r.rows.filter((x) => !x.hit).map((x) => `${x.id}${x.seen ? '' : '(вне матчера)'}`).join(', ');
     const noise = (r) => `${r.deliveries} подач на ${r.calls} вызовов (1 на ${(1 / Math.max(r.noise, 1e-9)).toFixed(0)}), разных уроков на сессию — медиана ${r.median}, макс ${r.max}`;
     const NOISE = 'acceptance §2 тест 6, порог шума (1 подача на 20 вызовов, медиана ≤ 10) — по решению 05.11 база на памяти v1, порог — на копии 23';
+    const own = memDir ? `память ${memDir}` : 'как есть';
     const base = (r, label) => `${label}: ${noise(r)}; без подач на настоящих нарушениях — ${r.noisy} (1 на ${(1 / Math.max(r.noiseTrue, 1e-9)).toFixed(0)}), медиана ${r.medianTrue}`;
     return [
-      { id: 'real:hit', real: true, source: SRC, pass: r1.hits >= 17, detail: `как есть: попадание ${r1.hits}/${r1.n} (${kinds(r1)}); вне матчера PostToolUse ${r1.unseen}; промахи: ${misses(r1)}` },
-      { id: 'noise-base', observe: true, source: NOISE, pass: r1.noiseTrue <= 1 / 20 && r1.medianTrue <= 10, detail: base(r1, 'как есть') },
+      { id: 'real:hit', real: true, source: SRC, pass: r1.hits >= 17, detail: `${own}: попадание ${r1.hits}/${r1.n} (${kinds(r1)}); вне матчера PostToolUse ${r1.unseen}; промахи: ${misses(r1)}` },
+      { id: 'noise-base', observe: true, source: NOISE, pass: r1.noiseTrue <= 1 / 20 && r1.medianTrue <= 10, detail: base(r1, own) },
       { id: 'merged-base', observe: true, source: NOISE, pass: rm.hits >= 17 && rm.noiseTrue <= 1 / 20 && rm.medianTrue <= 10,
         detail: `семейства слиты: попадание ${rm.hits}/${rm.n}; ${base(rm, 'шум')}` },
       { id: 'goal-22', observe: true, source: SRC, pass: r1.hits >= 22, detail: `цель 22/32: как есть ${r1.hits}, слиты ${rm.hits}` },
