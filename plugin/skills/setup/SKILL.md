@@ -29,14 +29,14 @@ node ${CLAUDE_SKILL_DIR}/scripts/setup.cjs apply <id>     # одна настр�
 |---|---|---|
 | `bash-cwd` | `~/.claude/settings.json` | `env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` — `cd` в Bash не уводит следующие вызовы (проба P1: дрейф 0 у сессии и субагентов) |
 | `journal-retention` | там же | `cleanupPeriodDays`, `desktopSessionCleanupPeriodDays` ≥ 365 — журналы нужны аналитике; больший срок не понижает |
-| `status-line` | там же | строка состояния: проект · ветка · контекст % · кэш % · кто держит тяжёлое (`${CLAUDE_SKILL_DIR}/scripts/statusline.cjs` основной копии хаба) |
+| `status-line` | там же | строка состояния: проект · ветка · контекст % · кэш % · кто держит тяжёлое (`${CLAUDE_SKILL_DIR}/scripts/statusline.cjs` основной копии хаба); своя строка пользователя — его выбор, не трогается |
 | `allowlist` | там же, `permissions.allow` | только записи из `allowlist.json` рядом — одобренные пользователем обратимые чтения и проверки; пусто — нечего ставить |
 | `plugin-version` | `claude plugin …` | установленный `hub@hub` = `main` хаба: `claude plugin marketplace update hub` + `claude plugin update hub@hub` (новые сессии) |
-| `dispatch-profile`, `dispatch-rules`, `checks-json` | `projects/<имя>/` | копия образца из `templates/project/`, если файла нет; дописать под проект |
-| `auto-memory` | `.claude/settings.local.json` рабочей копии | `autoMemoryDirectory` → `projects/<имя>/memory/auto/`; файл исключается из git локально (`info/exclude`), в репозиторий клиента ничего не попадает |
+| `auto-memory` | `.claude/settings.local.json` рабочей копии | `autoMemoryDirectory` → `projects/<имя>/memory/auto/`; файл исключается из git локально (`info/exclude`), в репозиторий клиента ничего не попадает. Считается в `repo/`; свежий worktree — `?` (его настройку даёт создание worktree), `apply` в нём тоже работает |
+| `dispatch-profile`, `dispatch-rules`, `checks-json` | `projects/<имя>/` | только у проекта с доской диспетчера (`memory/dispatch.md`); **руками с пользователем** по образцу `templates/project/` — копия образца включила бы замок с правилами чужого стека и считается «не дописан». `apply` только говорит, откуда и куда (код 4) |
 
-У каждой записи в `settings.json` — бэкап рядом (`settings.json.bak-<время>`); битый файл скрипт не перезаписывает
-(код 3, поправить руками). Откат — вернуть бэкап. Каталог настроек — `CLAUDE_CONFIG_DIR`, если задан.
+У каждой записи в `settings.json` — бэкап рядом (`settings.json.bak-<время>`); симлинк остаётся симлинком (пишется цель);
+битый файл или файл, изменённый во время правки, скрипт не перезаписывает (код 3: поправить руками или повторить). Откат — вернуть бэкап. Каталог настроек — `CLAUDE_CONFIG_DIR`, если задан.
 
 Allowlist пополняется только решением пользователя: кандидаты — из журналов (что он подтверждал руками), таблицей с
 частотами; в `allowlist.json` — только одобренные, широкие маски (`Bash(*)`, `Bash(git:*)`) — никогда.

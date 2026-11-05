@@ -5,9 +5,12 @@
 //   node setup.cjs apply <id>       set one setting (backup of the settings file first; a set one — «уже стоит»)
 // Machine: bash-cwd (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1, probe P1: no cwd drift for the session and its
 // subagents), journal-retention (session journals ≥ 365 days), plugin-version (installed hub@hub = the hub's main),
-// status-line, allowlist (approved entries of allowlist.json). Project (cwd inside projects/<name>/ of the hub):
-// dispatch-profile, dispatch-rules, checks-json (from templates/project), auto-memory (autoMemoryDirectory →
-// projects/<name>/memory/auto/ in .claude/settings.local.json of the repo or worktree, excluded from git locally).
+// status-line (an own status line is the user's choice), allowlist (approved entries of allowlist.json). Project (cwd
+// inside projects/<name>/ of the hub): auto-memory (autoMemoryDirectory → projects/<name>/memory/auto/ in
+// .claude/settings.local.json of repo/, excluded from git locally; a worktree is «?» — wt-new.sh is the place); in a
+// project with the dispatcher's board (memory/dispatch.md) — dispatch-profile, dispatch-rules, checks-json: written by
+// hand from templates/project (a copy of the template would switch the lock on with another stack's rules), apply only
+// says how — code 4.
 // ~/.claude is CLAUDE_CONFIG_DIR when set; the hub — lib/hub.cjs (AI_DEV_HUB, the marketplace `hub`). The SessionStart
 // module sessionstart.d/20-setup.cjs runs check(); /hub:setup runs apply for each missing one, one Bash call each.
 'use strict';
@@ -23,8 +26,10 @@ const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(),
 const allowFile = () => process.env.HUB_SETUP_ALLOWLIST || path.join(__dirname, '..', 'allowlist.json');
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
 const tryGit = (cwd, ...a) => { try { return git(cwd, ...a); } catch { return null; } };
+const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
 
 class Refused extends Error {}
+class ByHand extends Error {}
 
 // A settings file: {} when absent; unreadable — refused, never overwritten.
 function readSettings(file) {
@@ -36,17 +41,26 @@ function readSettings(file) {
   throw new Refused(`${file} не разбирается — поправь руками, setup его не перезапишет`);
 }
 
-// Change a settings file through fn(settings): unchanged — nothing written; changed — backup, then temp + rename.
-function editSettings(file, fn) {
+// Change a settings file through fn(settings): unchanged — nothing written; changed — backup, then temp + rename on
+// the real path (a symlinked settings.json from dotfiles stays a link). Changed by someone else meanwhile (Claude Code
+// itself, another session) — refused, run again: a lost write would come back as «missing» anyway.
+function editSettings(link, fn) {
+  let file = link;
+  try { file = fs.realpathSync.native(link); } catch { /* not there yet */ }
+  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
   const s = readSettings(file);
   const before = JSON.stringify(s);
   fn(s);
   if (JSON.stringify(s) === before) return null;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let bak = null;
-  if (fs.existsSync(file)) { bak = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`; fs.copyFileSync(file, bak); }
+  if (raw !== null) { bak = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`; fs.writeFileSync(bak, raw); }
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n');
+  if ((fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null) !== raw) {
+    fs.rmSync(tmp, { force: true });
+    throw new Refused(`${file} изменился, пока его правили — повтори apply`);
+  }
   fs.renameSync(tmp, file);
   return bak || 'новый файл';
 }
@@ -89,8 +103,11 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
   const line = path.join(hub, 'plugin', 'skills', 'setup', 'scripts', 'statusline.cjs');
   const wantLine = `node "${line}"`;
   const sl = s.statusLine && typeof s.statusLine === 'object' ? s.statusLine : null;
-  machine('status-line', 'строка состояния хаба', !!sl && sl.command === wantLine, sl ? String(sl.command || sl.type) : 'нет', wantLine,
-    (x) => { x.statusLine = { type: 'command', command: wantLine, padding: 0 }; });
+  // Ours — any command that runs statusline.cjs of the hub (a symlinked hub path is still ours); another one — the user's.
+  const own = sl && !/setup[\\/]+scripts[\\/]+statusline\.cjs/.test(String(sl.command || ''));
+  machine('status-line', 'строка состояния хаба', !!sl && (own || sl.command === wantLine),
+    sl ? `${String(sl.command || sl.type)}${own ? ' (своя — не трогаю)' : ''}` : 'нет', wantLine,
+    (x) => { if (!own) x.statusLine = { type: 'command', command: wantLine, padding: 0 }; });
 
   const approved = readAllow();
   const allow = s.permissions && Array.isArray(s.permissions.allow) ? s.permissions.allow : [];
@@ -114,30 +131,34 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
   const proj = findProject(cwd, hub);
   if (!proj) return list;
   const tmpl = path.join(hub, 'templates', 'project');
-  const copy = (id, title, name, from) => {
+  const board = fs.existsSync(path.join(proj.dir, 'memory', 'dispatch.md'));
+  const byHand = (id, title, name, from) => {
     const dest = path.join(proj.dir, name);
-    add({ id, title, scope: 'project', ok: fs.existsSync(dest), have: fs.existsSync(dest) ? name : 'нет', want: `${name} (из templates/project/${from})`,
-      apply: () => {
-        if (fs.existsSync(dest)) return null;
-        fs.copyFileSync(path.join(tmpl, from), dest, fs.constants.COPYFILE_EXCL);
-        return `скопирован образец — допиши под проект: ${dest}`;
-      } });
+    const text = read(dest);
+    const copy = text !== null && text === read(path.join(tmpl, from));
+    add({ id, title, scope: 'project', ok: !board ? null : text !== null && !copy,
+      have: text === null ? 'нет' : copy ? 'копия образца — не дописан' : name,
+      want: board ? `${name} под проект (образец — templates/project/${from})` : 'не нужен: у проекта нет доски диспетчера',
+      apply: () => { throw new ByHand(`${id}: пишется руками с пользователем — образец ${path.join(tmpl, from)} → ${dest}, поправить под стек проекта`); } });
   };
-  copy('dispatch-profile', 'профиль диспетчера проекта', 'dispatch-profile.md', 'dispatch-profile.md');
-  copy('dispatch-rules', 'правила замка проекта', 'dispatch-rules.json', 'dispatch-rules.example.json');
-  copy('checks-json', 'проверки проекта (скилл checks)', 'checks.json', 'checks.example.json');
+  byHand('dispatch-profile', 'профиль диспетчера проекта', 'dispatch-profile.md', 'dispatch-profile.md');
+  byHand('dispatch-rules', 'правила замка проекта', 'dispatch-rules.json', 'dispatch-rules.example.json');
+  byHand('checks-json', 'проверки проекта (скилл checks)', 'checks.json', 'checks.example.json');
 
   const root = projectRoot(cwd, proj);
   const auto = path.join(proj.dir, 'memory', 'auto') + '/';
   if (root) {
     const local = path.join(root, '.claude', 'settings.local.json');
+    const worktree = root.startsWith(path.join(proj.dir, 'worktrees') + '/');
     let cur = null, bad = null;
     try { cur = readSettings(local).autoMemoryDirectory; } catch (e) { bad = e.message; }
-    add({ id: 'auto-memory', title: 'автопамять Claude Code — в память проекта', scope: 'project', ok: bad ? null : cur === auto,
-      have: bad || cur || 'по умолчанию (~/.claude/projects/…)', want: auto, apply: () => {
+    const ok = bad ? null : cur === auto ? true : worktree ? null : false;
+    add({ id: 'auto-memory', title: 'автопамять Claude Code — в память проекта', scope: 'project', ok,
+      have: bad || (cur ? cur : worktree ? 'worktree: по умолчанию — ставит wt-new.sh или apply здесь' : 'по умолчанию (~/.claude/projects/…)'),
+      want: auto, apply: () => {
+        excludeLocally(root, '.claude/settings.local.json');
         const done = editSettings(local, (x) => { x.autoMemoryDirectory = auto; });
         fs.mkdirSync(auto, { recursive: true });
-        excludeLocally(root, '.claude/settings.local.json');
         return done;
       } });
   }
@@ -183,6 +204,7 @@ function main(argv) {
     const c = check().find((x) => x.id === id);
     if (!c) { console.error(`нет настройки «${id}» здесь (setup.cjs check — список)`); return 2; }
     if (c.ok === true) { console.log(`${id}: уже стоит (${c.have})`); return 0; }
+    if (c.ok === null && c.scope === 'project' && c.id !== 'auto-memory') { console.log(`${id}: здесь не нужен — ${c.want}`); return 0; }
     const done = c.apply();
     console.log(done ? `${id}: поставлено → ${c.want} (${done})` : `${id}: уже стоит`);
     return 0;
@@ -193,8 +215,10 @@ function main(argv) {
 
 if (require.main === module) {
   try { process.exitCode = main(process.argv.slice(2)); } catch (e) {
-    console.error(e instanceof Refused ? e.message : `setup: ${String(e && e.stack || e)}`);
-    process.exitCode = 3;
+    if (e instanceof ByHand) { console.log(e.message); process.exitCode = 4; } else {
+      console.error(e instanceof Refused ? e.message : `setup: ${String(e && e.stack || e)}`);
+      process.exitCode = 3;
+    }
   }
 }
 
