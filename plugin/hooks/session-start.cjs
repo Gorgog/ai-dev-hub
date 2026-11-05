@@ -79,7 +79,10 @@ function pickSections(idx, cfg) {
 function workTree(cwd, proj) {
   let real = cwd;
   try { real = fs.realpathSync.native(cwd); } catch { /* as given */ }
-  const rel = String(real).replace(/\\/g, '/').slice(proj.dir.length).replace(/^\/+/, '').split('/');
+  const c = String(real).replace(/\\/g, '/');
+  // Only a path inside the project folder: the hub root and its folders map to the hub's own project too.
+  if (!c.startsWith(`${proj.dir}/`)) return null;
+  const rel = c.slice(proj.dir.length).replace(/^\/+/, '').split('/');
   if (rel[0] === 'repo') return path.join(proj.dir, 'repo');
   if (rel[0] === 'worktrees' && rel[1]) return path.join(proj.dir, 'worktrees', rel[1]);
   return null;
