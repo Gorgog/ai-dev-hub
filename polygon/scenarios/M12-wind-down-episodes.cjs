@@ -68,17 +68,22 @@ const TASKS = [
 // Bash that writes into the memory (errors.md, decisions.md, lessons/, events/), judged by the TARGET of each write in
 // each simple command: a redirect (`>`, `>>`, `&>>`, `2>`), tee, dd of=, sed/perl -i, truncate, the target of
 // cp/mv/install/rsync/ln (`-t DIR` or the last argument), or a script that writes files and names the memory. Heredoc
-// bodies and quoted text with spaces (a note, a sentence) are data, not commands: masked before the checks.
+// bodies and quoted text with spaces (a note, a sentence) are data, not commands: masked before the checks — except
+// the code of `bash -c '…'`, `sh -c`, `eval '…'`, which is unwrapped and checked as commands; quoted text without spaces
+// keeps its letters unless it holds a shell metacharacter (`'>>'` in a grep pattern is not a redirect).
 const MEM_TARGET = /errors(-index)?\.md|lessons\/|decisions\.md|events\//;
 const mem = (t) => MEM_TARGET.test(String(t || '').replace(/^['"]|['"]$/g, ''));
 function mask(cmd) {
   const noHeredoc = cmd.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, (m) => m.slice(0, m.indexOf('\n')));
-  return noHeredoc.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (q) => (/\s/.test(q) ? 'Q' : q.slice(1, -1)));
+  const code = noHeredoc.replace(/(?:\b(?:bash|sh|zsh|dash)\s+(?:-\w+\s+)*-\w*c\s+|\beval\s+)('([^']*)'|"((?:\\.|[^"\\])*)")/g,
+    (m, q, a, b) => ` ; ${a !== undefined ? a : b} ; `);
+  return code.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (q) => (/[\s<>|&;(){}]/.test(q) ? 'Q' : q.slice(1, -1)));
 }
 function segmentWrites(seg) {
   for (const m of seg.matchAll(/(?:\d*|&)>>?\|?\s*([^\s<>&|;]+)/g)) if (mem(m[1])) return true;
-  const w = seg.trim().split(/\s+/).filter(Boolean);
-  while (w.length && (/^\w+=/.test(w[0]) || w[0] === 'sudo' || w[0] === 'command')) w.shift();
+  const w = seg.replace(/[(){}]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  while (w.length && (/^\w+=/.test(w[0]) || ['sudo', 'command', 'env', 'nohup', 'time', 'exec'].includes(w[0])
+    || (w[0].startsWith('-') && w.length > 1))) w.shift();
   const prog = path.basename(w[0] || '');
   const args = w.slice(1);
   const plain = args.filter((x) => !x.startsWith('-'));
@@ -96,7 +101,7 @@ function segmentWrites(seg) {
 }
 function writesMemory(cmd) {
   if (/writeFileSync|appendFileSync|\bopen\([^)]*['"][wax]\+?['"]|\.write_text\(/.test(cmd) && MEM_TARGET.test(cmd)) return true;
-  return mask(cmd).split(/\n|;|&&|\|\||(?<![>&])\|(?![|&])/).some(segmentWrites);
+  return mask(cmd).split(/\n|;|&&|\|\||(?<![>&])\|&?/).some(segmentWrites);
 }
 function bashMemoryWrites(events) {
   const out = [];

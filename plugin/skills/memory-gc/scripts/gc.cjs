@@ -98,7 +98,8 @@ function retire(mem, a) {
 function reviewState(events) {
   const st = {};
   for (const e of events) {
-    if (!REVIEW.includes(e.kind) || typeof e.lesson !== 'string') continue;
+    // A mark without a model (reviewed before any review) says nothing about the model: it does not count.
+    if (!REVIEW.includes(e.kind) || typeof e.lesson !== 'string' || typeof e.model !== 'string' || !e.model) continue;
     const cur = st[e.lesson];
     if (!cur || String(e.at) >= String(cur.at)) st[e.lesson] = e;
   }
@@ -158,7 +159,7 @@ function reviewed(mem, id, a) {
   const { events } = readEvents(mem);
   const why = S.why(mem, id); // throws for an unknown id
   const st = reviewState(events)[id];
-  appendEvent(mem, { kind: 'reviewed', lesson: why.id, session_id: session(), model: st ? st.model : undefined, mode: 'memory-gc',
+  appendEvent(mem, { kind: 'reviewed', lesson: why.id, session_id: session(), model: st ? st.model : a.model || undefined, mode: 'memory-gc',
     ...(a.note !== undefined ? { note: a.note } : {}) });
   return `${id}: пересмотрен`;
 }
