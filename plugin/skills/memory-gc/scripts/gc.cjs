@@ -47,14 +47,15 @@ function liveLessons(mem) {
   return names.map((f) => {
     const file = path.join(mem, 'lessons', f);
     const { meta, body } = parseLesson(fs.readFileSync(file, 'utf8').replace(/\u0000/g, ''));
-    const words = new Set(S.terms([...(Array.isArray(meta.keys) ? meta.keys : []), ...body].join(' ')));
-    return { id: f.slice(0, -3), file, words, status: meta.status || 'active' };
+    return { id: f.slice(0, -3), file, words: wordsOf(meta, body), status: meta.status || 'active' };
   }).filter((l) => LIVE.includes(l.status));
 }
 
 // Shared words of two lessons over all their words: two texts of one thing share ≥ 0.3 (measured on the fixtures:
 // one thing 0.44, unrelated lessons with the same filler line ≤ 0.27, without it ≤ 0.08).
+// Also wind-down's «is this draft a repeat» check (episode.cjs) — one measure for both.
 const MIN_OVERLAP = 0.3;
+const wordsOf = (meta, body) => new Set(S.terms([...(Array.isArray(meta.keys) ? meta.keys : []), ...body].join(' ')));
 const overlap = (x, y) => [...x].filter((t) => y.has(t)).length / Math.max(1, new Set([...x, ...y]).size);
 
 // Mutual nearest neighbours (A's top similar is B and B's is A) that share enough words: in a small memory any two
@@ -167,4 +168,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main };
+module.exports = { main, overlap, wordsOf, MIN_OVERLAP };
