@@ -1,0 +1,14 @@
+{
+  "id": "setup",
+  "event": "SessionStart",
+  "file": "sessionstart.d/20-setup.cjs",
+  "handler": "setup",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": ["~/.claude/settings.json", "~/.claude/plugins/installed_plugins.json", "git main хаба", "dispatch-profile.md", "dispatch-rules.json", "checks.json", ".claude/settings.local.json"],
+  "polygon": ["H31"],
+  "replaces": "v1: настройки руками по README (переменная cwd, срок журналов, sync), правило cd-no-subshell — после живой проверки переменной",
+  "review": "2027-02-05"
+}
