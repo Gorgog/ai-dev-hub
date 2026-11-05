@@ -16,10 +16,35 @@ const path = require('path');
 const { bareCd } = require(path.join(__dirname, '..', '..', '..', 'polygon', 'lib', 'shell.cjs'));
 
 // Simple commands as word lists: split by ; & | ( ) { } and newlines outside quotes; heredoc bodies and comments skipped,
-// a heredoc inside "$( … )" too (not a here-string <<<, not a shift in $(( … ))); & of a redirection (2>&1, &>f) is no
-// separator.
+// a heredoc inside "$( … )" too (not a here-string <<<, not a shift in $(( … ))); redirections outside quotes (2>&1,
+// > log, &>f, <<< x) are dropped with their target, so they are neither words nor separators.
 const HEREDOC = /^<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1/;
 const heredocAt = (s, i) => (s[i] === '<' && s[i - 1] !== '<' ? s.slice(i).match(HEREDOC) : null);
+const REDIRECT = /^(\d+|&)?(<<<|>>|>&|<&|<>|>\||>|<)/;
+
+// The index of the )) that closes $(( at i, or -1: the parentheses balance on one line and close with two at once
+// (`$((cd x) | wc)` is a subshell in a substitution, not arithmetic).
+function arithEnd(s, i) {
+  let depth = 2;
+  for (let j = i + 3; j < s.length && s[j] !== '\n'; j++) {
+    if (s[j] === '(') depth++;
+    else if (s[j] === ')' && --depth === 1) return s[j + 1] === ')' ? j + 1 : -1;
+  }
+  return -1;
+}
+
+// The end of a redirection's target from i: spaces, then a word up to a separator (quotes kept whole).
+function targetEnd(s, i) {
+  let j = i, q = null;
+  while (s[j] === ' ' || s[j] === '\t') j++;
+  for (; j < s.length; j++) {
+    const d = s[j];
+    if (q) { if (d === q) q = null; continue; }
+    if (d === '"' || d === "'") { q = d; continue; }
+    if (/[\s;&|()<>]/.test(d)) break;
+  }
+  return j;
+}
 
 function simpleCommands(cmd) {
   const s = String(cmd);
@@ -37,8 +62,8 @@ function simpleCommands(cmd) {
       i = end;
       continue;
     }
-    if ((quote === '"' || !quote) && s.startsWith('$((', i) && s.indexOf('))', i) !== -1) {  // arithmetic: one word
-      const end = s.indexOf('))', i) + 1;
+    if ((quote === '"' || !quote) && s.startsWith('$((', i) && arithEnd(s, i) !== -1) {  // arithmetic: one word
+      const end = arithEnd(s, i);
       w += s.slice(i, end + 1); inWord = true; i = end;
       continue;
     }
@@ -63,6 +88,8 @@ function simpleCommands(cmd) {
     if (c === '\\') { if (s[i + 1] !== '\n') { w += s[i + 1] || ''; inWord = true; } i++; continue; }
     const hd = heredocAt(s, i);
     if (hd) { endWord(); pending.push(hd[2]); i += hd[0].length - 1; continue; }
+    const rd = !inWord ? s.slice(i).match(REDIRECT) : null;
+    if (rd) { i = targetEnd(s, i + rd[0].length) - 1; continue; }
     if (c === '#' && !inWord) { const end = s.indexOf('\n', i); i = (end === -1 ? s.length : end) - 1; continue; }
     if (c === '\n') { endCmd(); if (pending.length) heredoc = pending.shift(); continue; }
     if (c === '&' && (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>')) { w += c; inWord = true; continue; }
@@ -86,20 +113,9 @@ const WRAPPERS = {
   xargs: new Set(['-I', '-n', '-P', '-L', '-d', '-s', '-E', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs']),
 };
 
-// Redirections out of the words: an operator alone takes the next word (its target) with it.
-function withoutRedirections(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i++) {
-    if (/^(\d+|&)?(>>?|<)$/.test(words[i])) i++;
-    else if (!/^(\d+|&)?(>>?|<)/.test(words[i])) out.push(words[i]);
-  }
-  return out;
-}
-
-// The program and its arguments: redirections, shell prefixes, NAME=value assignments and wrappers (timeout DURATION,
-// env, xargs) skipped.
-function program(raw) {
-  const words = withoutRedirections(raw);
+// The program and its arguments: shell prefixes, NAME=value assignments and wrappers (timeout DURATION, env, xargs)
+// skipped.
+function program(words) {
   let i = 0;
   for (;;) {
     while (i < words.length && (PREFIX.has(words[i]) || /^\w+=/.test(words[i]))) i++;
