@@ -383,3 +383,10 @@ test('hooks.json: PreToolUse видит Agent, Task и NotebookEdit', () => {
     assert.ok(hooks.some((g) => new RegExp(`^(?:${g.matcher})$`).test(tool)), tool);
   }
 });
+
+test('ревью-3 M1: папка-назначение mv / git mv — контейнер, новая миграция в неё — можно', () => {
+  quiet(P.protectFiles(bash('git mv new.sql prisma/migrations/')));
+  quiet(P.protectFiles(bash('mv /tmp/2026_x prisma/migrations/')));
+  deny(P.protectFiles(bash('mv prisma/migrations /tmp/old')), /миграц/i, 'источник — папка с применёнными:');
+  deny(P.protectFiles(bash('mv .env.example .env')), /\.env/, 'назначение-файл судится:');
+});
