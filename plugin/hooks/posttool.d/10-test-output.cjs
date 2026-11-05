@@ -1,6 +1,8 @@
 // test-output (handler done-gate): a Bash call that exited 0 (PostToolUse comes only then) whose output carries a
 // test summary with failed or skipped tests — vitest and jest exit 0 that way, and so does any run behind `| tail` or
-// `|| echo FAIL` — is a block with the summary line: the run is not green, whatever the exit code says.
+// `|| echo FAIL` — gets a reminder with the summary line: the run is not green, whatever the exit code says.
+// A reminder, not a block: a block fired on 2.8 % of real Bash calls (444 of 15 437 since 15.10), mostly red TDD runs
+// on purpose; no narrowing below 1 % was found. One reminder per summary line and context epoch (delivery key).
 // A summary counts only at the start of a line: a test file printed by cat or grep holds them inside string literals.
 'use strict';
 
@@ -39,8 +41,9 @@ module.exports = {
     if (!hits.length) return null;
     const failed = hits.some((h) => h.failed);
     const lines = [...new Set(hits.map((h) => `«${h.line}» (${h.runner})`))].slice(0, 4).join('; ');
-    return { decision: 'block', reason: `Вывод тестов не зелёный, хотя команда вышла с кодом 0: ${failed ? 'тесты упали' : 'есть пропущенные'} — ${lines}. `
+    const text = `Вывод тестов не зелёный, хотя команда вышла с кодом 0: ${failed ? 'тесты упали' : 'есть пропущенные'} — ${lines}. `
       + (failed ? 'Намеренно красный прогон (TDD) — так и задумано; иначе разбери упавшие. «Тесты зелёные» по такому прогону не писать.'
-        : 'Пропущенные — не пройденные: сними skip или назови их в докладе с причиной.') };
+        : 'Пропущенные — не пройденные: сними skip или назови их в докладе с причиной.');
+    return { items: [{ text, priority: 'reminder', key: `test-output:${lines}`.slice(0, 200) }] };
   },
 };

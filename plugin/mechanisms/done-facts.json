@@ -8,7 +8,7 @@
   "failScope": "project",
   "state": [],
   "reads": ["checks.json", "<git-dir>/hub/last-full.json"],
-  "polygon": ["H09", "H30"],
+  "polygon": ["H01", "H09", "H30"],
   "replaces": "—",
   "review": "2027-02-05"
 }

@@ -1,9 +1,9 @@
 // done-gate (slice 16): a report «готово к пушу» / «готово к мержу» judged by facts, not by the phrase.
 // A report is a line that starts with the phrase (slice 11: 35 of 35 v1 blocks were on statuses and plans that only
-// mention it). The copy it is about — the worktree it names, else the repo/ or worktree of the cwd. Basics (hook
-// stop.d/10, stage on): clean tree, a sha of HEAD in the text. Facts (stop.d/11, canary): in a project with
-// checks.json — `checks.cjs --full` green on that HEAD of a clean tree (last-full.json, written by checks.cjs into the
-// git dir of the worktree); a push report — the branch is not behind its base.
+// mention it). The copy it is about — the own copy or a named worktree whose HEAD the text names. Staged (R2): only on
+// the canary (canaryOn) stop.d/11 judges — basics: clean tree, a sha of HEAD in the text; facts: with checks.json —
+// `checks.cjs --full` green on that HEAD of a clean tree (last-full.json, written by checks.cjs into the git dir of
+// the worktree); a push report — the branch is not behind its base. Off the canary stop.d/10 runs v1 (../hooks/stop.cjs).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -106,4 +106,11 @@ function facts(wt, proj, kind) {
   return problems;
 }
 
-module.exports = { isReport, target, basics, facts, lastFullPath, baseOf };
+// The new judging is staged (R2: hub → project B → all): on where the project's canary.json lists the handler
+// «done-gate» or the id «done-facts» — the same list the spine reads for the canary stage of stop.d/11.
+function canaryOn(proj) {
+  if (!proj) return false;
+  try { return (JSON.parse(fs.readFileSync(path.join(proj.dir, 'canary.json'), 'utf8')).mechanisms || []).some((m) => m === 'done-gate' || m === 'done-facts'); } catch { return false; }
+}
+
+module.exports = { isReport, target, basics, facts, lastFullPath, baseOf, canaryOn };
