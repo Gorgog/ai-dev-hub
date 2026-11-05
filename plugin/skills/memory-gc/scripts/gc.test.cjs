@@ -76,12 +76,40 @@ test('review: after a model change every live lesson is marked once; same model 
   assert.doesNotMatch(list, /dev-port/);
 });
 
-test('review: no model ever recorded in the events — nothing to compare, nothing marked', () => {
+test('review: no model in the events yet — the first call writes a baseline (reviewed, model) per live lesson; a later model change marks them (decision 05.11)', () => {
   const mem = memory();
-  const r = run(['--memory', mem, 'review', '--model', 'model-b']);
+  let r = run(['--memory', mem, 'review', '--model', 'model-a']);
   assert.strictEqual(r.code, 0, r.err);
-  assert.match(r.out, /модель прошлых событий неизвестна/);
-  assert.strictEqual(readEvents(mem).events.length, 0);
+  assert.match(r.out, /опорная модель model-a/);
+  const base = readEvents(mem).events;
+  assert.deepStrictEqual(base.map((e) => `${e.kind}:${e.model}`), Array(5).fill('reviewed:model-a'));
+  assert.ok(base.every((e) => typeof e.lesson === 'string'), 'every memory event names its lesson');
+  r = run(['--memory', mem, 'review', '--model', 'model-a']);
+  assert.match(r.out, /модель не менялась/);
+  r = run(['--memory', mem, 'review', '--model', 'model-b']);
+  assert.match(r.out, /model-a → model-b/);
+  assert.strictEqual(readEvents(mem).events.filter((e) => e.kind === 'review').length, 5);
+});
+
+test('review end to end with the real writer: wind-down `episode.cjs repeat --model` records the model, a new model marks the lessons', () => {
+  const mem = memory();
+  const ep = path.join(__dirname, '..', '..', 'wind-down', 'scripts', 'episode.cjs');
+  const w = spawnSync(process.execPath, [ep, '--memory', mem, 'repeat', 'dev-port', '--note', 'снова', '--model', 'model-a'], { encoding: 'utf8' });
+  assert.strictEqual(w.status, 0, w.stderr);
+  assert.strictEqual(readEvents(mem).events[0].model, 'model-a');
+  const r = run(['--memory', mem, 'review', '--model', 'model-b']);
+  assert.match(r.out, /model-a → model-b: на пересмотр поставлено 5/);
+});
+
+test('fold keeps the review-family events: reviewed and review stay in a folded month', () => {
+  const mem = memory();
+  appendEvent(mem, { at: '2026-05-01T10:00:00.000Z', kind: 'reviewed', lesson: 'dev-port', model: 'model-a' });
+  appendEvent(mem, { at: '2026-05-02T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  appendEvent(mem, { at: '2026-05-03T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  appendEvent(mem, { at: '2026-05-04T10:00:00.000Z', kind: 'review', lesson: 'dev-port', model: 'model-b' });
+  assert.strictEqual(run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']).code, 0);
+  assert.deepStrictEqual(readEvents(mem).events.map((e) => e.kind), ['reviewed', 'shown', 'review']);
+  assert.strictEqual(readEvents(mem).problems.length, 0);
 });
 
 test('a project of the old format (no memory/lessons/): said so, code 0, nothing created', () => {
