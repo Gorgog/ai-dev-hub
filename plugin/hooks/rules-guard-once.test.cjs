@@ -49,3 +49,19 @@ test('deny-once рядом с log: в ключе — только правила
   assert.strictEqual(res.once, 'rules-guard:demo-rm');
   assert.match(res.reason, /sed-in-place/);
 });
+
+test('несколько правил deny-once: ключ — одно правило (первое по id), напоминания и остальные — элементами', (t) => {
+  const dir = project(t, { rules: [
+    { id: 'ra', tools: '^Bash$', commands: '\\baaa\\b', text: 'про aaa' },
+    { id: 'rb', tools: '^Bash$', commands: '\\bbbb\\b', text: 'про bbb' },
+    { id: 'rl', tools: '^Bash$', commands: '\\blll\\b', text: 'про lll' },
+  ], modes: { ra: 'deny-once', rb: 'deny-once' } });
+  const ctx = { project: { dir }, version: 'x' };
+  // the same rule keeps one key, whatever fires with it: its deny is once an epoch
+  assert.strictEqual(guard.run(bash('aaa bbb'), ctx).once, 'rules-guard:ra');
+  assert.strictEqual(guard.run(bash('aaa'), ctx).once, 'rules-guard:ra');
+  assert.strictEqual(guard.run(bash('bbb'), ctx).once, 'rules-guard:rb');
+  // when the deny is dropped (used in this epoch), the log reminder still reaches Claude
+  const res = guard.run(bash('aaa lll'), ctx);
+  assert.ok((res.items || []).some((it) => /rl: про lll/.test(it.text)), JSON.stringify(res.items));
+});
