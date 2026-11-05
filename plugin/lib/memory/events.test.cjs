@@ -124,6 +124,7 @@ test('append: 4 processes at once — no line crosses a page, none lost, the loc
   assert.strictEqual(events.length, 600);
   const S = require('./store.cjs');
   assert.ok(!S.exportAll(d).files.some((f) => /lock/.test(f.path)), 'lock file not exported');
+  assert.deepStrictEqual(fs.readdirSync(path.join(d, 'events')), ['2026-11.jsonl'], 'events/ holds only the month');
 });
 
 test('append: a torn tail left by a killed writer stays its own line — the next event is whole', () => {
@@ -145,5 +146,21 @@ test('append without node:sqlite: a \\n frame — a torn fragment never glues on
   execFileSync(process.execPath, ['-e', `require(${JSON.stringify(lib)}).appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'b',at:'2026-11-05T00:00:01.000Z'})`],
     { env: { ...process.env, HUB_MEMORY_ENGINE: 'js' } });
   assert.match(fs.readFileSync(f, 'utf8'), /^\{"kind":"sho\n\{"at"[^\n]*"lesson":"b"[^\n]*\}\n$/);
-  assert.ok(!fs.readdirSync(path.dirname(f)).some((x) => /lock/.test(x)), 'no lock file without node:sqlite');
+  assert.ok(!fs.readdirSync(d).some((x) => /lock/.test(x)), 'no lock file without node:sqlite');
+});
+
+test('append: a lock held by a stuck process (stopped, hung) — no long wait: the \\n frame within a second, the event whole', async () => {
+  const d = mem();
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  const { LOCK } = require('./events.cjs');
+  const holder = spawn(process.execPath, ['-e', `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(path.join(d, LOCK))});db.exec('BEGIN EXCLUSIVE');process.stdout.write('held');setTimeout(()=>{},5000)`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((ok) => holder.stdout.once('data', ok));
+  try {
+    const t0 = Date.now();
+    appendEvent(d, { kind: 'shown', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });
+    assert.ok(Date.now() - t0 < 1000, `ждал ${Date.now() - t0} мс`);
+  } finally { holder.kill('SIGKILL'); }
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(events.map((e) => e.lesson), ['a', 'b']);
+  assert.deepStrictEqual(problems, []);
 });
