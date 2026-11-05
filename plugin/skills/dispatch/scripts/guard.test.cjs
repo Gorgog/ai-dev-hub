@@ -116,6 +116,16 @@ test('decide by program: source файла, запуск по пути, прог
     assert.strictEqual(prog(p, cmd), null, cmd);
 });
 
+test('decide by program: функции-обёртки с "$@", cd и source в теле, тело без скобок (ревью р3)', () => {
+  const p = projectWith(SETS.polygon, { 'lib2.sh': 'retry() { "$@"; }\n', 'lib3.sh': 'with_db() { export DB=x; "$@"; }\n',
+    'sub/x.sh': '#!/bin/sh\nnpx jest\n', 'rt.sh': 'npx jest src\n', 'lib.sh': 'export L=1\nt() { npx jest; }\n' });
+  for (const cmd of ['retry() { for i in 1 2 3; do "$@" && break; done; }; retry npx jest src', 'run() { echo "+ $*"; "$@"; }; run npx jest',
+    'retry() { local n=0; until "$@"; do n=$((n+1)); done; }; retry npx jest', '. ./lib3.sh && with_db npx jest', '. ./lib2.sh; retry npx jest',
+    't() { npx "$1"; }; t jest', 'f() { cd sub; ./x.sh; }; f', 'f() { . ./rt.sh; }; f', 'f() { source ./lib.sh; t; }; f',
+    'f() if true; then :; fi; { npx jest; } > log', 'f() for i in 1; do :; done; { npx jest; }'])
+    assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
+});
+
 test('decide by program: yarn|pnpm <бинарь> — бинарь; yarn --version — не установка (ревью р1)', () => {
   const a = projectWith(SETS['project-a']);
   assert.strictEqual(prog(a, 'yarn next dev'), 'дев-серверы');
