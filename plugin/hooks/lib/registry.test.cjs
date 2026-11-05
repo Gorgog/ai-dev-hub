@@ -67,10 +67,10 @@ test('pre-commit 30-mechanisms: a record without a polygon scenario, or with a m
   assert.match(gone.err, /30-c\.cjs/);
 });
 
-test('pre-commit 30-mechanisms: 10 handlers fit the budget (owner decision 05.11)', (t) => {
+test('pre-commit 30-mechanisms: 12 handlers fit the budget (owner decision 05.11)', (t) => {
   const wt = setup(t);
   const files = {};
-  for (const id of ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']) {
+  for (const id of ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']) {
     files[`plugin/hooks/pretool.d/20-${id}.cjs`] = MODULE;
     files[`plugin/mechanisms/${id}.json`] = record(id, { file: `pretool.d/20-${id}.cjs` });
   }
@@ -78,17 +78,17 @@ test('pre-commit 30-mechanisms: 10 handlers fit the budget (owner decision 05.11
   assert.strictEqual(r.status, 0, r.err);
 });
 
-test('pre-commit 30-mechanisms: more than 10 handlers or 10 state kinds is refused with the list', (t) => {
+test('pre-commit 30-mechanisms: more than 12 handlers or 10 state kinds is refused with the list', (t) => {
   const wt = setup(t);
   const files = {};
-  for (const id of ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k']) {
+  for (const id of ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm']) {
     files[`plugin/hooks/pretool.d/20-${id}.cjs`] = MODULE;
     files[`plugin/mechanisms/${id}.json`] = record(id, { file: `pretool.d/20-${id}.cjs` });
   }
   const r = commit(wt, files);
   assert.notStrictEqual(r.status, 0, r.err);
-  assert.match(r.err, /обработчик.*11/);
-  assert.match(r.err, /a, b, c, d, e, f, g, h, i, j, k/);
+  assert.match(r.err, /обработчик.*13/);
+  assert.match(r.err, /a, b, c, d, e, f, g, h, i, j, k, l, m/);
   // One handler, eleven kinds of state.
   const wt2 = setup(t);
   const state = Array.from({ length: 11 }, (_, i) => `memory/s${i}.json`);
