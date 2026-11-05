@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { appendEvent, readEvents, foldEvents, MAX_LINE } = require('./events.cjs');
 
 const mem = () => {
@@ -76,4 +76,74 @@ test('7 processes × 300 events in parallel: every line whole, none lost', async
   assert.deepStrictEqual(problems, []);
   assert.strictEqual(events.length, 2100);
   for (let w = 0; w < 7; w++) assert.strictEqual(events.filter((e) => e.session_id === `s${w}`).length, 300);
+});
+
+// H22 (slice 26): a SIGKILL tears a write only between 4 KB pages, and healing a torn tail by «read the last byte, then
+// write» glued a neighbour's whole event onto a fragment. Now: under a kernel lock (node:sqlite BEGIN EXCLUSIVE) — heal,
+// pad with \n to the page boundary when the line would cross it, one write. Without node:sqlite — a \n frame.
+const PAGE = 4096;
+function pages(file) {
+  const buf = fs.readFileSync(file);
+  const bad = [];
+  let off = 0, n = 0;
+  while (off < buf.length) {
+    let nl = buf.indexOf(0x0a, off);
+    if (nl < 0) nl = buf.length - 1;
+    if (nl > off) {
+      n++;
+      if (Math.floor(off / PAGE) !== Math.floor(nl / PAGE)) bad.push(`строка с ${off} до ${nl} через границу страницы`);
+      if (/^\s+$/.test(buf.subarray(off, nl).toString('latin1'))) bad.push(`строка из пробелов с ${off}`);
+    }
+    off = nl + 1;
+  }
+  return { n, bad };
+}
+
+test('append: no line crosses a 4 KB page; the padding is bare \\n; every event reads back', () => {
+  const d = mem();
+  for (let i = 0; i < 200; i++) appendEvent(d, { kind: 'shown', lesson: 'l', epoch: i, note: 'ж'.repeat((i * 37) % 900), at: '2026-11-05T00:00:00.000Z' });
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad, []);
+  assert.strictEqual(p.n, 200);
+  const { events, problems } = readEvents(d);
+  assert.strictEqual(events.length, 200);
+  assert.deepStrictEqual(problems, []);
+  assert.ok(MAX_LINE <= PAGE, 'a line must fit one page');
+});
+
+test('append: 4 processes at once — no line crosses a page, none lost, the lock file is neither read nor exported', async () => {
+  const d = mem();
+  const lib = path.join(__dirname, 'events.cjs');
+  const code = (w) => `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<150;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'l',session_id:'w${w}',epoch:i,note:'ж'.repeat((i*53+${w}*7)%1200),at:'2026-11-05T00:00:00.000Z'})`;
+  await Promise.all([0, 1, 2, 3].map((w) => new Promise((ok, no) => spawn(process.execPath, ['-e', code(w)], { stdio: 'inherit' })
+    .on('exit', (c) => (c === 0 ? ok() : no(new Error(`писатель ${w}: код ${c}`)))))));
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad, []);
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(problems, []);
+  assert.strictEqual(events.length, 600);
+  const S = require('./store.cjs');
+  assert.ok(!S.exportAll(d).files.some((f) => /lock/.test(f.path)), 'lock file not exported');
+});
+
+test('append: a torn tail left by a killed writer stays its own line — the next event is whole', () => {
+  const d = mem();
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  fs.appendFileSync(path.join(d, 'events', '2026-11.jsonl'), '{"kind":"sho');
+  appendEvent(d, { kind: 'shown', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(events.map((e) => e.lesson), ['a', 'b']);
+  assert.strictEqual(problems.length, 1);
+});
+
+test('append without node:sqlite: a \\n frame — a torn fragment never glues onto the next event', () => {
+  const d = mem();
+  const f = path.join(d, 'events', '2026-11.jsonl');
+  const lib = path.join(__dirname, 'events.cjs');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, '{"kind":"sho');
+  execFileSync(process.execPath, ['-e', `require(${JSON.stringify(lib)}).appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'b',at:'2026-11-05T00:00:01.000Z'})`],
+    { env: { ...process.env, HUB_MEMORY_ENGINE: 'js' } });
+  assert.match(fs.readFileSync(f, 'utf8'), /^\{"kind":"sho\n\{"at"[^\n]*"lesson":"b"[^\n]*\}\n$/);
+  assert.ok(!fs.readdirSync(path.dirname(f)).some((x) => /lock/.test(x)), 'no lock file without node:sqlite');
 });
