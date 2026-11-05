@@ -196,6 +196,15 @@ function summarize(results) {
   return { code: results.some((r) => r.status === 'FAIL') ? 1 : 0, text };
 }
 
+// The fact of a full run for the stop hook (plugin/lib/done-gate.cjs): last-full.json in the git dir of this worktree
+// (per worktree, gone with it, never in the tree). Written for a red run too: the hook names the failed steps.
+function writeLastFull(repo, data) {
+  const file = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json'], { cwd: repo, encoding: 'utf8' }).trim();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(data) + '\n');
+  fs.renameSync(`${file}.tmp`, file);
+}
+
 if (require.main === module) {
   const args = process.argv.slice(2);
   const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : undefined; };
@@ -237,9 +246,14 @@ if (require.main === module) {
   if (full && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() !== baseSha) {
     console.log(`  фон снят с ${fs.readFileSync(stamp, 'utf8').trim()}, база уже ${baseSha}: возможен ложный FAIL — фон перепишет тот, кто на чистой базе`);
   }
-  const s = summarize(runSteps((full ? cfg.full : cfg.fast) || [], { repo, files, scratch, baselineDir, ...ctx, memory: full ? FULL_MEMORY : null }));
+  // The tree before the run: a full run of uncommitted changes is not a run of HEAD (the stop hook asks for clean).
+  const clean = full && !gitLines(repo, ['status', '--porcelain']).length;
+  const results = runSteps((full ? cfg.full : cfg.fast) || [], { repo, files, scratch, baselineDir, ...ctx, memory: full ? FULL_MEMORY : null });
+  const s = summarize(results);
   console.log(s.text);
+  if (full) writeLastFull(repo, { sha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), at: new Date().toISOString(),
+    code: s.code, clean, base, steps: results.map((r) => ({ name: r.name, status: r.status })) });
   process.exit(s.code);
 }
 
-module.exports = { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize, baselineRefusal };
+module.exports = { findConfig, matchGlob, ownFiles, selectFiles, render, filterOwn, runSteps, summarize, baselineRefusal, writeLastFull };

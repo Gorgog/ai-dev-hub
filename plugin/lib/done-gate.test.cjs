@@ -56,6 +56,8 @@ test('basics: clean tree and a sha of HEAD in the text; an invented sha is not H
   assert.match(basics('Готово к пушу: K-1, HEAD 7c4c9f0d5', p.repo).join(), /нет HEAD/);
   fs.writeFileSync(path.join(p.repo, 'wip.txt'), 'x');
   assert.match(basics(`Готово к пушу ${head.slice(0, 7)}`, p.repo).join(), /не чистое: wip\.txt/);
+  fs.writeFileSync(path.join(p.repo, 'a.txt'), 'changed');
+  assert.match(basics(`Готово к пушу ${head.slice(0, 7)}`, p.repo).join(), /не чистое: a\.txt, wip\.txt/, 'a modified file first: its « M » prefix');
 });
 
 test('facts: without checks.json — only behind the base; with it — checks --full green on the final HEAD of a clean tree', () => {
