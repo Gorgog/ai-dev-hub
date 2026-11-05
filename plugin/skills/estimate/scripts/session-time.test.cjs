@@ -191,3 +191,34 @@ test('candidates: only top-level transcripts that mention the marker, not subage
   assert.deepStrictEqual(candidates(root, 'EST-START TASK-1'), [path.join(root, 'proj-a', 's1.jsonl')]);
   assert.deepStrictEqual(candidates(root, 'EST-START NOPE-1'), []);
 });
+
+test('findByKey with the marks index: straight to the indexed transcripts; a key not in the index — the scan', () => {
+  const root = tmp(), elsewhere = tmp();
+  const { record } = require('./marks.cjs');
+  const marks = path.join(tmp(), 'memory', 'est-marks.jsonl');
+  // The indexed transcript lies outside --root: only the index can find it.
+  const f = transcript(path.join(elsewhere, 'p'), 's.jsonl', [human(0, 'x'), said(1, '⏱ EST-START TASK-1'), said(11, '⏱ EST-END TASK-1')]);
+  record(marks, [{ kind: 'START', key: 'TASK-1' }, { kind: 'END', key: 'TASK-1' }], { session_id: 's', transcript_path: f, cwd: '/w' });
+  record(marks, [{ kind: 'START', key: 'TASK-3' }], { session_id: 'gone', transcript_path: path.join(elsewhere, 'gone.jsonl'), cwd: '/w' });
+  transcript(path.join(root, 'q'), 'r.jsonl', [human(0, 'y'), said(1, '⏱ EST-START TASK-2'), said(6, '⏱ EST-END TASK-2')]);
+  // A partial index (a session before the canary, a mark out of the tail, a killed turn) must not hide a round:
+  // by default the scan and the index together; the index alone only on --index-only.
+  transcript(path.join(root, 'q'), 'old.jsonl', [human(0, 'z'), said(1, '⏱ EST-START TASK-1'), said(8, '⏱ EST-END TASK-1')]);
+  const both = findByKey(root, 'TASK-1', { marks });
+  assert.strictEqual(both.rounds.length, 2);
+  assert.strictEqual(both.total.activeMin, 17);
+  assert.deepStrictEqual([both.indexed, both.scanned, both.unindexed], [1, 1, 1]);
+  const fast = findByKey(root, 'TASK-1', { marks, indexOnly: true });
+  assert.strictEqual(fast.total.activeMin, 10);
+  const scanned = findByKey(root, 'TASK-2', { marks });
+  assert.strictEqual(scanned.total.activeMin, 5);
+  // An indexed transcript that is gone (cleaned up) — nothing from it, no crash.
+  assert.strictEqual(findByKey(root, 'TASK-3', { marks }).rounds.length, 0);
+  const { execFileSync } = require('child_process');
+  const out = execFileSync(process.execPath, [path.join(__dirname, 'session-time.cjs'), 'key', 'TASK-1', '--root', root, '--marks', marks], { encoding: 'utf8' });
+  assert.match(out, /TOTAL {2}active 17 min/);
+  assert.match(out, /source: scan \+ marks.*1 not in the index/);
+  const quick = execFileSync(process.execPath, [path.join(__dirname, 'session-time.cjs'), 'key', 'TASK-1', '--root', root, '--marks', marks, '--index-only'], { encoding: 'utf8' });
+  assert.match(quick, /TOTAL {2}active 10 min/);
+  assert.match(quick, /source: marks only/);
+});

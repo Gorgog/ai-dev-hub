@@ -1,0 +1,14 @@
+{
+  "id": "estimate-marks",
+  "event": "Stop",
+  "file": "stop.d/20-estimate-marks.cjs",
+  "handler": "estimate",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "project",
+  "state": ["memory/est-marks.jsonl"],
+  "reads": ["transcript_path (хвост 1 МиБ)", "last_assistant_message"],
+  "polygon": ["H38"],
+  "replaces": "v1: поиск меток EST grep-ом по всем журналам сессий (session-time.cjs key); метки — текстом estimate/SKILL.md",
+  "review": "2027-02-05"
+}
