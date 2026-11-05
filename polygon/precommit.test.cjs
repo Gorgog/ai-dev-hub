@@ -13,7 +13,7 @@ const SCRIPT = path.join(ROOT, '.githooks', 'pre-commit.d', '20-polygon.sh');
 
 function repo() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'polygon-precommit-'));
-  execFileSync('tar', ['-x', '-C', d], { input: execFileSync('git', ['-C', ROOT, 'archive', 'HEAD']) });
+  execFileSync('tar', ['-x', '-C', d], { input: execFileSync('git', ['-C', ROOT, 'archive', 'HEAD'], { maxBuffer: 256 * 1024 * 1024 }) });
   const git = (...a) => execFileSync('git', ['-C', d, ...a], { encoding: 'utf8' }).trim();
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'eval@example.test'); git('config', 'user.name', 'eval'); git('config', 'commit.gpgsign', 'false');
@@ -35,7 +35,7 @@ function worktreeRepo() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'polygon-precommit-wt-'));
   const main = path.join(d, 'main');
   fs.mkdirSync(main);
-  execFileSync('tar', ['-x', '-C', main], { input: execFileSync('git', ['-C', ROOT, 'archive', 'HEAD']) });
+  execFileSync('tar', ['-x', '-C', main], { input: execFileSync('git', ['-C', ROOT, 'archive', 'HEAD'], { maxBuffer: 256 * 1024 * 1024 }) });
   if (fs.existsSync(SCRIPT)) fs.copyFileSync(SCRIPT, path.join(main, '.githooks', 'pre-commit.d', '20-polygon.sh'));
   fs.writeFileSync(path.join(main, '.githooks', 'pre-commit'),
     '#!/usr/bin/env bash\nfor c in "$(dirname "$0")"/pre-commit.d/*; do [ -x "$c" ] || continue; "$c" || exit 1; done\n', { mode: 0o755 });
