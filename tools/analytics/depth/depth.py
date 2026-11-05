@@ -73,21 +73,22 @@ def slope_test(opps, perms, seed):
     return sxv / sxx, (1 + hits) / (perms + 1)
 
 
-def oe_ratio(opps, kind):
-    """(standardized late/early, raw late/early, early has no violation while late has)."""
-    by_rule = {}
+def oe_ratio(opps, kind, by='rule'):
+    """(late/early, each observed / expected, raw late/early, early has no violation while late has); expected - the
+    violation rate of the opportunity's rule in the thread kind, or of its stratum (session x rule) with by='stratum'."""
+    groups = {}
     for o in opps:
-        c = by_rule.setdefault(o['rule'], [0, 0])
+        c = groups.setdefault(o[by], [0, 0])
         c[0] += 1
         c[1] += o['v']
-    rate = {r: v / n for r, (n, v) in by_rule.items()}
+    rate = {g: v / n for g, (n, v) in groups.items()}
     last = len(BUCKETS[kind]) - 1
     part = {0: [0, 0.0, 0], last: [0, 0.0, 0]}  # observed, expected, opportunities
     for o in opps:
         b = bucket(o['depth'], kind)
         if b in part:
             part[b][0] += o['v']
-            part[b][1] += rate[o['rule']]
+            part[b][1] += rate[o[by]]
             part[b][2] += 1
     (oe, ee, ne), (ol, el, nl) = part[0], part[last]
     std = raw = None
@@ -102,8 +103,9 @@ def near(x, threshold):
     return x is not None and abs(x - threshold) <= BORDER * threshold
 
 
-def thread_stats(opps, kind, perms=10000, seed=11):
-    """Buckets, per rule counts, slope and p, ratios and the verdict of §4 for one thread kind."""
+def thread_stats(opps, kind, perms=10000, seed=11, diagnostics=True):
+    """Buckets, per rule counts, slope and p, ratios and the verdict of §4 for one thread kind. Diagnostics - out of
+    the verdict: each rule on its own, and the late/early ratio with the expectation of the session x rule."""
     rows = [[] for _ in BUCKETS[kind]]
     for o in opps:
         rows[bucket(o['depth'], kind)].append(o)
@@ -122,7 +124,14 @@ def thread_stats(opps, kind, perms=10000, seed=11):
     else:
         verdict = NO
     depths = sorted(o['depth'] for o in opps)
+    diag = None
+    if diagnostics:
+        keep = ('buckets', 'p', 'ratio', 'raw_ratio', 'slope_per_doubling')
+        diag = {'session_ratio': oe_ratio(opps, kind, 'stratum')[0],
+                'by_rule': {r: {k: v for k, v in thread_stats(os_, kind, perms, seed, False).items() if k in keep}
+                            for r, os_ in sorted(by_rule.items())}}
     return {
+        'diagnostics': diag,
         'buckets': buckets,
         'by_rule': {r: counts(os_) for r, os_ in sorted(by_rule.items())},
         'slope_per_doubling': None if slope is None else round(slope, 5),

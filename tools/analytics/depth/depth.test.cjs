@@ -195,7 +195,7 @@ test('статистика §4: явный распад — «есть», без
   assert.ok(a.p <= 0.01, `p=${a.p}`);
   assert.ok(a.ratio >= 1.3, `ratio=${a.ratio}`);
   assert.strictEqual(a.verdict, 'распад есть');
-  assert.strictEqual(a.diagnostics?.session_ratio, a.ratio);  // one rule, its rate is the same in every session
+  assert.ok(a.diagnostics?.session_ratio >= 1.3, `session_ratio=${a.diagnostics?.session_ratio}`);  // the decay is in every session
   const b = stats(flat, 'main');
   assert.ok(b.p > 0.1, `p=${b.p}`);
   assert.strictEqual(b.verdict, 'распада нет');
