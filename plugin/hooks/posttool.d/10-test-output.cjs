@@ -26,7 +26,9 @@ function scan(text) {
   return hits;
 }
 
-const outputOf = (r) => (typeof r === 'string' ? r : r && typeof r === 'object' ? `${r.stdout || ''}\n${r.stderr || ''}` : '');
+// Colored output (FORCE_COLOR) is read without its ANSI codes.
+const outputOf = (r) => (typeof r === 'string' ? r : r && typeof r === 'object' ? `${r.stdout || ''}\n${r.stderr || ''}` : '')
+  .replace(/\x1b\[[0-9;]*m/g, '');
 
 module.exports = {
   id: 'test-output',
@@ -38,7 +40,7 @@ module.exports = {
     const failed = hits.some((h) => h.failed);
     const lines = [...new Set(hits.map((h) => `«${h.line}» (${h.runner})`))].slice(0, 4).join('; ');
     return { decision: 'block', reason: `Вывод тестов не зелёный, хотя команда вышла с кодом 0: ${failed ? 'тесты упали' : 'есть пропущенные'} — ${lines}. `
-      + (failed ? 'Это провал: разбери упавшие, «тесты зелёные» по такому прогону не писать.'
+      + (failed ? 'Намеренно красный прогон (TDD) — так и задумано; иначе разбери упавшие. «Тесты зелёные» по такому прогону не писать.'
         : 'Пропущенные — не пройденные: сними skip или назови их в докладе с причиной.') };
   },
 };

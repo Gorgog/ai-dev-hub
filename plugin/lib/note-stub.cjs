@@ -52,13 +52,18 @@ function notes(dir) {
   try { return fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { return []; }
 }
 
-// Wind-down done: a note (not a stub) of this key changed since the session started. Same whole-key rule as
-// latestNote: K-7 does not catch K-7-2 or XK-7.
+// Wind-down done: a note (not a stub) of this key changed since the session started. The key — in the file name or
+// in the title, as latestNote reads it (session-start.cjs): K-7 does not catch K-7-2 or XK-7.
 function hasNote(dir, key, since) {
   const re = key && new RegExp(`(^|[^\\w-]|-)${escape(key)}(?!\\w|-\\d)`, 'i');
   return notes(dir).some((f) => {
-    if (/-stub-[\w-]+\.md$/.test(f) || (re && !re.test(f.replace(/\.md$/, '')))) return false;
-    try { return fs.statSync(path.join(dir, f)).mtimeMs >= (since || 0); } catch { return false; }
+    if (/-stub-[\w-]+\.md$/.test(f)) return false;
+    const file = path.join(dir, f);
+    try { if (fs.statSync(file).mtimeMs < (since || 0)) return false; } catch { return false; }
+    if (!re || re.test(f.replace(/\.md$/, ''))) return true;
+    let title = '';
+    try { title = fs.readFileSync(file, 'utf8').split(/\r?\n/).find((l) => l.trim()) || ''; } catch { /* gone */ }
+    return re.test(title);
   });
 }
 

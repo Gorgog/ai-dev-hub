@@ -247,11 +247,13 @@ if (require.main === module) {
     console.log(`  фон снят с ${fs.readFileSync(stamp, 'utf8').trim()}, база уже ${baseSha}: возможен ложный FAIL — фон перепишет тот, кто на чистой базе`);
   }
   // The tree before the run: a full run of uncommitted changes is not a run of HEAD (the stop hook asks for clean).
+  // HEAD is taken at the same moment: a commit during a background run must not be recorded as checked.
   const clean = full && !gitLines(repo, ['status', '--porcelain']).length;
+  const ranSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
   const results = runSteps((full ? cfg.full : cfg.fast) || [], { repo, files, scratch, baselineDir, ...ctx, memory: full ? FULL_MEMORY : null });
   const s = summarize(results);
   console.log(s.text);
-  if (full) writeLastFull(repo, { sha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(), at: new Date().toISOString(),
+  if (full) writeLastFull(repo, { sha: ranSha, at: new Date().toISOString(),
     code: s.code, clean, base, steps: results.map((r) => ({ name: r.name, status: r.status })) });
   process.exit(s.code);
 }

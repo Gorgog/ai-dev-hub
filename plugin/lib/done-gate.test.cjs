@@ -38,10 +38,11 @@ test('isReport: a line that starts with the phrase is a report; a mention, a quo
   }
 });
 
-test('target: the worktree the report names, else the copy of the cwd; the project folder itself — none', () => {
+test('target: the copy of the cwd, a named worktree from the project folder; the project folder alone — none', () => {
   const p = project();
   const w3 = p.wt('K-3'), w7 = p.wt('K-7');
-  assert.strictEqual(target(w3, 'Готово к пушу: работа в worktrees/K-7, HEAD abc', p.proj), w7);
+  assert.strictEqual(target(w3, 'Готово к пушу: работа в worktrees/K-7, HEAD abc', p.proj), w3, 'no HEAD named — the own copy (review 1)');
+  assert.strictEqual(target(p.proj.dir, 'Готово к пушу: работа в worktrees/K-7', p.proj), w7);
   assert.strictEqual(target(path.join(w3, 'sub'), 'Готово к пушу: K-3', p.proj), w3);
   assert.strictEqual(target(w3, 'Готово к пушу: worktrees/K-404 abc', p.proj), w3);
   assert.strictEqual(target(p.repo, 'Готово к пушу', p.proj), p.repo);

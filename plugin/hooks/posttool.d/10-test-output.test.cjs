@@ -69,5 +69,5 @@ test('test-output: a green run, a quoted fixture, a non-Bash tool, an odd respon
 test('review 1: colored output (ANSI codes) is read as plain; the reason does not push to «fix» an intended red run', () => {
   const r = mod.run(bash('\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m | 4 passed (5)'));
   assert.strictEqual(r && r.decision, 'block');
-  assert.match(r.reason, /намеренно красн/);
+  assert.match(r.reason, /намеренно красн/i);
 });

@@ -11,33 +11,35 @@ const { execFileSync } = require('child_process');
 
 const run = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const git = (cwd, ...a) => run(cwd, ...a).trim();
-// A quote («> …») is a relay of someone else's report; a list marker, bold or a heading is still the report itself.
-const REPORT = /^[ \t*#_-]*готово к (пушу|мержу)[*_ \t]*[:—–(,.!-]/im;
-const PHRASE = /^[ \t*#_-]*готово к (пушу|мержу)[*_ \t]*$/im;
+// A quote («> …») is a relay of someone else's report; a list marker (`-`, `1.`), bold or a heading is still the report
+// itself. After the phrase — anything but a letter or a digit (`:`, `,`, a space, an emoji, the end); a question is not.
+const REPORT = /^[ \t*#_-]*(?:\d+[.)][ \t]+)?[*_]*готово к (пушу|мержу)(?![\p{L}\p{N}])(?![^\n]*\?[ \t]*$)/imu;
 
 // 'push' | 'merge' | null.
 function isReport(text) {
-  const m = String(text || '').match(REPORT) || String(text || '').match(PHRASE);
+  const m = String(text || '').match(REPORT);
   if (!m) return null;
   return /пушу/i.test(m[1]) ? 'push' : 'merge';
 }
 
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
 
-// The copy the report is about: worktrees/<name> named in it (and present), else the copy of the cwd, else null.
+const shas = (text) => [...String(text || '').matchAll(/\b[0-9a-f]{7,40}\b/g)].map((m) => m[0]);
+const headOf = (wt) => { try { return git(wt, 'rev-parse', 'HEAD'); } catch { return null; } };
+
+// The copy the report is about. Candidates: the repo/ or worktree of the cwd, then worktrees/<name> named in the
+// text (and present). The first whose HEAD the text names wins (a session in its own copy may mention a neighbour;
+// a session may report about another copy: H01 other-worktree); none — the own copy, else the first named one.
 function target(cwd, text, proj) {
   if (!proj) return null;
-  for (const m of String(text || '').matchAll(/worktrees\/([\w.-]+)/g)) {
-    const d = path.join(proj.dir, 'worktrees', m[1]);
-    if (fs.existsSync(path.join(d, '.git'))) return d;
-  }
   const rel = real(cwd).slice(real(proj.dir).length).replace(/^\/+/, '').split('/');
-  if (rel[0] === 'repo') return path.join(proj.dir, 'repo');
-  if (rel[0] === 'worktrees' && rel[1]) return path.join(proj.dir, 'worktrees', rel[1]);
-  return null;
+  const own = rel[0] === 'repo' ? path.join(proj.dir, 'repo') : rel[0] === 'worktrees' && rel[1] ? path.join(proj.dir, 'worktrees', rel[1]) : null;
+  const named = [...String(text || '').matchAll(/worktrees\/([\w.-]+)/g)].map((m) => path.join(proj.dir, 'worktrees', m[1]))
+    .filter((d) => d !== own && fs.existsSync(path.join(d, '.git')));
+  const cands = [...(own ? [own] : []), ...named];
+  const said = shas(text);
+  return cands.find((d) => { const h = headOf(d); return h && said.some((s) => h.startsWith(s)); }) || cands[0] || null;
 }
-
-const shas = (text) => [...String(text || '').matchAll(/\b[0-9a-f]{7,40}\b/g)].map((m) => m[0]);
 
 // Problems of the copy itself: a dirty tree, no sha of HEAD in the text. Unreadable git — no verdict ([]).
 function basics(text, wt) {
@@ -55,14 +57,16 @@ function basics(text, wt) {
 const lastFullPath = (wt) => git(wt, 'rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json');
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 
-// The base of the branch: `base` of checks.json, else the branch of the main working tree (the first of
-// `git worktree list`). null — none, or this copy is the main one.
+// The base of the branch: `base` of checks.json, else the trunk — local `main`, else `master`. Not the branch of the
+// main working tree: repo/ often stands on a task branch or a detached HEAD. null — no trunk, or this is the trunk.
 function baseOf(wt, cfg) {
   if (cfg && typeof cfg.base === 'string' && cfg.base) return cfg.base;
-  const list = git(wt, 'worktree', 'list', '--porcelain').split(/\r?\n/);
-  const main = (list.find((l) => l.startsWith('worktree ')) || '').slice('worktree '.length);
-  const branch = (list.find((l) => l.startsWith('branch ')) || '').replace(/^branch refs\/heads\//, '');
-  return branch && real(main) !== real(wt) ? branch : null;
+  const current = git(wt, 'branch', '--show-current');
+  for (const b of ['main', 'master']) {
+    try { git(wt, 'rev-parse', '--verify', '-q', `refs/heads/${b}`); } catch { continue; }
+    return b === current ? null : b;
+  }
+  return null;
 }
 
 // Problems of the facts: the full run on the final HEAD (with checks.json), behind the base (push reports).
