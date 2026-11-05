@@ -53,12 +53,13 @@ const MAIN = [
   bash('e313', 'echo "git add -A"; cat <<EOF\nsed -i x\nEOF'),  // 313 quoted and heredoc: no opportunity
   { text: 'Готово к пушу: T-1 abc1234' },       // after 313: checks-full violated (no checks after the commit)
   bash('h314', 'G=/h/plugin/skills/checks/scripts; node $G/checks.cjs --full'),  // 314
-  ['m315', 'SendMessage', { to: 'disp', message: 'Готово к мержу: T-1 abc1234' }],  // 315: checks-full kept
+  ['m315', 'SendMessage', { to: 'disp', message: 'Готово к мержу: T-1 abc9999' }],  // 315: checks-full kept
   { compact: true },
   bash('c1b', 'cd /r && ls'),                   // 1 of epoch 1: cd bare
   bash('s2b', "sed -i 's/q/w/' g"),             // 2 of epoch 1: sed-in-place violated
   bash('k3b', 'git commit -m z && node /h/checks.cjs --full'),  // 3: no-verify kept; the checks run after the commit
   ['m4b', 'SendMessage', { to: 'disp', message: 'Готово к пушу: T-1 def5678' }],  // 4: checks-full kept
+  { text: 'Готово к пушу: T-1 def5678' },       // the same report repeated to the user: not a second opportunity
 ];
 
 const SUB = [
@@ -114,6 +115,10 @@ test('shell-rules: возможность и нарушение — по раз�
     ['git checkout main', { 'checkout-dot': 0 }], ['git checkout -- .', { 'checkout-dot': 1 }], ['git restore .', { 'checkout-dot': 1 }],
     ['git restore --staged .', {}], ['git restore --staged --worktree .', { 'checkout-dot': 1 }],
     ['cat <<EOF\ngit add -A\nsed -i x f\nEOF', {}], ['# git clean -x', {}],
+    // A heredoc inside "$( … )", with a lone quote in its body; prefixes timeout, env, xargs, find -exec.
+    ['git commit -m "$(cat <<\'EOF\'\nfix "quoted\ngit add .\nEOF\n)"', { 'no-verify': 0 }],
+    ['timeout 600 git commit -m x', { 'no-verify': 0 }], ['env GIT_EDITOR=true git -C /r add -A', { 'git-add-all': 1 }],
+    ["ls *.md | xargs -I {} sed -i 's/a/b/' {}", { 'sed-in-place': 1 }], ["find . -name '*.md' -exec sed -i 's/a/b/' {} \\;", { 'sed-in-place': 1 }],
   ];
   const r = spawnSync('node', [path.join(DIR, 'shell-rules.cjs')], { input: JSON.stringify(cases.map((c) => c[0])), encoding: 'utf8', timeout: 10000 });
   assert.strictEqual(r.status, 0, r.error ? String(r.error) : r.stderr);
@@ -128,6 +133,7 @@ test('shell-rules: возможность и нарушение — по раз�
   assert.deepStrictEqual(flags('cat /h/checks.cjs # --full').events, []);
   assert.deepStrictEqual(flags('git commit -F - <<EOF\nmsg\nEOF\nnode /h/checks.cjs --full').events, ['commit', 'checks']);
   assert.deepStrictEqual(flags('node /h/checks.cjs --full; git commit -m x').events, ['checks', 'commit']);
+  assert.deepStrictEqual(flags('node /h/checks.cjs 2>&1 --full | tail; timeout 60 git commit -m x').events, ['checks', 'commit']);
 });
 
 test('шаг 0 на синтетике: глубина эпохи, правила, доклады, компакция, повторы', (t) => {
@@ -159,6 +165,8 @@ test('шаг 0 на синтетике: глубина эпохи, правил�
   // K = 50 before and after the compaction: s310 v, a311, k312, report v, m315 | s2b v, k3b, m4b.
   assert.deepStrictEqual(s.compaction.rules, { before: { opps: 5, viol: 2 }, after: { opps: 3, viol: 1 }, compactions: 1 });
   assert.deepStrictEqual(s.compaction.cd, { before: { opps: 0, viol: 0 }, after: { opps: 1, viol: 1 }, compactions: 1 });
+  // Observed / expected by the rule's rate in main threads: s310 .75, a311 .5, k312 0, report 1/3, m315 1/3 | s2b .75, k3b 0, m4b 1/3.
+  assert.deepStrictEqual([s.compaction.oe_before, s.compaction.oe_after], [1.043, 0.923]);
 
   const rep = Object.fromEntries(s.repeats.cases.map((c) => [c.id, c]));
   assert.deepStrictEqual([rep['sed-late'].thread, rep['sed-late'].epoch, rep['sed-late'].depth, rep['sed-late'].bucket, rep['sed-late'].epoch_len],
@@ -219,5 +227,20 @@ test('статистика §4: смесь сессий по глубине — 
   const s = stats(opps, 'main');
   assert.strictEqual(s.ratio, 0.1);
   assert.strictEqual(s.diagnostics?.session_ratio, 1);
+  assert.strictEqual(s.verdict, 'распада нет');
+});
+
+test('статистика §4: наклон значим, но поздний бакет < 1,3× раннего — «нет»', () => {
+  // 30 sessions: early (1-50) violate 10 of 100, late (301+) 12 of 100 - a real slope, a ratio of 1.2.
+  const opps = [];
+  for (let s = 0; s < 30; s++) {
+    for (let i = 0; i < 200; i++) {
+      opps.push({ stratum: `s${s}|r`, rule: 'r', depth: 1 + (i % 50), v: i % 10 === 5 ? 1 : 0 });  // mid-bucket depths
+      opps.push({ stratum: `s${s}|r`, rule: 'r', depth: 301 + (i % 200), v: i % 25 < 3 ? 1 : 0 });
+    }
+  }
+  const s = stats(opps, 'main');
+  assert.ok(s.p <= 0.1, `p=${s.p}`);
+  assert.strictEqual(s.ratio, 1.2);
   assert.strictEqual(s.verdict, 'распада нет');
 });
