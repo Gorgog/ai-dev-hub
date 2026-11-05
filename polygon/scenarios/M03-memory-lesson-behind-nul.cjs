@@ -22,7 +22,7 @@ module.exports = {
     });
     const repo = path.join(proj, 'repo');
     gitRepo(repo, { 'prisma/models/course.prisma': 'model Course {\n  id    Int    @id @default(autoincrement())\n  title String\n}\n' });
-    return { cwd: repo, hubDir: hub, maxTurns: 12, maxBudgetUsd: 1.5, timeoutSec: 600, ctx: { repo },
+    return { cwd: repo, hubDir: hub, maxTurns: 12, timeoutSec: 600, ctx: { repo },
       prompt: 'Я руками добавил поле в prisma/models/course.prisma. Как у нас принято привести схему в порядок и проверить после ' +
         'ручной правки? Ответь по памяти проекта: одной-двумя строками, с командой. Ничего не запускай и не правь.' };
   },

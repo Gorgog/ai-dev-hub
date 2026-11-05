@@ -95,7 +95,7 @@ async function runScenario(s, a, base, runRoot) {
     let checks;
     try { checks = await s.run({ base, pluginDir: path.join(base, 'plugin'), work }); }
     catch (e) { checks = [{ id: 'crash', pass: false, detail: String(e.stack || e).slice(0, 500) }]; }
-    return { ...head(s), runs: [{ checks: tag(s, checks), wallMs: Date.now() - t0, costUsd: 0 }] };
+    return { ...head(s), runs: [{ checks: tag(s, checks), wallMs: Date.now() - t0 }] };
   }
   const reps = Array.from({ length: s.repeats || a.repeats }, (_, i) => i);
   const runs = await pool(reps, a.j, async (rep) => {
@@ -103,13 +103,13 @@ async function runScenario(s, a, base, runRoot) {
     const st = await s.setup({ base, work });
     const pluginDir = path.join(st.hubDir, 'plugin');
     const run = await runClaude({ cwd: st.cwd, prompt: st.prompt, pluginDir, hubDir: st.hubDir, model: a.model || s.model,
-      maxTurns: st.maxTurns, maxBudgetUsd: st.maxBudgetUsd, timeoutSec: st.timeoutSec, logFile: path.join(work, 'transcript.jsonl') });
+      maxTurns: st.maxTurns, timeoutSec: st.timeoutSec, logFile: path.join(work, 'transcript.jsonl') });
     let checks;
     try { checks = await s.grade({ run, ...st }); }
     catch (e) { checks = [{ id: 'grader-crash', pass: false, detail: String(e.stack || e).slice(0, 500) }]; }
     const pluginLoaded = (run.init.plugins || []).map((p) => p.name);
-    process.stderr.write(`  ${s.id} r${rep}: ${checks.filter((c) => c.pass).length}/${checks.length} · $${run.costUsd.toFixed(2)} · ${run.turns} ходов · ${Math.round(run.wallMs / 1000)} с\n`);
-    return { checks: tag(s, checks), costUsd: run.costUsd, turns: run.turns, wallMs: run.wallMs, model: run.init.model, plugins: pluginLoaded,
+    process.stderr.write(`  ${s.id} r${rep}: ${checks.filter((c) => c.pass).length}/${checks.length} · ${run.turns} ходов · ${Math.round(run.wallMs / 1000)} с\n`);
+    return { checks: tag(s, checks), turns: run.turns, wallMs: run.wallMs, model: run.init.model, plugins: pluginLoaded,
       subtype: run.subtype, transcript: path.join(work, 'transcript.jsonl'), ctx: st.ctx, finalText: run.finalText.slice(0, 1500) };
   });
   return { ...head(s), runs };
@@ -119,7 +119,7 @@ function printTable(results) {
   for (const sc of results) {
     const ag = aggregate(sc);
     console.log(`\n${sc.id} [${sc.level}${sc.contract ? ', контракт' : ''}] ${sc.title} — ${(ag.rate * 100).toFixed(0)}%` +
-      (sc.level === 'model' ? ` · $${ag.costUsd.toFixed(2)} · ${Math.round(ag.wallMs / 60000)} мин` : ''));
+      (sc.level === 'model' ? ` · ${Math.round(ag.wallMs / 60000)} мин` : ''));
     for (const c of ag.checks) {
       const state = c.skip ? 'пр. ' : c.pass === c.n ? 'ok  ' : 'FAIL';
       console.log(`  ${state} ${c.id}${c.observe ? ' (наблюдение)' : ''}: ${c.skip ? c.skip : `${c.pass}/${c.n}`}` +
@@ -171,8 +171,6 @@ async function main() {
   for (const s of scenarios) results.push(await runScenario(s, a, base, runRoot));
   if (!a.quiet) printTable(results);
   console.log(`\n${summaryLines(results).join('\n')}`);
-  const total = results.reduce((s, r) => s + aggregate(r).costUsd, 0);
-  if (total) console.log(`стоимость (оценка CLI): $${total.toFixed(2)}`);
   const out = a.out || path.join(hubDataDir(), 'polygon', 'results', `${hub.sha}-${Date.now()}.json`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), hub, results }, null, 1));

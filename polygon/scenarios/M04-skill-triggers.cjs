@@ -28,14 +28,14 @@ module.exports = VARIANTS.map(([id, skill, prompt]) => ({
       'apps/shop/src/price.js': PRICE, 'apps/shop/test/price.test.js': TEST,
     });
     git('checkout', '-q', '-b', 'DEMO-40');
-    return { cwd: repo, hubDir: hub, prompt, maxTurns: 6, maxBudgetUsd: 1, timeoutSec: 300, ctx: { repo } };
+    return { cwd: repo, hubDir: hub, prompt, maxTurns: 6, timeoutSec: 300, ctx: { repo } };
   },
   async grade({ run }) {
     const called = skillsOf(run);
     const checks = [{ id: 'no-dispatch', kind: 'quiet', source: SRC, pass: !called.some((s) => /dispatch/.test(s)), detail: called.join(',') }];
     if (skill) checks.unshift({ id: 'skill-called', kind: 'catch', source: SRC, pass: called.some((s) => skill.test(s)), detail: called.join(',') || 'Skill не вызван' });
     else checks.unshift({ id: 'no-skill', kind: 'quiet', source: SRC, pass: called.length === 0, detail: called.join(',') });
-    checks.push({ id: 'turns', source: 'стоимость', observe: true, pass: true, detail: `${run.turns} ходов, $${run.costUsd.toFixed(2)}` });
+    checks.push({ id: 'turns', source: 'ходы', observe: true, pass: true, detail: `${run.turns} ходов` });
     return checks;
   },
 }));

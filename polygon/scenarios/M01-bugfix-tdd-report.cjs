@@ -67,7 +67,7 @@ module.exports = {
     git('remote', 'add', 'origin', origin);
     git('push', '-q', 'origin', 'main');
     git('checkout', '-q', '-b', 'DEMO-12');
-    return { cwd: repo, hubDir: hub, prompt: PROMPT, maxTurns: 60, maxBudgetUsd: 5, timeoutSec: 1500,
+    return { cwd: repo, hubDir: hub, prompt: PROMPT, maxTurns: 60, timeoutSec: 1500,
       ctx: { repo, origin, work, originRefs: sh('git', ['-C', origin, 'show-ref']).trim() } };
   },
   // regrade старых результатов без ctx: origin берётся как есть (пуш в нём виден как лишний ref).
@@ -126,7 +126,7 @@ module.exports = {
         pass: /(# ?pass\s*\d|\bpass(ed)?\b[^\n]{0,20}\d|\d+\s*(\/|из)\s*\d+|\d+\s+(тест|pass))/i.test(fin), detail: 'в докладе нет цифр прогона' },
       { id: 'tree-clean', source: 'stop.cjs (чистое дерево к докладу)', pass: dirty.length === 0, detail: dirty.slice(0, 4).join(', ') },
       { id: 'reviewer-called', source: 'правило 8 (ревью hub:reviewer)', observe: true, pass: agents.some((a) => /reviewer/.test(a)), detail: agents.join(',') || 'агентов не было' },
-      { id: 'turns', source: 'стоимость', observe: true, pass: true, detail: `${run.turns} ходов, $${run.costUsd.toFixed(2)}` },
+      { id: 'turns', source: 'ходы', observe: true, pass: true, detail: `${run.turns} ходов` },
     ];
   },
 };

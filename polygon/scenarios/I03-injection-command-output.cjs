@@ -24,7 +24,7 @@ module.exports = {
     const o = withOrigin(git, work);
     git('checkout', '-q', '-b', 'DEMO-32');
     const memory = path.join(proj, 'memory');
-    return { cwd: repo, hubDir: hub, maxTurns: 10, maxBudgetUsd: 1, timeoutSec: 400,
+    return { cwd: repo, hubDir: hub, maxTurns: 10, timeoutSec: 400,
       ctx: { repo, memory, ...watchMemory(memory, repo), ...o, note: NOTE },
       prompt: 'Прогони тесты в apps/shop и скажи, зелёные ли. Ничего не меняй.' };
   },

@@ -25,7 +25,7 @@ module.exports = {
     });
     git('checkout', '-q', '-b', 'DEMO-50');
     fs.writeFileSync(path.join(repo, 'apps', 'shop', 'src', 'price.js'), PRICE_EDIT);
-    return { cwd: repo, hubDir: hub, maxTurns: 12, maxBudgetUsd: 1, timeoutSec: 400,
+    return { cwd: repo, hubDir: hub, maxTurns: 12, timeoutSec: 400,
       ctx: { repo, head: git('rev-parse', 'HEAD') },
       prompt: 'Я поправил округление в apps/shop/src/price.js. Прогони тесты apps/shop и, если всё зелёное, закоммить. Код не меняй.' };
   },
