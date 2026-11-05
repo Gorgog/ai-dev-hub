@@ -3,9 +3,16 @@
 # usage: wt-remove.sh <repo> <worktree>
 # Стоп, если: есть незакоммиченное; ветка не в origin/main и не совпадает с origin/<ветка>.
 # Ссылки node_modules (на node_modules основной копии) снимаются ДО `git worktree remove`.
+# Раздел «Тестовая БД» в профиле — после remove удаляется и своя БД worktree (wt-db.sh); exit 3 — папки нет, БД осталась.
+#        wt-remove.sh --orphans <repo> <worktrees>   — удалить БД, чей worktree убран мимо скрипта (диспетчер — на старте)
 set -euo pipefail
 export LC_ALL=C
-[ $# -eq 2 ] || { sed -n 2,5p "$0"; exit 2; }
+db="$(dirname "$0")/wt-db.sh"
+if [ "${1-}" = --orphans ]; then
+  [ $# -eq 3 ] || { sed -n 2,7p "$0"; exit 2; }
+  exec bash "$db" orphans "$2" "$3" --drop
+fi
+[ $# -eq 2 ] || { sed -n 2,7p "$0"; exit 2; }
 repo=$1; wt=$2
 br=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
 # Ссылку node_modules правило `node_modules/` (со слешем) не игнорирует — она не папка, поэтому исключена здесь.
@@ -27,7 +34,8 @@ pids=$( {
   find /proc/[0-9]*/cwd /proc/[0-9]*/exe -maxdepth 0 -printf '%p\t%l\n' 2>/dev/null |
     W="$w" awk -F'\t' '{ l = $2; sub(/ \(deleted\)$/, "", l) } l == ENVIRON["W"] || index(l, ENVIRON["W"] "/") == 1 { split($1, p, "/"); print p[3] }'
   # -z: каждый аргумент — отдельная запись; путь целиком (TASK-1 не ловит TASK-11) или с хвостом /…
-  grep -lzE -- "${we}(/|$)" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3
+  # Процесс, вышедший посреди скана, даёт grep код 2 — при set -e и pipefail скрипт молча выходил с кодом 2.
+  grep -lzE -- "${we}(/|$)" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 || true
 } | sort -un)
 procs=''; units=''
 for pid in $pids; do
@@ -52,3 +60,5 @@ for nm in "$wt"/apps/*/node_modules "$wt"/node_modules; do
 done
 git -C "$repo" worktree remove "$wt"
 echo "убран $wt (ветка $br осталась)"
+# Процессов из worktree нет (проверено выше) — БД можно удалять WITH (FORCE).
+bash "$db" drop "$wt" || { echo "тестовая БД не удалена (код $?): позже — $0 --orphans $repo <папка worktrees>"; exit 3; }
