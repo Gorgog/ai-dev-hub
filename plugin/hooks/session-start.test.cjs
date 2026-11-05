@@ -106,3 +106,15 @@ test('brief: the hub version (short sha of the hooks in use) is in the header', 
   const { hub, repo } = project();
   assert.match(buildBrief(repo, hub, 'abc1234').split('\n')[0], /^Бриф хаба: demo · ветка K-7 · изменённых 1 · хаб abc1234$/);
 });
+
+test('workTree: a folder of the hub outside its project (the hub root maps to projects/ai-dev-hub) is no copy of it, whatever its length', () => {
+  const { workTree } = require('./session-start.cjs');
+  const hub = fs.realpathSync(tmp());
+  const proj = { dir: path.join(hub, 'projects', 'ai-dev-hub'), name: 'ai-dev-hub' };
+  // research/abcdefghij is as long as projects/ai-dev-hub: a cut by length alone reads it as the project.
+  const look = path.join(hub, 'research', 'abcdefghij', 'worktrees', 'x');
+  fs.mkdirSync(look, { recursive: true });
+  fs.mkdirSync(path.join(proj.dir, 'worktrees', 'x'), { recursive: true });
+  assert.strictEqual(workTree(look, proj), null);
+  assert.strictEqual(workTree(path.join(proj.dir, 'worktrees', 'x', 'src'), proj), path.join(proj.dir, 'worktrees', 'x'));
+});
