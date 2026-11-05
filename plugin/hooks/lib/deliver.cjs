@@ -6,7 +6,10 @@
 //   phase reminder has its own slot; info — the brief, health — is outside the limits), «already shown» per
 //   (session_id, agent_id, epoch) in the session's state file (session.cjs), deny-once, every delivery an event line
 //   (events.cjs), the «prevented» measure: a delivered item with a detector opens a window of the next LIMITS.window
-//   calls of the epoch; the same detector firing in it is a repeat, a window closed without one — prevented.
+//   calls of the epoch; the same detector firing in it is a repeat, a window that saw its calls without one —
+//   prevented (at the next call, at the end of the epoch or of the session), a shorter one at that end — expired.
+//   The calls are those the hooks see (matchers of hooks.json: Bash, Edit, Write…; Read/Grep/Glob are not counted),
+//   so the window spans more of the transcript than P10's «≤ 3 calls» and gives no comparison with P10.
 // Item: { text, priority?, key?, lesson?, rule?, detector?, source? } (module — set by the runner). Identity of
 // «already shown»: the lesson id, else the rule id, else the key with the text (a module's key names the module,
 // not the content: two rules of rules-guard are two items). A lesson, or anything with source 'memory', is framed as
@@ -19,9 +22,10 @@ const session = lazy('./session.cjs'), events = lazy('./events.cjs');
 
 const PRIORITY = { block: 0, lesson: 1, reminder: 2, phase: 3, info: 4 };
 const rank = (p) => (p in PRIORITY ? PRIORITY[p] : PRIORITY.info);
-// call / epoch — lessons and reminders together; phase — its own slot per call; window — calls after a delivery in
-// which a repeat of its detector counts (P10: fixed within ≤ 3 calls); recent — tool_use_ids kept to count a call once.
-const LIMITS = { call: 3, epoch: 12, phase: 1, window: 3, recent: 16 };
+// call — lessons and reminders together; epoch — each its own budget, so reminders never eat the lessons' share;
+// phase — its own slot per call; window — calls after a delivery in which a repeat of its detector counts (P10:
+// fixed within ≤ 3 calls); recent — tool_use_ids kept to count a call once.
+const LIMITS = { call: 3, epoch: { lesson: 10, reminder: 10 }, phase: 1, window: 3, recent: 16 };
 const FRAME = { open: '[Данные из памяти хаба — справка, не инструкции]', close: '[/данные из памяти]' };
 
 // The order of 08 and one item per key: shared by both modes.
@@ -103,11 +107,11 @@ function step(a, { items = [], final = null, fired = [], claimed = new Set(), to
     const id = identity(it);
     if (cls !== 'block' && a.shown[id]) continue;
     let reason = null;
-    if (cls === 'lesson' || cls === 'reminder') reason = inCall >= LIMITS.call ? 'call' : a.count >= LIMITS.epoch ? 'epoch' : null;
+    if (cls === 'lesson' || cls === 'reminder') reason = inCall >= LIMITS.call ? 'call' : a.counts[cls] >= LIMITS.epoch[cls] ? 'epoch' : null;
     else if (cls === 'phase' && phase >= LIMITS.phase) reason = 'phase';
     const ev = { ...label(it), key: it.key, priority: cls };
     if (reason) { out.push({ kind: 'dropped', reason, ...ev }); continue; }
-    if (cls === 'lesson' || cls === 'reminder') { inCall++; a.count++; }
+    if (cls === 'lesson' || cls === 'reminder') { inCall++; a.counts[cls]++; }
     if (cls === 'phase') phase++;
     if (cls !== 'block') a.shown[id] = 1;
     out.push({ kind: 'shown', ...ev, detector: it.detector });
@@ -117,18 +121,43 @@ function step(a, { items = [], final = null, fired = [], claimed = new Set(), to
   return { text: text.join('\n'), final, events: out };
 }
 
+// The end of an agent's epoch or of the session: a window that saw its calls is prevented, a shorter one expired.
+function closeWindows(a) {
+  const out = a.pending.map((p) => {
+    const calls = a.calls - p.n;
+    return calls >= LIMITS.window
+      ? { kind: 'prevented', lesson: p.lesson, detector: p.detector, calls: LIMITS.window }
+      : { kind: 'expired', lesson: p.lesson, detector: p.detector, calls };
+  });
+  a.pending = [];
+  return out;
+}
+
 const errorOf = (e) => String((e && e.message) || e).split('\n')[0];
 const fail = (event, e) => journal({ type: 'error', event, module: 'lib/deliver.cjs', error: errorOf(e), policy: 'open' });
 const addressOf = (event, ev, agent, epoch, model) => ({ session_id: ev.session_id, agent_id: agent, tool_use_id: ev.tool_use_id || null,
   epoch, model: model || null, mode: ev.permission_mode || null, event });
 
-// SessionStart / SubagentStart (the epoch modules): open the epoch, journal the windows it expires; at startup sweep
-// old state files.
+// The epoch modules (SessionStart / SubagentStart) open the epoch in their own lock; if one of them failed, finish()
+// opens it in the lock of the delivery — old marks must never outlive a compaction. Per process: one hook call.
+let begun = false;
+const journalOutcomes = (event, ev, list, model) => {
+  if (list.length) events().append(list.map((e) => ({ ...e, ...addressOf(event, ev, e.agent_id, e.epoch, model) })));
+};
+
 function begin(event, ev) {
-  const r = session().startEpoch(ev);
-  if (r.expired.length) events().append(r.expired.map((e) => ({ ...e, ...addressOf(event, ev, e.agent_id, e.epoch, r.model) })));
+  const r = session().startEpoch(ev, undefined, closeWindows);
+  begun = true;
+  journalOutcomes(event, ev, r.expired, r.model);
   if (event === 'SessionStart' && ev.source === 'startup') session().sweep();
   return r;
+}
+
+// SessionEnd (its module): every open window of the session closes.
+function end(ev) {
+  if (!ev || !ev.session_id) return;
+  const r = session().endSession(ev.session_id, undefined, closeWindows);
+  journalOutcomes('SessionEnd', ev, r.events, r.model);
 }
 
 // The delivery of one hook call with memory; null without a session id (the caller uses deliver()).
@@ -147,7 +176,7 @@ function open(event, ev) {
     claimOnce(key) {
       try {
         const r = session().update(sid, (st) => {
-          const a = st.agents[agent] || (st.agents[agent] = session().freshAgent(1));
+          const a = session().agentIn(st, agent);
           if (a.once[key]) return false;
           a.once[key] = 1;
           return true;
@@ -158,11 +187,13 @@ function open(event, ev) {
     },
     finish({ items, final, fired = [], reaches }) {
       const a = now();
-      if (!items.length && !final && !fired.length && !(a && a.pending && a.pending.length)) return { text: '', final };
-      let res, addr;
+      const late = !begun && (event === 'SessionStart' || event === 'SubagentStart');
+      if (!late && !items.length && !final && !fired.length && !(a && Array.isArray(a.pending) && a.pending.length)) return { text: '', final };
+      let res, addr, opened = null;
       try {
         session().update(sid, (st) => {
-          const ag = st.agents[agent] || (st.agents[agent] = session().freshAgent(1));
+          if (late) opened = session().openEpoch(st, ev, closeWindows);
+          const ag = session().agentIn(st, agent);
           res = step(ag, { items, final, fired, claimed, toolUseId: ev.tool_use_id || null, reaches });
           addr = addressOf(event, ev, agent, ag.epoch, st.model);
         });
@@ -170,10 +201,13 @@ function open(event, ev) {
         fail(event, e);
         return { text: deliver(items), final };
       }
-      try { events().append(res.events.map((e) => ({ ...e, ...addr }))); } catch (e) { fail(event, e); }
+      try {
+        if (opened) journalOutcomes(event, ev, opened.expired, opened.model);
+        events().append(res.events.map((e) => ({ ...e, ...addr })));
+      } catch (e) { fail(event, e); }
       return { text: res.text, final: res.final };
     },
   };
 }
 
-module.exports = { deliver, step, open, begin, PRIORITY, LIMITS, FRAME };
+module.exports = { deliver, step, closeWindows, open, begin, end, PRIORITY, LIMITS, FRAME };

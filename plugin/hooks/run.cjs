@@ -2,11 +2,13 @@
 // Hook spine: one node process per hook event. usage (hooks.json): node run.cjs <Event>, the event JSON on stdin.
 // Behaviour lives in modules — plugin/hooks/<event>.d/*.cjs, run in file-name order, each with a record in
 // plugin/mechanisms/<id>.json (stage, failure policy). Contract of a module:
-//   module.exports = { id, run(ev, ctx) }  ctx = { event, hub, project, worktree, stage, version, epoch }
+//   module.exports = { id, run(ev, ctx) }  ctx = { event, hub, project, worktree, stage, version, epoch, delivery }
 //   run returns null or { decision?: 'block' | 'deny' | 'ask', reason?, once?, lesson?, detector?, items?: [{ text,
 //   priority?, key?, lesson?, rule?, detector?, source? }] }, may be async, never writes to stdout: only this runner
 //   speaks to Claude, items and decisions go through lib/deliver.cjs (slice 12: limits, «already shown» per epoch,
-//   the event journal; its stage is the stage of the record «delivery», off — the delivery of 08).
+//   the event journal; its stage is the stage of the record «delivery», off — the delivery of 08; ctx.delivery says
+//   whether it is on). A record with "source": "memory" frames every item of its module as data from memory.
+//   `once` is for lessons only: a protection never uses it (without state a deny-once becomes text).
 // A block or deny ends the chain; a deny-once (`once: <key>`) already used in the epoch is dropped and the chain goes
 // on, and without the delivery's state it becomes the lesson's text (fail-open). Failure policy: a module that throws
 // or breaks the contract is journaled; with onError "closed" inside its failScope (a protection: the lock,
@@ -61,6 +63,7 @@ async function main(event) {
   // The delivery with memory — only where its record is on (or canary here); no record — the delivery of 08.
   const dRec = [...registry.byFile.values()].find((r) => r && r.id === 'delivery');
   const dl = dRec && (dRec.stage === 'on' || (dRec.stage === 'canary' && canary(dRec))) ? openDelivery(event, ev) : null;
+  ctx.delivery = !!dl;
   if (dl) ctx.epoch = dl.epoch();
 
   if (event === 'SessionStart') {
@@ -120,7 +123,8 @@ async function main(event) {
         res = { items: [...(res.items || []), { text: res.reason, priority: 'lesson', key: `once:${res.once}`, lesson: res.lesson, detector: res.detector }] };
       }
     }
-    if (res.items) items.push(...res.items.map((it) => ({ ...it, module: it.module || owner })));
+    const source = rec && rec.source === 'memory' ? 'memory' : undefined;
+    if (res.items) items.push(...res.items.map((it) => ({ ...it, module: it.module || owner, source: it.source || source })));
     if (res.decision) res = { ...res, module: owner };
     if (res.decision === 'block' || res.decision === 'deny') { final = res; break; }
     if (res.decision === 'ask' && !final) final = res;

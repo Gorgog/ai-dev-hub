@@ -52,7 +52,7 @@ module.exports = {
 
     // «Prevented»: a copy of the plugin with a synthetic lesson module whose trigger is its detector (no real module
     // has one before slice 21). Answer known: L1 repeats on the 2nd call after it (repeat in the window), L2 does not
-    // repeat in 3 calls (prevented at the start of the 4th).
+    // repeat in 3 calls (prevented at the start of the 4th), L3's window is closed by the end of the session.
     const copy = path.join(work, 'plugin-h15');
     fs.cpSync(pluginDir, copy, { recursive: true });
     fs.writeFileSync(path.join(copy, 'hooks', 'pretool.d', '99-polygon-lesson.cjs'), `module.exports = { id: 'polygon-lesson', run(ev) {
@@ -60,12 +60,16 @@ module.exports = {
       return m ? { items: [{ text: 'урок ' + m[1], priority: 'lesson', key: m[1], lesson: m[1], detector: 'D-' + m[1], source: 'memory' }] } : null;
     } };\n`);
     const dataP = path.join(work, 'data-h15-prevented');
-    const seq = ['POLYGON-BAD-L1', 'echo ok', 'POLYGON-BAD-L1', 'POLYGON-BAD-L2', 'echo ok', 'echo ok', 'echo ok', 'echo ok'];
+    // L3 at the end: its window sees its 3 calls and the session ends — prevented by SessionEnd, no 4th call needed.
+    const seq = ['POLYGON-BAD-L1', 'echo ok', 'POLYGON-BAD-L1', 'POLYGON-BAD-L2', 'echo ok', 'echo ok', 'echo ok', 'echo ok',
+      'POLYGON-BAD-L3', 'echo ok', 'echo ok', 'echo ok'];
     seq.forEach((command, i) => runEvent(copy, 'PreToolUse', { hook_event_name: 'PreToolUse', session_id: 'eval-h15-k', cwd: repo,
       tool_name: 'Bash', tool_use_id: `k${i + 1}`, tool_input: { command } }, { AI_DEV_HUB: hub, HUB_LOG_DIR: dataP }));
+    runEvent(copy, 'SessionEnd', { hook_event_name: 'SessionEnd', session_id: 'eval-h15-k', cwd: repo, reason: 'exit' }, { AI_DEV_HUB: hub, HUB_LOG_DIR: dataP });
     const outcome = readEvents(dataP).ok.filter((e) => e.kind !== 'shown').map((e) => `${e.kind}:${e.lesson}:${e.tool_use_id}`);
 
-    // 7 sessions at once, 10 calls each, every call a new rule text: 70 deliveries.
+    // 7 sessions at once, 10 calls each, two rules in turn: rules-guard's text does not depend on the command, so each
+    // session gets 2 deliveries (14 in all) and 8 suppressed repeats — the check is that 70 processes tear no line.
     const data7 = path.join(work, 'data-h15-par');
     const env7 = { AI_DEV_HUB: hub, HUB_LOG_DIR: data7 };
     const codes = await Promise.all(Array.from({ length: 7 }, async (_, p) => {
@@ -84,8 +88,8 @@ module.exports = {
       { id: 'every-line-full', source: SRC, pass: one.length > 0 && full.length === 0, detail: `строк ${one.length}, без поля адреса ${full.length}` },
       { id: 'suppressed-not-journaled', kind: 'quiet', source: SRC, pass: one.length > 0 && !one.some((e) => e.kind === 'shown' && e.tool_use_id === 'u2'),
         detail: `строки повтора u2: ${one.filter((e) => e.tool_use_id === 'u2').map((e) => e.kind).join(', ') || 'нет'}` },
-      { id: 'prevented-known-answer', source: 'plan.md: мера «предотвратил» — окно ≤ 3 вызовов (P10)', pass: outcome.join(' ') === 'repeat:L1:k3 prevented:L2:k8',
-        detail: `исходы: ${outcome.join(' ') || 'нет'}; ждали repeat:L1:k3 prevented:L2:k8` },
+      { id: 'prevented-known-answer', source: 'plan.md: мера «предотвратил» — окно ≤ 3 вызовов (P10)', pass: outcome.join(' ') === 'repeat:L1:k3 prevented:L2:k8 prevented:L3:null',
+        detail: `исходы: ${outcome.join(' ') || 'нет'}; ждали repeat:L1:k3 prevented:L2:k8 prevented:L3:null` },
       { id: 'parallel-7-whole', source: SRC, pass: codes.flat().every((c) => c === 0) && par.torn === 0 && parShown >= 7 * 2,
         detail: `коды ≠ 0: ${codes.flat().filter((c) => c !== 0).length}, рваных ${par.torn}, подач ${parShown}` },
     ];

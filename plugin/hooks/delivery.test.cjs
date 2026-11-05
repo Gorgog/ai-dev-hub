@@ -177,11 +177,12 @@ test('delivery: 7 sessions at once through the runner — every event line whole
     c.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${sid}/${i}: ${code}`))));
     c.stdin.end(input('PreToolUse', { session_id: sid, cwd: s.wt, tool_name: 'Bash', tool_use_id: `t${i}`, tool_input: { command: `echo BAD-L${i}` } }));
   });
-  await Promise.all(Array.from({ length: 7 }, async (_, p) => { for (let i = 0; i < 12; i++) await one(`p${p}`, i); }));
+  const n = require(path.join(HOOKS, 'lib', 'deliver.cjs')).LIMITS.epoch.lesson; // all within one epoch's budget
+  await Promise.all(Array.from({ length: 7 }, async (_, p) => { for (let i = 0; i < n; i++) await one(`p${p}`, i); }));
   const ev = journal(s);
-  assert.strictEqual(ev.filter((e) => e.kind === 'shown').length, 7 * 12);
+  assert.strictEqual(ev.filter((e) => e.kind === 'shown').length, 7 * n);
   for (let p = 0; p < 7; p++) assert.deepStrictEqual(ev.filter((e) => e.session_id === `p${p}` && e.kind === 'shown').map((e) => e.lesson).sort(),
-    Array.from({ length: 12 }, (_, i) => `L${i}`).sort());
+    Array.from({ length: n }, (_, i) => `L${i}`).sort());
 });
 
 test('delivery: the windows of a session close at its end — a full one prevented, a short one (a subagent) expired', () => {
