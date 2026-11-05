@@ -218,6 +218,16 @@ const BASH_WRITES = [
   ['git -C MEM reset --hard HEAD~1', true],
   ['rm -rf PROJ', true],
   ['mv PROJ /tmp/elsewhere', true],
+  // Review round 3: find -exec — only a known reader passes, every -exec counts; -delete under a folder above the memory
+  // deletes by its mask, not the memory.
+  [`find MEM/lessons -name '*.md' -exec sh -c 'rm "$1"' _ {} \\;`, true],
+  ['find MEM/lessons -exec grep -q old {} \\; -exec rm {} \\;', true],
+  ['find MEM/lessons -exec env rm {} +', true],
+  ["find MEM/.. -name '*.orig' -delete", false],
+  ["find MEM/.. -name __pycache__ -prune -exec rm -rf {} +", false],
+  ["find MEM -name '*.bak' -delete", true],
+  ['wget -r -nH -P MEM http://127.0.0.1:9/lessons/', true],
+  ['curl -sS --output-dir MEM/lessons -O http://127.0.0.1:9/a.md', true],
 ];
 
 test('Bash never writes lessons or decisions: denied with how to write one; reads pass', () => {
