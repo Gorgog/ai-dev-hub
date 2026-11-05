@@ -183,6 +183,27 @@ const BASH_WRITES = [
   ['node plugin/skills/recall/scripts/recall.cjs check', false],
   [`node -e "console.log(/x/.test(require('fs').readFileSync('MEM/lessons/a.md','utf8')))"`, false],
   ['cat >> MEM/errors.md <<EOF\n- эпизод\nEOF', false],
+  // Review round 1 (MEDIUM-2): a copy out of the memory is a read, whatever else the code writes.
+  [`node -e "const fs=require('fs'); fs.writeFileSync('/tmp/out.txt', fs.readFileSync('MEM/lessons/a.md','utf8'))"`, false],
+  [`python3 - <<'EOF'\nsrc=open('MEM/lessons/heredoc-script.md').read()\nopen('/tmp/x.md','w').write(src)\nEOF`, false],
+  ["perl -Mstrict -ne 'print' MEM/lessons/heredoc-script.md", false],
+  // Review round 1 (MEDIUM-3): writes that went past the detector.
+  ["find MEM/lessons -name '*.md' -delete", true],
+  ['rm -rf MEM', true],
+  ['cp -r /tmp/lessons MEM/', true],
+  ['git -C MEM checkout -- lessons/heredoc-script.md', true],
+  ['curl -sS -o MEM/lessons/a.md http://127.0.0.1:9/a', true],
+  ['awk -i inplace \'{print}\' MEM/lessons/heredoc-script.md', true],
+  ['patch MEM/lessons/heredoc-script.md < /tmp/p.diff', true],
+  ['tar -xf /tmp/l.tar -C MEM/lessons', true],
+  ['f=MEM/lessons/a.md; echo x > "$f"', true],
+  ['rm MEM/lesson*/a.md', true],
+  [`node -e "require('fs').writeFileSync(require('path').join('MEM','lessons','a.md'), 'x')"`, true],
+  [`python3 - <<'EOF'\np='MEM/lessons/heredoc-script.md'\ns=open(p).read()\nopen(p,'w').write(s+'x')\nEOF`, true],
+  // and what must still pass
+  ['git -C MEM log --oneline -3 -- lessons/', false],
+  ['git -C MEM status --short', false],
+  ['find MEM/lessons -name "*.md" | head', false],
 ];
 
 test('Bash never writes lessons or decisions: denied with how to write one; reads pass', () => {
@@ -308,4 +329,39 @@ test('the literal before a trigger regex is one every match contains: the prefil
     }
   }
   assert.strictEqual(literalOf('prettier[^|;&]*--write'), 'prettier', 'a usable literal is found');
+});
+
+test('review round 1: a `when` that backtracks catastrophically never hangs the hook (Pre and Post)', () => {
+  const s = setup();
+  const evil = {
+    'evil-alt': '(\\w|\\d)+@', 'evil-dot': 'git(.|\\s)*--no-verify$', 'evil-chain': '\\s*\\s*\\s*\\s*\\s*x', 'evil-nest': '(a+)+$',
+  };
+  for (const [id, rx] of Object.entries(evil)) write(path.join(s.mem, 'lessons', `${id}.md`), lesson({ id, when: [{ tool: '^Bash$', cmd: rx }], first: `Злой регэксп ${id}.` }));
+  write(path.join(s.mem, 'lessons', 'case-word.md'), lesson({ id: 'case-word', when: [{ tool: '^bash$', cmd: 'ПРИВЕТ\\s+World' }], first: 'Регистр не важен.' }));
+  store.ensureTriggers(s.mem);
+  start(s);
+  const cmds = ['1'.repeat(60), `git commit${' '.repeat(80)}--no-verify -m x`, ' '.repeat(3000), `${'a'.repeat(3000)}!`];
+  cmds.forEach((c, i) => {
+    const t0 = Date.now();
+    const r = call(s, `e${i}`, c, c);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 4000, `call ${i} took ${ms} ms`);
+    assert.strictEqual(r.pre.code, 0);
+  });
+  assert.match(post(s, 'c1', 'echo привет   WORLD', '').ctx, /case-word/, 'case-insensitive as before');
+});
+
+test('review round 1: the literal prefilter keeps matches after a literal { and an incomplete \\u / \\x', () => {
+  const { match } = require('./memory-hooks.cjs');
+  for (const [src, str] of [['catch \\(e\\) {|\\}\\s*finally', '} finally'], ['abcdef{|zz}', 'zz}'], ['\\u|abcdef', 'u'], ['\\x|abcdef', 'x'], ['ab{2,}c', 'abbbc']]) {
+    assert.ok(new RegExp(src, 'i').test(str), `fixture ${src}`);
+    assert.strictEqual(match([{ id: 'x', first: '', core: false, when: [{ cmd: src }] }], { cmd: str }).length, 1, `match() drops ${src} on ${str}`);
+  }
+});
+
+test('review round 1: SessionStart names a `when` the hot path will not use', () => {
+  const s = setup();
+  write(path.join(s.mem, 'lessons', 'skip-me.md'), lesson({ id: 'skip-me', when: [{ tool: '^Bash$', cmd: '(\\w+)+\\1' }], first: 'Обратная ссылка с вложенным повтором.' }));
+  const r = start(s);
+  assert.match(r.out, /skip-me[^\n]*when\[0\]/);
 });
