@@ -193,6 +193,21 @@ test('export → import: the same set of files byte for byte (NUL and non-UTF-8 
   assert.throws(() => S.importAll(e, { format: bundle.format, files: [{ path: '../evil.md', enc: 'utf8', data: 'x' }] }), /evil/);
 });
 
+test('export → import keeps events/archive/ (months folded by memory-gc), byte for byte; other nesting refused', () => {
+  const d = memory(SET);
+  S.shown(d, 'cd-subshell', { session_id: 's1' });
+  fs.mkdirSync(path.join(d, 'events', 'archive'), { recursive: true });
+  const src = '{"at":"2026-07-01T00:00:00.000Z","kind":"shown","lesson":"cd-subshell"}\n';
+  fs.writeFileSync(path.join(d, 'events', 'archive', '2026-07.jsonl'), src);
+  const bundle = JSON.parse(JSON.stringify(S.exportAll(d)));
+  assert.ok(bundle.files.some((f) => f.path === 'events/archive/2026-07.jsonl'), 'archive month exported');
+  const e = path.join(tmp(), 'memory');
+  S.importAll(e, bundle);
+  assert.strictEqual(fs.readFileSync(path.join(e, 'events', 'archive', '2026-07.jsonl'), 'utf8'), src);
+  assert.throws(() => S.importAll(e, { format: bundle.format, files: [{ path: 'events/x/y.jsonl', enc: 'utf8', data: '' }] }), /events\/x/);
+  assert.throws(() => S.importAll(e, { format: bundle.format, files: [{ path: 'lessons/archive/y.md', enc: 'utf8', data: '' }] }), /lessons\/archive/);
+});
+
 test('export v1: errors.md and errors-index.md that the v1 session brief reads', () => {
   const d = memory(SET);
   const v1 = S.exportV1(d, { name: 'demo' });
