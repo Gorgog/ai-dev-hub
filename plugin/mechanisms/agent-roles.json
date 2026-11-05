@@ -1,0 +1,14 @@
+{
+  "id": "agent-roles",
+  "event": "PreToolUse",
+  "file": "pretool.d/33-agent-roles.cjs",
+  "handler": "protect",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "project",
+  "state": [],
+  "reads": [],
+  "polygon": ["H20"],
+  "replaces": "v1: base-rules agent-memory-write / agent-memory-shell (log) и тексты tester.md, reviewer.md",
+  "review": "2027-02-05"
+}

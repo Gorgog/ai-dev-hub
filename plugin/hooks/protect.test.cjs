@@ -81,7 +81,7 @@ test('protect-files: Bash — запись в защищённый файл deny
 
 // --- inline-script --------------------------------------------------------------------------------------------------
 
-test('inline-script: node -e с обратными кавычками — deny с готовой командой', () => {
+test('inline-script: node -e "…" с обратными кавычками — deny с готовой командой', () => {
   const body = 'const s = `a`; console.log(s)';
   const res = P.inlineScript(bash(`node -e "${body}" one two`));
   deny(res, /Write/);
@@ -90,37 +90,41 @@ test('inline-script: node -e с обратными кавычками — deny �
   assert.ok(m[1].split(' ')[1].startsWith(P.SCRIPTS_DIR + path.sep), m[1]);
 });
 
-test('inline-script: python heredoc с обратным слэшем — deny, команда — python3 <файл>', () => {
-  const res = P.inlineScript(bash("python3 - <<'EOF'\nimport re\nprint(re.sub(r'\\d+', '', 'a1'))\nEOF"));
+test('inline-script: python heredoc без кавычек с `\\` — deny, команда — python3 <файл>', () => {
+  const res = P.inlineScript(bash("python3 - <<EOF\nimport re\nprint(re.sub(r'\\\\d+', '', 'a1'))\nEOF"));
   deny(res, /`python3 \S+\.py`/);
 });
 
 test('inline-script: heredoc в интерпретатор с флагами и выводом в файл — путь после флагов', () => {
-  const res = P.inlineScript(bash("node --input-type=module <<'EOF' > out.txt\nconsole.log(`x`)\nEOF"));
+  const res = P.inlineScript(bash('node --input-type=module <<EOF > out.txt\nconsole.log(`x`)\nEOF'));
   deny(res, /`node --input-type=module \S+\.mjs > out\.txt`/);
 });
 
-test('inline-script: perl -pi -e с регэкспом — deny, флаг e уходит из связки', () => {
-  deny(P.inlineScript(bash("perl -pi -e 's/\\s+$//' notes.md")), /`perl -pi \S+\.pl notes\.md`/);
+test('inline-script: perl -pi -e в двойных кавычках с `\\` — deny, флаг e уходит из связки', () => {
+  deny(P.inlineScript(bash('perl -pi -e "s/\\\\s+//" notes.md')), /`perl -pi \S+\.pl notes\.md`/);
 });
 
-test('inline-script: внутри $( ) тоже', () => {
+test('inline-script: внутри $( ) тоже; ${…} — не параметр shell', () => {
   deny(P.inlineScript(bash('x=$(node -e "console.log(`a`)") && echo "$x"')));
-  deny(P.inlineScript(bash('node -e "console.log(process.env.${NAME})"')), null, '${…} в двойных кавычках:');
+  deny(P.inlineScript(bash('node -e "const o = {a: 1}; console.log(\'${o.a}\')"')), null, 'bad substitution:');
 });
 
-test('inline-script: код в файл через cat > *.py с экранированием — deny, совет Write в этот файл', () => {
-  deny(P.inlineScript(bash("cat > fix.py <<'EOF'\nprint(\"a\\n\")\nEOF")), /Write[^\n]*fix\.py/);
+test('inline-script: код в файл через cat > *.py <<EOF без кавычек с `\\` — deny, совет Write в этот файл', () => {
+  deny(P.inlineScript(bash('cat > fix.py <<EOF\nprint("a\\\\n")\nEOF')), /Write[^\n]*fix\.py/);
 });
 
-test('inline-script: без экранирования, текст и коммиты — тишина', () => {
+test('inline-script: shell тела не трогает или трогает намеренно — тишина', () => {
   quiet(P.inlineScript(bash('node -e "console.log(1 + 1)"')));
   quiet(P.inlineScript(bash("node -e 'console.log(require(\"./package.json\").name)'")));
   quiet(P.inlineScript(bash("python3 -c \"import json,sys; print(json.load(sys.stdin)['a'])\" < f.json")));
+  quiet(P.inlineScript(bash("python3 - <<'EOF'\nimport re\nprint(re.sub(r'\\d+', '', `a1`))\nEOF")), '<<\'EOF\' — тело как есть:');
+  quiet(P.inlineScript(bash("perl -pi -e 's/\\s+$//' notes.md")), "'…' — тело как есть:");
+  quiet(P.inlineScript(bash("cat > fix.py <<'EOF'\nprint(\"a\\\\n\")\nEOF")), "cat > *.py <<'EOF':");
+  quiet(P.inlineScript(bash('node -e "console.log(require(\'$M/x.json\').a, \\"${HOME}\\")"')), '$M и ${HOME} — подстановка намеренная:');
+  quiet(P.inlineScript(bash('node -e "console.log(\\`x\\`)"')), 'обратная кавычка экранирована:');
   quiet(P.inlineScript(bash("git commit -q -m \"$(cat <<'EOF'\nfix: `x` \\ y ${z}\nEOF\n)\"")), 'heredoc сообщения коммита:');
-  quiet(P.inlineScript(bash("cat >> notes.md <<'EOF'\n`code` \\ ${x}\nEOF")), 'текст в .md:');
-  quiet(P.inlineScript(bash("cat > ok.py <<'EOF'\nprint('ok')\nEOF")), 'код без экранирования:');
-  quiet(P.inlineScript(bash('node scripts/fix.cjs --flag "a\\b"')), 'скрипт файлом:');
+  quiet(P.inlineScript(bash("cat >> notes.md <<EOF\n`code` \\\\ ${x.y}\nEOF")), 'текст в .md:');
+  quiet(P.inlineScript(bash('node scripts/fix.cjs --flag "a\\\\b"')), 'скрипт файлом:');
   quiet(P.inlineScript(bash("echo 'node -e \"`x`\"'")), 'команда в тексте echo:');
   quiet(P.inlineScript(bash('grep -rn "node -e" docs/')));
 });
@@ -152,10 +156,17 @@ test('agent-roles: ревьюер и разведчик файлов не пиш
   deny(P.agentRoles(as('explorer', edit('src/a.ts')), ctx));
   deny(P.agentRoles(as('hub:reviewer', bash('git diff main..HEAD > review.txt')), ctx), /review\.txt/);
   deny(P.agentRoles(as('reviewer', bash('git stash push -m x')), ctx), /git stash/);
-  deny(P.agentRoles(as('hub:reviewer', bash('git -C /r commit -m x')), ctx), /git commit/);
+  deny(P.agentRoles(as('hub:reviewer', bash(`git -C ${R} commit -m x`)), ctx), /git commit/);
+  deny(P.agentRoles(as('hub:reviewer', bash("sed -i 's/a/b/' src/a.ts && npm test; git checkout -- src/a.ts")), ctx), /src\/a\.ts/, 'мутация в дереве автора:');
+  deny(P.agentRoles(as('hub:tester', bash('git stash push -u -- src')), ctx), /git stash/);
+  quiet(P.agentRoles(as('hub:reviewer', bash('S=/tmp/rv-scratch; mkdir -p "$S" && git -C "$S" init -q && git -C $S commit -qm x; git init -q -b main $S/r')), ctx), 'свой репозиторий в /tmp:');
+  quiet(P.agentRoles(as('hub:reviewer', bash('git -C "$UNKNOWN" commit -m x')), ctx), 'место неизвестно — не судим:');
   quiet(P.agentRoles(as('hub:reviewer', bash('git diff main..HEAD > /tmp/x.diff && git log --oneline -3')), ctx));
   quiet(P.agentRoles(as('hub:reviewer', bash('node --test src/a.test.cjs 2>&1 | tail -5')), ctx));
   quiet(P.agentRoles(as('hub:explorer', bash('grep -rn foo src 2>/dev/null')), ctx));
+  const scratch = { tool_name: 'Write', cwd: R, tool_input: { file_path: path.join(os.tmpdir(), 'claude-x', 'scratchpad', 'notes.md') } };
+  quiet(P.agentRoles(as('hub:explorer', scratch), ctx), 'заметка в scratchpad:');
+  quiet(P.agentRoles(as('hub:reviewer', scratch), ctx), 'заметка в scratchpad:');
 });
 
 test('agent-roles: тестировщик пишет только тесты', () => {
@@ -166,6 +177,7 @@ test('agent-roles: тестировщик пишет только тесты', (
   deny(P.agentRoles(as('hub:tester', edit('src/a.ts')), ctx), /тест/i);
   deny(P.agentRoles(as('hub:tester', bash("sed -i 's/a/b/' src/a.ts")), ctx), /src\/a\.ts/);
   quiet(P.agentRoles(as('hub:tester', bash('npm test > /tmp/out.log 2>&1')), ctx));
+  quiet(P.agentRoles(as('hub:tester', { tool_name: 'Write', cwd: R, tool_input: { file_path: path.join(os.tmpdir(), 'tester-notes.md') } }), ctx), 'вне репозитория:');
 });
 
 test('agent-roles: память агента в рабочем репозитории — deny всем; память хаба — deny ролям', () => {
