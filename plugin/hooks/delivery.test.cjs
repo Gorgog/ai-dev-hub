@@ -159,7 +159,12 @@ test('delivery: fails open — a broken state file or an unwritable data folder 
     assert.match(x.out, event === 'SessionStart' ? /Бриф/ : /урок L1/);
   }
   const deny = run(s, 'PreToolUse', { tool_name: 'Bash', tool_use_id: 't3', tool_input: { command: 'echo REPEAT' } }, { HUB_LOG_DIR: blocked });
-  assert.strictEqual(deny.json.hookSpecificOutput.permissionDecision, 'deny', 'without state a deny-once still denies');
+  // Without state a deny-once cannot be «once»: denying on every repeat would lock the command for the session, so the
+  // delivery fails open — the lesson reaches Claude as text and the call passes.
+  assert.strictEqual(deny.code, 0, deny.err);
+  assert.ok(!deny.json.hookSpecificOutput.permissionDecision, deny.out);
+  assert.match(deny.ctx, /урок L2/);
+  assert.deepStrictEqual(marks(s).slice(-1), ['mark:1'], 'the chain goes on');
 });
 
 test('delivery: 7 sessions at once through the runner — every event line whole, none lost', async () => {
