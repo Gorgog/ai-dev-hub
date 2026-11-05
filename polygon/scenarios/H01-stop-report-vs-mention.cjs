@@ -8,7 +8,8 @@ const { runEvent, stopVerdict } = require('../lib/hooks.cjs');
 module.exports = {
   id: 'H01', level: 'hook', mech: 'done-gate', proto: true, title: 'Стоп-хук: доклад «готово к пушу» против упоминания',
   async run({ base, pluginDir, work }) {
-    const { hub, proj } = makeHub(base, work);
+    // Новая логика доклада (срез 16) — на канарейке; вне её — v1, как на main.
+    const { hub, proj } = makeHub(base, work, { extra: { 'canary.json': JSON.stringify({ mechanisms: ['done-gate'] }) } });
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, { 'a.txt': '1\n' });
     const head = git('rev-parse', '--short', 'HEAD');

@@ -1,0 +1,14 @@
+{
+  "id": "note-stub-end",
+  "event": "SessionEnd",
+  "file": "sessionend.d/10-note-stub.cjs",
+  "handler": "done-gate",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "project",
+  "state": ["memory/sessions/<date>-<key>-stub-<sid8>.md"],
+  "reads": ["<transcript>", "memory/sessions/"],
+  "polygon": ["H29"],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

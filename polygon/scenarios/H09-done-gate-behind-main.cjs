@@ -10,7 +10,7 @@ const { runEvent, stopVerdict } = require('../lib/hooks.cjs');
 module.exports = {
   id: 'H09', level: 'hook', mech: 'done-gate', contract: true, title: 'Чек-лист «готово к пушу»: ветка отстала от main (контракт 16/18)',
   async run({ base, pluginDir, work }) {
-    const { hub, proj } = makeHub(base, work);
+    const { hub, proj } = makeHub(base, work, { extra: { 'canary.json': JSON.stringify({ mechanisms: ['done-gate'] }) } });
     const repo = path.join(proj, 'repo');
     const git = gitRepo(repo, { 'a.txt': '1\n' });
     const wt = (name) => {

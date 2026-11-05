@@ -1,0 +1,14 @@
+{
+  "id": "test-output",
+  "event": "PostToolUse",
+  "file": "posttool.d/10-test-output.cjs",
+  "handler": "done-gate",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": [],
+  "polygon": ["H28"],
+  "replaces": "—",
+  "review": "2027-02-05"
+}
