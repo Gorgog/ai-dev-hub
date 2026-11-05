@@ -13,11 +13,13 @@ const run = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'u
 const git = (cwd, ...a) => run(cwd, ...a).trim();
 // A report is a line that starts with the phrase. Before it: a list marker (`-`, `1.`), bold, a heading, an emoji; a
 // quote («> …») is a relay of someone else's report. After it: a sign (`:`, `,`, `—`, `(`), the end, an emoji, or
-// a word in Latin (HEAD, a key, a sha). A lowercase Russian word goes on as a sentence — a status or a plan («Готово
-// к пушу после ревью»); a line that ends with «?» and names no sha is a question («Готово к пушу — когда?»), while
-// a report with a question after its sha («Готово к пушу: abc1234. Пушить?») is a report.
+// a word in Latin (HEAD, a key, a sha). A lowercase Russian word right after it goes on as a sentence — a status or a
+// plan («Готово к пушу после ревью»). A sentence after a sign («Готово к пушу, но после ревью.») stays a report: an
+// accepted false block (decision 05.11), a missed report costs more.
 const START = /^[ \t*#_-]*(?:\d+[.)][ \t]+)?(?:\p{Extended_Pictographic}\uFE0F?[ \t]*)?[*_]*готово к (пушу|мержу)(?![\p{L}\p{N}])/iu;
-const SHA = /\b[0-9a-f]{7,40}\b/;
+// A question is the phrase itself: «Готово к пушу?», «Готово к пушу — когда/если/или…?». Anything else that starts
+// with the phrase is a report, a question after it included («Готово к пушу. Пушить?» — decision 05.11).
+const QUESTION = /^(?:\?|[—–,:-]?[ \t]*(?:когда|если|или|ли|как|можно|точно)(?![\p{L}\p{N}])[^\n]*\?\s*$)/iu;
 
 // 'push' | 'merge' | null.
 function isReport(text) {
@@ -26,7 +28,7 @@ function isReport(text) {
     if (!m) continue;
     const rest = line.slice(m[0].length).replace(/^[*_ \t]+/, '');
     if (/^[а-яё]/.test(rest)) continue;
-    if (/\?\s*$/.test(line) && !SHA.test(line)) continue;
+    if (QUESTION.test(rest)) continue;
     return /пушу/i.test(m[1]) ? 'push' : 'merge';
   }
   return null;
