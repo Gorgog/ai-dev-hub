@@ -1,0 +1,21 @@
+{
+  "id": "memory-check",
+  "event": "SessionStart",
+  "file": "sessionstart.d/40-memory-check.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": [
+    "memory/lessons/",
+    "memory/decisions/",
+    "memory/events/",
+    "memory/.index.db"
+  ],
+  "polygon": [
+    "H25"
+  ],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

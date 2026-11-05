@@ -1,0 +1,21 @@
+{
+  "id": "memory-write-check",
+  "event": "PostToolUse",
+  "file": "posttool.d/20-memory-write-check.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": [
+    "memory/lessons/",
+    "memory/decisions/",
+    "memory/.triggers.json"
+  ],
+  "polygon": [
+    "H41",
+    "I01"
+  ],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

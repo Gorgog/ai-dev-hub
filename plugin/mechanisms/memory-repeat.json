@@ -1,0 +1,19 @@
+{
+  "id": "memory-repeat",
+  "event": "PreToolUse",
+  "file": "pretool.d/51-memory-repeat.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [],
+  "reads": [
+    "memory/.triggers.json",
+    "<data>/sessions/<session_id>.json"
+  ],
+  "polygon": [
+    "H40"
+  ],
+  "replaces": "—",
+  "review": "2027-02-05"
+}

@@ -162,7 +162,9 @@ test('a written lesson is validated at once: a broken one is blocked with the pr
 });
 
 const BASH_WRITES = [
-  [`cat > memory/lessons/new-one.md <<'EOF'\n---\nid: new-one\nEOF`, true],
+  [`cat > MEM/lessons/new-one.md <<'EOF'\n---\nid: new-one\nEOF`, true],
+  // From a worktree a relative memory/lessons/ is the worktree's own folder, not the project's memory.
+  [`cat > memory/lessons/new-one.md <<'EOF'\nx\nEOF`, false],
   ['echo "- урок" >> ../../memory/lessons/old.md', true],
   ['printf x | tee MEM/lessons/a.md', true],
   ["sed -i 's/a/b/' MEM/lessons/heredoc-script.md", true],
