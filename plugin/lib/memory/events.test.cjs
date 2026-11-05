@@ -14,12 +14,12 @@ const mem = () => {
   return d;
 };
 
-test('append: a line in events/<YYYY-MM>.jsonl with the address fields in a fixed order', () => {
+test('append: a line in events/<YYYY-MM>.jsonl with the address fields in a fixed order; a leading \\n (review 1)', () => {
   const d = mem();
   appendEvent(d, { kind: 'shown', lesson: 'a-1', session_id: 's1', agent_id: null, tool_use_id: 't1', epoch: 2,
     model: 'm', mode: 'hook', at: '2026-11-05T10:00:00.000Z' });
   const text = fs.readFileSync(path.join(d, 'events', '2026-11.jsonl'), 'utf8');
-  assert.strictEqual(text, '{"at":"2026-11-05T10:00:00.000Z","kind":"shown","lesson":"a-1","session_id":"s1","agent_id":null,'
+  assert.strictEqual(text, '\n{"at":"2026-11-05T10:00:00.000Z","kind":"shown","lesson":"a-1","session_id":"s1","agent_id":null,'
     + '"tool_use_id":"t1","epoch":2,"model":"m","mode":"hook"}\n');
 });
 
@@ -41,7 +41,7 @@ test('read: a torn last line is skipped and named; the next append closes it wit
   let r = readEvents(d);
   assert.strictEqual(r.events.length, 1);
   assert.strictEqual(r.problems.length, 1);
-  assert.match(r.problems[0], /2026-11\.jsonl:2/);
+  assert.match(r.problems[0], new RegExp(`2026-11\\.jsonl:${fs.readFileSync(f, 'utf8').split('\n').length}`), 'the physical line of the fragment');
   appendEvent(d, { kind: 'repeat', lesson: 'a-1', at: '2026-11-05T10:00:02.000Z' });
   r = readEvents(d);
   assert.deepStrictEqual(r.events.map((e) => e.kind), ['shown', 'repeat']);
@@ -181,16 +181,20 @@ test('append: a stuck lock costs one wait per process — 20 events of one hook 
 });
 
 test('append under the lock: a fragment of an unlocked writer that lands between the size check and the write never glues', () => {
+  // In a fresh process: a lock found stuck earlier in this one would frame the write and skip the locked path.
   const d = mem();
-  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
   const f = path.join(d, 'events', '2026-11.jsonl');
-  const orig = fs.writeSync;
-  let once = true;
-  fs.writeSync = function (fd, ...rest) {
-    if (once) { once = false; fs.appendFileSync(f, '\n{"at":"2026-11-05T00:00:00.500Z","kind":"sho'); } // a killed frame writer
-    return orig.call(fs, fd, ...rest);
-  };
-  try { appendEvent(d, { kind: 'repeat', lesson: 'b', at: '2026-11-05T00:00:01.000Z' }); } finally { fs.writeSync = orig; }
-  assert.ok(!once, 'the fragment was put in');
+  const fragment = '\n{"at":"2026-11-05T00:00:00.500Z","kind":"sho'; // a frame writer killed mid-write
+  const code = [
+    "const fs = require('fs');",
+    `const { appendEvent } = require(${JSON.stringify(path.join(__dirname, 'events.cjs'))});`,
+    `const d = ${JSON.stringify(d)}, f = ${JSON.stringify(f)}, fragment = ${JSON.stringify(fragment)};`,
+    "appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });",
+    'const orig = fs.writeSync; let once = true;',
+    'fs.writeSync = function (fd, ...rest) { if (once) { once = false; fs.appendFileSync(f, fragment); } return orig.call(fs, fd, ...rest); };',
+    "appendEvent(d, { kind: 'repeat', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });",
+    "fs.writeSync = orig; process.stdout.write(once ? 'no-fragment' : 'ok');",
+  ].join('\n');
+  assert.strictEqual(execFileSync(process.execPath, ['-e', code], { encoding: 'utf8' }), 'ok', 'the fragment was put in on the locked path');
   assert.deepStrictEqual(readEvents(d).events.map((e) => e.lesson), ['a', 'b']);
 });

@@ -172,7 +172,8 @@ test('check: names a NUL lesson, a torn event line, a broken index — and nothi
   const c = S.check(d);
   const all = c.problems.join('\n');
   assert.match(all, /bash-heredoc\.md[^\n]*NUL/);
-  assert.match(all, new RegExp(`${ev.replace('.', '\\.')}:2`));
+  const tornAt = fs.readFileSync(path.join(d, 'events', ev), 'utf8').split('\n').length; // physical line of the fragment
+  assert.match(all, new RegExp(`${ev.replace('.', '\\.')}:${tornAt}`));
   assert.match(all, /индекс/);
   assert.strictEqual(S.find(d, 'heredoc').hits[0].id, 'bash-heredoc');
 });

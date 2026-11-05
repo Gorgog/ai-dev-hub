@@ -36,7 +36,8 @@ module.exports = {
     // Corruption, all at once: NUL in a lesson, a torn last event line, no index.
     fs.appendFileSync(path.join(mem, 'lessons', 'l007.md'), 'хвост после вставки \u0000 из буфера\n');
     const ev = fs.readdirSync(path.join(mem, 'events'))[0];
-    const evLines = fs.readFileSync(path.join(mem, 'events', ev), 'utf8').split('\n').filter(Boolean).length;
+    // The physical line the fragment will take (readEvents numbers physical lines; writes add empty lines — slice 26).
+    const tornAt = fs.readFileSync(path.join(mem, 'events', ev), 'utf8').split('\n').length;
     fs.appendFileSync(path.join(mem, 'events', ev), '{"at":"2026-11-05T10:00:00.000Z","kind":"sho');
     fs.rmSync(path.join(mem, '.index.db'));
     const check1 = recall('check');
@@ -52,8 +53,8 @@ module.exports = {
     const found = (r, topic) => r.code === 0 && new RegExp(`\\[по касанию · rule\\] Урок \\d+ про ${topic}`).test(r.out);
     return [
       { id: 'check-names-nul', source: SRC, pass: /lessons\/l007\.md[^\n]*NUL/.test(check1.out), detail: check1.out.slice(0, 300) || check1.err },
-      { id: 'check-names-torn-jsonl', source: SRC, pass: new RegExp(`${ev.replace('.', '\\.')}:${evLines + 1}`).test(check1.out),
-        detail: `нет «${ev}:${evLines + 1}» в выводе check` },
+      { id: 'check-names-torn-jsonl', source: SRC, pass: new RegExp(`${ev.replace('.', '\\.')}:${tornAt}(?!\\d)`).test(check1.out),
+        detail: `нет «${ev}:${tornAt}» в выводе check` },
       { id: 'check-names-missing-index', source: SRC, pass: /индекс/.test(check1.out), detail: 'check молчит об удалённом индексе' },
       { id: 'check-names-broken-index', source: SRC, pass: /индекс[^\n]*бит/.test(check2.out), detail: check2.out.slice(0, 300) || check2.err },
       { id: 'find-not-blocked', kind: 'quiet', source: SRC, pass: found(find1, 'миграции') && found(find2, 'браузер') && found(find3, 'замок'),

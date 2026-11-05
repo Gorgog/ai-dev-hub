@@ -246,7 +246,8 @@ def write(out, files):
 
 
 # The double write (wind-down episode.cjs, exportV1): «- <text> (<created>, урок <id>[, <status>])».
-DOUBLE_RE = re.compile(r'\((?:[^()]*), урок ([a-z0-9][a-z0-9-]{0,79})(?:, [a-z]+)?\)\s*$')
+# The status may be Cyrillic: episode.cjs repeat writes «, повтор» (review 1).
+DOUBLE_RE = re.compile(r'\((?:[^()]*), урок ([a-z0-9][a-z0-9-]{0,79})(?:, [a-zа-яё]+)?\)\s*$')
 
 
 def validate(files):
@@ -308,7 +309,11 @@ def main(argv):
         if not a.map:
             print('--verify-live: нужен --map', file=sys.stderr)
             return 2
-        line, problems = verify_live(a.verify_live, a.map, a.project)
+        try:
+            line, problems = verify_live(a.verify_live, a.map, a.project)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            print(f'--verify-live: не прочитать --map {a.map}: {e}', file=sys.stderr)
+            return 2
         print(line)
         for p in problems:
             print(p)

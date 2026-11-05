@@ -86,20 +86,7 @@ const docFields = (d) => ({ keys: `${d.id.replace(/-/g, ' ')} ${d.keys.join(' ')
 
 // ---------- node:sqlite ----------
 
-let sqliteCache;
-function sqlite() {
-  if (sqliteCache !== undefined) return sqliteCache;
-  if (process.env.HUB_MEMORY_ENGINE === 'js') return (sqliteCache = null);
-  // node 22 warns «SQLite is an experimental feature» on stderr — a hook's stderr must stay clean (P2).
-  const orig = process.emitWarning;
-  process.emitWarning = function (w, ...a) {
-    const type = typeof a[0] === 'string' ? a[0] : a[0] && a[0].type;
-    if (type === 'ExperimentalWarning' || (w && w.name === 'ExperimentalWarning')) return undefined;
-    return orig.call(process, w, ...a);
-  };
-  try { sqliteCache = require('node:sqlite').DatabaseSync; } catch { sqliteCache = null; } finally { process.emitWarning = orig; }
-  return sqliteCache;
-}
+const sqlite = require('./sqlite.cjs');
 
 function openIndex(memDir) {
   const DB = sqlite();
