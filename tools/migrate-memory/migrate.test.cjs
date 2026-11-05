@@ -226,3 +226,77 @@ test('--list prints every record with its ref, line and text as JSON lines (the 
 test('usage: no --map / --out → code 2', () => {
   assert.strictEqual(run(['--snapshot', SNAP]).code, 2);
 });
+
+// --verify-live (slice 26, acceptance memory test 4): the live memory of a project after the migration — every v1
+// record has an address (map lesson/decision/archive, or a double-write line «урок <id>» of a lesson that exists),
+// every map lesson/decision is in lessons/ or decisions/, every file there passes validateLesson. Reads only.
+function live() {
+  const r = migrate();
+  assert.strictEqual(r.code, 0, r.log);
+  const mem = path.join(r.dir, 'projects', 'demo', 'memory');
+  fs.cpSync(path.join(SNAP, 'projects', 'demo', 'memory'), mem, { recursive: true });
+  for (const sub of ['lessons', 'decisions']) fs.cpSync(path.join(r.out, MEM, sub), path.join(mem, sub), { recursive: true });
+  const mapFile = path.join(r.dir, 'map.json');
+  return { mem, mapFile, verify: () => run(['--verify-live', mem, '--map', mapFile]) };
+}
+
+test('--verify-live: migrated live memory — code 0, orphans 0, the live tree untouched', () => {
+  const l = live();
+  const before = tree(l.mem);
+  const r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /сирот 0/);
+  assert.deepStrictEqual(tree(l.mem), before);
+});
+
+test('--verify-live: a new v1 record with no address — an orphan, code 1', () => {
+  const l = live();
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), '- Новая запись, которой нет в соответствии.\n');
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /сирота: [^\n]*errors\.md#/);
+});
+
+test('--verify-live: a double-write line «урок <id>» is addressed only when that lesson exists', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), `- Эпизод сессии. (2026-11-06, урок ${id})\n`);
+  let r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /двойная запись 1/);
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), '- Эпизод про несуществующий урок. (2026-11-06, урок nope-lesson)\n');
+  r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /сирота: [^\n]*errors\.md#/);
+});
+
+test('--verify-live: a map lesson missing from lessons/ — named, code 1', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.rmSync(path.join(l.mem, 'lessons', `${id}.md`));
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, new RegExp(`не перенесён: lessons/${id}\\.md`));
+});
+
+test('--verify-live: a lesson file the validator refuses — named, code 1; a valid new lesson is fine', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.copyFileSync(path.join(l.mem, 'lessons', `${id}.md`), path.join(l.mem, 'lessons', 'fresh-one.md'));
+  const fresh = path.join(l.mem, 'lessons', 'fresh-one.md');
+  fs.writeFileSync(fresh, fs.readFileSync(fresh, 'utf8').replace(`id: ${id}`, 'id: fresh-one'));
+  let r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  fs.appendFileSync(path.join(l.mem, 'lessons', `${id}.md`), 'хвост\u0000\n');
+  r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, new RegExp(`${id}\\.md`));
+});
+
+test('--verify-live: a project the map does not know — code 1; no --map — code 2', () => {
+  const l = live();
+  const other = path.join(path.dirname(path.dirname(l.mem)), 'stranger', 'memory');
+  fs.cpSync(l.mem, other, { recursive: true });
+  assert.strictEqual(run(['--verify-live', other, '--map', l.mapFile]).code, 1);
+  assert.strictEqual(run(['--verify-live', l.mem]).code, 2);
+});
