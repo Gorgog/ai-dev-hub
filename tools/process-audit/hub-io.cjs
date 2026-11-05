@@ -259,9 +259,11 @@ function revert(req) {
   if (a.kind === 'retire') {
     const mem = path.join(req.hub, 'projects', a.project, 'memory');
     const file = path.join(mem, 'lessons', `${a.lesson}.md`);
-    if (!/^status:[ \t]*retired[ \t]*\r?$/m.test(fs.readFileSync(file, 'utf8'))) throw new Error(`урок ${a.lesson} (${a.project}) уже не в отставке: откат не делаю`);
+    const fm = fs.readFileSync(file, 'utf8').match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+    if (!fm || !/^status:[ \t]*retired[ \t]*\r?$/m.test(fm[0])) throw new Error(`урок ${a.lesson} (${a.project}) уже не в отставке: откат не делаю`);
     setStatus(file, 'active');
-    store.ensureTriggers(mem);
+    // the events go with the status: a failed trigger rebuild must not leave the undo unrecorded (rebuilt on next search)
+    try { store.ensureTriggers(mem); } catch { /* rebuilt by the next search or SessionStart check */ }
     memEvents.appendEvent(mem, { ...addr, kind: 'restored', lesson: a.lesson });
   }
   events.append([{ ...addr, kind: 'revert', of: a.id, id: `${a.id}r`, project: a.project, rule: a.rule, lesson: a.lesson,
