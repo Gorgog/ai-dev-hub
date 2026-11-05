@@ -1,7 +1,7 @@
 # Защита механизмом (срез 13)
 
 Частые и опасные ошибки останавливает хук, а не текст правила. Четыре механизма под одним логическим обработчиком
-`protect` (бюджет: 5 обработчиков из 6): модули `plugin/hooks/pretool.d/30..33-*.cjs`, логика — `plugin/hooks/protect.cjs`,
+`protect` (бюджет обработчиков — `docs/hooks.md`): модули `plugin/hooks/pretool.d/30..33-*.cjs`, логика — `plugin/hooks/protect.cjs`,
 записи — `plugin/mechanisms/<id>.json`, тесты — `plugin/hooks/protect.test.cjs`, полигон — H17–H21. Решение — `deny` с
 причиной, которая говорит, что делать вместо; сломанный модуль закрыт внутри проектов хаба (`onError: closed`,
 `failScope: project`). Bash читается разбором shell (кавычки, `$( )`, `$'…'`, heredoc, перенаправления, арифметика
