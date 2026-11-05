@@ -242,12 +242,13 @@ function gitSub(words, k) {
   return j < words.length ? j : -1;
 }
 
-// A path with * ? [ in its segments → the existing paths it matches (at most 200), else [].
+// A path with * or ? in its segments → the existing paths it matches (at most 200), else []. Brackets stay literal:
+// [id] / [post-id] are folder names of Next and Nuxt routes far more often than a character class.
 function globPaths(abs) {
   let cur = ['/'];
   for (const seg of abs.split('/').filter(Boolean)) {
-    if (!/[*?[]/.test(seg)) { cur = cur.map((d) => path.join(d, seg)); continue; }
-    const re = new RegExp(`^${seg.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+    if (!/[*?]/.test(seg)) { cur = cur.map((d) => path.join(d, seg)); continue; }
+    const re = new RegExp(`^${seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
     cur = cur.flatMap((d) => { try { return fs.readdirSync(d).filter((n) => re.test(n)).map((n) => path.join(d, n)); } catch { return []; } }).slice(0, 200);
   }
   return cur.filter((p) => fs.existsSync(p));
@@ -261,7 +262,7 @@ function writeTargets(cmd) {
     const x = p && expandVars(p, cmd.env);
     if (!x || (cmd.cwd === null && !path.isAbsolute(x))) return;
     const abs = path.resolve(cmd.cwd || '/', x);
-    if (/[*?[]/.test(x)) globPaths(abs).forEach((g) => res.push({ path: g, via }));
+    if (/[*?]/.test(x)) globPaths(abs).forEach((g) => res.push({ path: g, via }));
     else res.push({ path: abs, via });
   };
   for (const r of cmd.redirs) if (/>|<>/.test(r.op)) add(r.target, `${r.op} ${r.target}`);
@@ -338,6 +339,13 @@ const LOCKS = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 
 const MIGRATION_DIR = /^(migrations?|migrate)$/i;
 const DOC_EXT = /\.(md|markdown|txt|rst|adoc)$/i;
 
+// A file path from the repository root lies in a migrations folder: migration(s)/ anywhere, migrate/ only as Rails'
+// db/migrate (cmd/migrate/ of a Go project is code).
+function inMigrationDir(rel) {
+  const dirs = rel.split(path.sep).slice(0, -1).map((d) => d.toLowerCase());
+  return dirs.some((d, i) => /^migrations?$/.test(d) || (d === 'migrate' && dirs[i - 1] === 'db'));
+}
+
 // A cheap first look by the path alone; a migration candidate is confirmed by appliedMigration().
 function classify(p) {
   const base = path.basename(p);
@@ -349,7 +357,7 @@ function classify(p) {
 
 // A migration «applied» = already in HEAD of its repository; a file on disk but not committed is a new one. The
 // migrations folder is looked for in the path from the repository root (a folder above the root does not count),
-// docs are not migrations; a folder is applied when HEAD has migration files under it.
+// docs are not migrations; a folder (rm -r db) holds applied ones when HEAD has migration files anywhere under it.
 function appliedMigration(p) {
   const isDir = fs.existsSync(p) && fs.statSync(p).isDirectory();
   let dir = isDir ? p : path.dirname(p);
@@ -358,10 +366,9 @@ function appliedMigration(p) {
   if (!top) return false;
   const rel = path.relative(realp(top), realp(p));
   if (!rel || rel.startsWith('..')) return false;
-  const segs = rel.split(path.sep);
-  if (!(isDir ? segs : segs.slice(0, -1)).some((seg) => MIGRATION_DIR.test(seg)) || (!isDir && DOC_EXT.test(rel))) return false;
+  if (!isDir && (!inMigrationDir(rel) || DOC_EXT.test(rel))) return false;
   const listed = gitOut(top, ['ls-tree', '-r', '--name-only', 'HEAD', '--', rel]);
-  return !!listed && listed.split('\n').some((f) => f && !DOC_EXT.test(f));
+  return !!listed && listed.split('\n').some((f) => f && !DOC_EXT.test(f) && inMigrationDir(f));
 }
 
 const FILE_REASON = {
@@ -372,6 +379,11 @@ const FILE_REASON = {
 
 function protectFiles(ev) {
   for (const t of callTargets(ev)) {
+    // A whole folder removed or moved: protected when applied migrations are under it.
+    if (/^(rm|unlink|shred|mv|git rm|git mv)$/.test(t.via) && fs.existsSync(t.path) && fs.statSync(t.path).isDirectory()) {
+      if (appliedMigration(t.path)) return { decision: 'deny', reason: `Хаб (protect-files): ${FILE_REASON.migration(`${t.path} (внутри)`)}` };
+      continue;
+    }
     const kind = classify(t.path);
     if (!kind) continue;
     if (kind === 'migration' ? !appliedMigration(t.path) : !fs.existsSync(t.path)) continue;
@@ -485,17 +497,22 @@ const roleOf = (type) => String(type || '').split(':').pop();
 // A model family by name, Latin or Cyrillic, as a person writes it in chat.
 const FAMILIES = { sonnet: /sonnet|сон+ет/i, fable: /fable|ф[еэ]йбл/i, haiku: /haiku|хайку/i };
 const TRANSCRIPT_CAP = 32 * 1024 * 1024;
-const NEGATION = /(^|[^а-яёa-z])(не|без|кроме|not|no|without|except)(\s|$)/i;
+const NEGATION = /(^|[^а-яёa-z])(не|нет|ни|без|кроме|никак[а-яё]*|not|no|without|except|don'?t)(?![а-яёa-z])/i;
+const REVIEW = /ревью|review/i;
 
-// Named = at least one mention whose clause (from the previous , . ; : ! ? — ( or a line break) has no negation:
-// «только не на sonnet — на opus» does not name sonnet.
+// Named = a mention whose clause (between , . ; : ! ? ( ) or line breaks) is about the review and has no negation on
+// either side: «ревью на sonnet» names it; «только не на sonnet — на opus», «sonnet не надо», «никакого sonnet»,
+// «пусть исследует sonnet-агент» do not.
 function named(text, re) {
   const g = new RegExp(re.source, 'gi');
+  const isCut = (c) => ',.;:!?()\n'.includes(c);
   let m;
   while ((m = g.exec(text))) {
-    const before = text.slice(0, m.index);
-    const cut = Math.max(...[',', '.', ';', ':', '!', '?', '—', '–', '(', '\n'].map((d) => before.lastIndexOf(d)));
-    if (!NEGATION.test(before.slice(cut + 1))) return true;
+    let a = m.index, b = m.index + m[0].length;
+    while (a > 0 && !isCut(text[a - 1])) a--;
+    while (b < text.length && !isCut(text[b])) b++;
+    const clause = text.slice(a, b);
+    if (REVIEW.test(clause) && !NEGATION.test(clause)) return true;
   }
   return false;
 }
