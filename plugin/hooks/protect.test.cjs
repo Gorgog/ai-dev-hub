@@ -323,7 +323,37 @@ test('ревью, опасения: арифметика и [[ ]] — не hered
 test('ревью (В): модель с отрицанием — не названа', () => {
   deny(P.agentModel(reviewerOn('sonnet', transcript(human('ревью, только не на sonnet — на opus')))), /другая модель/);
   deny(P.agentModel(reviewerOn('sonnet', transcript(human('без sonnet, пожалуйста')))), /другая модель/);
-  quiet(P.agentModel(reviewerOn('sonnet', transcript(human('на sonnet, не на opus')))));
+  quiet(P.agentModel(reviewerOn('sonnet', transcript(human('ревью на sonnet, не на opus')))));
+});
+
+// --- review round 2 -------------------------------------------------------------------------------------------------
+
+test('ревью-2 N1: migrate/ — только db/migrate (Rails), cmd/migrate — код', () => {
+  const up = repoUnder([], { 'cmd/migrate/main.go': 'package main\n', 'db/migrate/001_add.rb': 'x\n' });
+  const ed = (rel) => ({ tool_name: 'Edit', cwd: up, tool_input: { file_path: path.join(up, rel) } });
+  quiet(P.protectFiles(ed('cmd/migrate/main.go')));
+  deny(P.protectFiles(ed('db/migrate/001_add.rb')), /миграц/i);
+});
+
+test('ревью-2 N2: квадратные скобки в пути — буквально, без исключения', () => {
+  const ev = (command) => ({ tool_name: 'Bash', cwd: R, tool_input: { command } });
+  for (const c of ['sed -i s/a/b/ "app/blog/[post-id]/page.tsx"', "echo x > 'notes[draft'", 'rm src/[id].ts']) {
+    assert.doesNotThrow(() => P.protectFiles(ev(c)), c);
+    assert.doesNotThrow(() => P.agentRoles(as('hub:reviewer', ev(c)), ctx), c);
+  }
+  deny(P.agentRoles(as('hub:reviewer', ev('sed -i s/a/b/ "app/blog/[post-id]/page.tsx"')), ctx), /\[post-id\]/);
+});
+
+test('ревью-2 N3: отрицание после названия, «нет», «никакого», модель не про ревью — не названа', () => {
+  for (const said of ['на sonnet ревьюера не запускай', 'sonnet не надо, ревью на opus', 'Sonnet? нет, только opus', 'никакого sonnet',
+    'пусть исследует sonnet-агент, а ревью как обычно']) {
+    deny(P.agentModel(reviewerOn('sonnet', transcript(human(said)))), /другая модель/, `${said}:`);
+  }
+});
+
+test('ревью-2 LOW: rm папки, внутри которой применённые миграции, — deny; без них — можно', () => {
+  deny(P.protectFiles(bash('rm -rf prisma')), /миграц/i);
+  quiet(P.protectFiles(bash('rm -rf src')));
 });
 
 // --- modules --------------------------------------------------------------------------------------------------------
