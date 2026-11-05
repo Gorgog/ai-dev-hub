@@ -1,0 +1,14 @@
+{
+  "id": "inline-script",
+  "event": "PreToolUse",
+  "file": "pretool.d/31-inline-script.cjs",
+  "handler": "protect",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "project",
+  "state": [],
+  "reads": [],
+  "polygon": ["H18"],
+  "replaces": "v1: уроки «heredoc / node -e» текстом (errors-index проекта A)",
+  "review": "2027-02-05"
+}

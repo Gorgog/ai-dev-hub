@@ -1,0 +1,14 @@
+{
+  "id": "protect-files",
+  "event": "PreToolUse",
+  "file": "pretool.d/30-protect-files.cjs",
+  "handler": "protect",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "project",
+  "state": [],
+  "reads": ["git HEAD (миграции)"],
+  "polygon": ["H17"],
+  "replaces": "v1: правило 4 текстом (.env, локфайлы, применённые миграции)",
+  "review": "2027-02-05"
+}

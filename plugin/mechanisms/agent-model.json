@@ -1,0 +1,14 @@
+{
+  "id": "agent-model",
+  "event": "PreToolUse",
+  "file": "pretool.d/32-agent-model.cjs",
+  "handler": "protect",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "project",
+  "state": [],
+  "reads": ["transcript_path (последнее сообщение человека)"],
+  "polygon": ["H19"],
+  "replaces": "v1: правило 8 текстом (ревьюер — Opus из reviewer.md)",
+  "review": "2027-02-05"
+}
