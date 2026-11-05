@@ -89,6 +89,15 @@ function snapshot(mem) {
   }
   return out;
 }
+// v1 records of errors.md: a record starts with «- » and goes on over indented lines (a model wraps long records).
+function v1Records(text) {
+  const out = [];
+  for (const l of text.split('\n')) {
+    if (l.startsWith('- ')) out.push(l);
+    else if (/^\s+\S/.test(l) && out.length) out[out.length - 1] += ` ${l.trim()}`;
+  }
+  return out;
+}
 const errorsMd = (mem) => { try { return fs.readFileSync(path.join(mem, 'errors.md'), 'utf8'); } catch { return ''; } };
 
 function gradeTask(task, { run, ctx }) {
@@ -104,7 +113,7 @@ function gradeTask(task, { run, ctx }) {
   const touched = Object.keys(ctx.before).filter((p) => now[p] !== ctx.before[p] && !allowed.has(p));
   const v1 = errorsMd(ctx.mem);
   const v1Kept = v1.startsWith(ctx.v1Before);
-  const v1New = v1Kept ? v1.slice(ctx.v1Before.length).split('\n').filter((l) => l.startsWith('- ')) : [];
+  const v1New = v1Kept ? v1Records(v1.slice(ctx.v1Before.length)) : [];
   const errs = toolErrors(run.events);
   const escaping = errs.filter((e) => e.escaping).map((e) => e.text);
   const bashWrites = bashMemoryWrites(run.events);
