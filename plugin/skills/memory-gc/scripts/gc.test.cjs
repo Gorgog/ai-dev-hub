@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { formatLesson } = require('../../../lib/memory/format.cjs');
-const { appendEvent, readEvents } = require('../../../lib/memory/events.cjs');
+const { appendEvent, readEvents, foldEvents } = require('../../../lib/memory/events.cjs');
 
 const CLI = path.join(__dirname, 'gc.cjs');
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -94,4 +94,59 @@ test('a project of the old format (no memory/lessons/): said so, code 0, nothing
     assert.match(r.out, /памяти нового формата нет/);
   }
   assert.deepStrictEqual(fs.readdirSync(mem), ['errors.md']);
+});
+
+test('fold: a month older than 3 keeps every repeat/merged/superseded/retired and the last shown per lesson; the source goes to events/archive/', () => {
+  const mem = memory();
+  const lines = [
+    { at: '2026-07-01T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' },
+    { at: '2026-07-02T10:00:00.000Z', kind: 'repeat', lesson: 'dev-port', note: 'снова' },
+    { at: '2026-07-03T10:00:00.000Z', kind: 'shown', lesson: 'old-rule' },
+    { at: '2026-07-04T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' },
+    { at: '2026-07-05T10:00:00.000Z', kind: 'retired', lesson: 'old-rule' },
+    { at: '2026-07-06T10:00:00.000Z', kind: 'shown', lesson: 'old-rule' },
+    { at: '2026-07-07T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' },
+  ];
+  for (const e of lines) appendEvent(mem, e);
+  appendEvent(mem, { at: '2026-10-01T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  appendEvent(mem, { at: '2026-10-02T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  const src = fs.readFileSync(path.join(mem, 'events', '2026-07.jsonl'));
+  const before = foldEvents(readEvents(mem).events);
+
+  const dry = run(['--memory', mem, 'fold', '--now', '2026-11-05']);
+  assert.strictEqual(dry.code, 0, dry.err);
+  assert.match(dry.out, /2026-07: событий 7 → 4/);
+  assert.doesNotMatch(dry.out, /2026-10/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(mem, 'events', '2026-07.jsonl')), src, 'без --apply ничего не меняется');
+
+  const r = run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.deepStrictEqual(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-07.jsonl')), src, 'исходник — в архиве побайтно');
+  const kept = fs.readFileSync(path.join(mem, 'events', '2026-07.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepStrictEqual(kept.map((e) => `${e.kind}:${e.lesson}:${e.at.slice(8, 10)}`),
+    ['repeat:dev-port:02', 'retired:old-rule:05', 'shown:old-rule:06', 'shown:dev-port:07']);
+  assert.strictEqual(fs.readFileSync(path.join(mem, 'events', '2026-10.jsonl'), 'utf8').split('\n').filter(Boolean).length, 2);
+  const after = foldEvents(readEvents(mem).events);
+  for (const id of ['dev-port', 'old-rule']) {
+    for (const k of ['repeat', 'merged', 'superseded', 'retired', 'last']) assert.strictEqual(after[id][k], before[id][k], `${id}.${k}`);
+  }
+  // shown of a folded month means «shown in that month»: dev-port 3 → 1 in July, plus 2 in October.
+  assert.strictEqual(after['dev-port'].shown, 3);
+
+  const again = run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']);
+  assert.strictEqual(again.code, 0, again.err);
+  assert.match(again.out, /сворачивать нечего/);
+  assert.deepStrictEqual(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-07.jsonl')), src, 'архив не перезаписан');
+});
+
+test('fold: a torn line of an old month stays in the archive and is named; the month is folded around it', () => {
+  const mem = memory();
+  appendEvent(mem, { at: '2026-06-01T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  fs.appendFileSync(path.join(mem, 'events', '2026-06.jsonl'), '{"at":"2026-06-02T1');
+  appendEvent(mem, { at: '2026-06-03T10:00:00.000Z', kind: 'shown', lesson: 'dev-port' });
+  const r = run(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /битых строк 1 — только в архиве/);
+  assert.match(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-06.jsonl'), 'utf8'), /"at":"2026-06-02T1/);
+  assert.strictEqual(readEvents(mem).problems.length, 0);
 });
