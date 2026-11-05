@@ -58,7 +58,9 @@ const checkJson = (fx, cwd) => { const r = run(fx, ['check', '--json'], cwd); as
 const missing = (list) => list.filter((c) => c.ok === false).map((c) => c.id).sort();
 const settings = (fx) => JSON.parse(fs.readFileSync(path.join(fx.claude, 'settings.json'), 'utf8'));
 
-const ALL = ['auto-memory', 'bash-cwd', 'checks-json', 'dispatch-profile', 'dispatch-rules', 'journal-retention', 'plugin-version', 'status-line'];
+const ALL = ['auto-memory', 'bash-cwd', 'journal-retention', 'plugin-version', 'status-line'];
+// A project that uses the dispatcher (its board memory/dispatch.md) also needs these — written by hand, never a copy.
+const HAND = ['checks-json', 'dispatch-profile', 'dispatch-rules'];
 
 test('check: a bare machine misses every setting, and the text says «не хватает N»', () => {
   const fx = fixture();
@@ -90,8 +92,8 @@ test('apply: each setting one call, then check says 0; the plugin is updated thr
   assert.match(cli, /plugin marketplace update hub/);
   assert.match(cli, /plugin update hub@hub/);
 
-  // Project files come from the templates, the repo's local settings point auto-memory into the hub project.
-  for (const f of ['dispatch-profile.md', 'dispatch-rules.json', 'checks.json']) assert.ok(fs.existsSync(path.join(fx.proj, f)), f);
+  // The repo's local settings point auto-memory into the hub project; no project file appears by itself.
+  for (const f of ['dispatch-profile.md', 'dispatch-rules.json', 'checks.json']) assert.ok(!fs.existsSync(path.join(fx.proj, f)), f);
   const local = JSON.parse(fs.readFileSync(path.join(fx.repo, '.claude', 'settings.local.json'), 'utf8'));
   assert.strictEqual(local.autoMemoryDirectory, path.join(fx.proj, 'memory', 'auto') + '/');
   // …and the client repository stays clean: the local settings file is excluded locally, never committed.
@@ -116,10 +118,48 @@ test('apply keeps the rest of settings.json, backs it up once, and a second appl
   assert.strictEqual(backups().length, 2, 'an unchanged setting is not backed up again');
 });
 
-test('a longer retention or an own status line is the user\'s: retention is never lowered', () => {
+test('a longer retention or an own status line is the user\'s: never lowered, never replaced', () => {
   const fx = fixture();
-  fs.writeFileSync(path.join(fx.claude, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 1000, desktopSessionCleanupPeriodDays: 400 }));
-  assert.ok(!missing(checkJson(fx)).includes('journal-retention'));
+  const own = { type: 'command', command: '~/my-line.sh' };
+  fs.writeFileSync(path.join(fx.claude, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 1000, desktopSessionCleanupPeriodDays: 400, statusLine: own }));
+  const m = missing(checkJson(fx));
+  assert.ok(!m.includes('journal-retention'));
+  assert.ok(!m.includes('status-line'), 'an own status line is a choice, not a missing setting');
+  assert.strictEqual(run(fx, ['apply', 'status-line']).status, 0);
+  assert.strictEqual(run(fx, ['apply', 'journal-retention']).status, 0);
+  assert.deepStrictEqual(settings(fx).statusLine, own);
+  assert.strictEqual(settings(fx).cleanupPeriodDays, 1000);
+});
+
+test('a symlinked settings.json stays a link: the change lands in its target', () => {
+  const fx = fixture();
+  const dots = path.join(fx.root, 'dots');
+  fs.mkdirSync(dots);
+  fs.writeFileSync(path.join(dots, 'settings.json'), JSON.stringify({ theme: 'dark' }));
+  fs.symlinkSync(path.join(dots, 'settings.json'), path.join(fx.claude, 'settings.json'));
+  assert.strictEqual(run(fx, ['apply', 'bash-cwd']).status, 0);
+  assert.ok(fs.lstatSync(path.join(fx.claude, 'settings.json')).isSymbolicLink());
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dots, 'settings.json'), 'utf8')).env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR, '1');
+});
+
+test('project files of the dispatcher: missing only where the project uses it; written by hand, a template copy is not ready', () => {
+  const fx = fixture();
+  assert.deepStrictEqual(checkJson(fx).filter((c) => HAND.includes(c.id)).map((c) => c.ok), [null, null, null], 'no board — not counted');
+  fs.writeFileSync(path.join(fx.proj, 'memory', 'dispatch.md'), '# доска\n');
+  assert.deepStrictEqual(missing(checkJson(fx)), [...ALL, ...HAND].sort());
+  for (const id of HAND) {
+    const r = run(fx, ['apply', id]);
+    assert.strictEqual(r.status, 4, `${id}: apply never writes a project file — ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout + r.stderr, /templates\/project/);
+  }
+  assert.ok(!fs.existsSync(path.join(fx.proj, 'dispatch-rules.json')), 'no lock rules appear by themselves');
+  const tmpl = path.join(fx.hub, 'templates', 'project');
+  fs.copyFileSync(path.join(tmpl, 'dispatch-rules.example.json'), path.join(fx.proj, 'dispatch-rules.json'));
+  assert.strictEqual(checkJson(fx).find((c) => c.id === 'dispatch-rules').ok, false, 'an untouched template copy is not ready');
+  fs.writeFileSync(path.join(fx.proj, 'dispatch-rules.json'), JSON.stringify({ heavy: [], medium: [] }));
+  fs.writeFileSync(path.join(fx.proj, 'dispatch-profile.md'), '# Профиль\n');
+  fs.writeFileSync(path.join(fx.proj, 'checks.json'), '{"steps": []}');
+  assert.deepStrictEqual(missing(checkJson(fx)).filter((id) => HAND.includes(id)), []);
 });
 
 test('a broken settings.json is reported and never overwritten', () => {
@@ -177,6 +217,12 @@ test('auto-memory in a worktree: the worktree root gets the local settings, excl
   assert.ok(fs.existsSync(path.join(wt, '.claude', 'settings.local.json')), 'the file is at the worktree root, not in src/');
   assert.strictEqual(git(wt, 'status', '--porcelain'), '', 'nothing new to commit (src/ is empty)');
   assert.strictEqual(checkJson(fx, sub).find((c) => c.id === 'auto-memory').ok, true);
+  // A fresh worktree is not counted as missing: a task session cannot get the user's yes, wt-new.sh is the place.
+  const wt2 = path.join(fx.proj, 'worktrees', 'K-2');
+  git(fx.repo, 'worktree', 'add', '-q', '-b', 'K-2', wt2);
+  const c = checkJson(fx, wt2).find((x) => x.id === 'auto-memory');
+  assert.strictEqual(c.ok, null);
+  assert.match(c.have, /worktree/);
 });
 
 test('module: SessionStart says «не хватает N» with /hub:setup, silent when nothing is missing or on compact', async () => {

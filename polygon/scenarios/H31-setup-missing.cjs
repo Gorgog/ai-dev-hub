@@ -9,7 +9,8 @@ const { makeHub, gitRepo } = require('../lib/hub.cjs');
 const { runEvent } = require('../lib/hooks.cjs');
 
 const SRC = 'план 17, Acceptance 1: «на машине без нужных настроек — строка „не хватает N“; после /hub:setup — 0»';
-const ALL = ['auto-memory', 'bash-cwd', 'checks-json', 'dispatch-profile', 'dispatch-rules', 'journal-retention', 'plugin-version', 'status-line'];
+// Проект без доски диспетчера: файлы диспетчера (профиль, правила замка, checks.json) не нужны и не считаются.
+const ALL = ['auto-memory', 'bash-cwd', 'journal-retention', 'plugin-version', 'status-line'];
 
 function stand(base, work, canary) {
   const { hub, proj } = makeHub(base, work, { extra: canary ? { 'canary.json': JSON.stringify({ mechanisms: ['setup'] }) } : {} });
