@@ -116,3 +116,9 @@ test('session: the owner removes only its own lock', () => {
   session.update('s1', () => fs.writeFileSync(lock, 'someone-else'), dir);
   assert.strictEqual(fs.readFileSync(lock, 'utf8'), 'someone-else', 'a lock taken over by another is not ours to remove');
 });
+
+test('session: the end of a session without state leaves no state file behind', () => {
+  const dir = mkdtemp();
+  assert.deepStrictEqual(session.endSession('ghost', dir).events, []);
+  assert.ok(!fs.existsSync(session.file('ghost', dir)));
+});

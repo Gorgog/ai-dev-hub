@@ -160,6 +160,7 @@ test('delivery: fails open — a broken state file or an unwritable data folder 
     const x = run(s, event, ev, { HUB_LOG_DIR: blocked });
     assert.strictEqual(x.code, 0, x.err);
     assert.match(x.out, event === 'SessionStart' ? /Бриф/ : /урок L1/);
+    if (event === 'PreToolUse') assert.match(x.ctx, /данные из памяти/i, 'the fallback keeps the frame of memory');
   }
   const deny = run(s, 'PreToolUse', { tool_name: 'Bash', tool_use_id: 't3', tool_input: { command: 'echo REPEAT' } }, { HUB_LOG_DIR: blocked });
   // Without state a deny-once cannot be «once»: denying on every repeat would lock the command for the session, so the
