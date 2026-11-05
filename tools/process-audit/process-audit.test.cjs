@@ -246,3 +246,86 @@ test('нет журнала подачи и памяти v2 — «не мери�
   assert.strictEqual(w.effect.delivery, null);
   assert.match(w.summary, /подача: не мерится/);
 });
+
+const weeklyRaw = (fx, ...args) => spawnSync('python3', [path.join(DIR, 'weekly.py'), '--data', fx.data, '--hub', fx.hub, '--events', fx.events,
+  '--until', '2026-10-28T12:00:00Z', ...args], { encoding: 'utf8', env: ENV, timeout: 120000 });
+const improveEvents = (fx) => fs.readdirSync(path.join(fx.events, 'events')).flatMap((f) => fs.readFileSync(path.join(fx.events, 'events', f), 'utf8')
+  .split('\n').filter(Boolean).map(JSON.parse)).filter((e) => e.mode === 'improve');
+
+test('--projects (канарейка): действия и вопросы — только в названных проектах, аудит — по всем', (t) => {
+  const fx = fixture(t);
+  const w = JSON.parse(weekly(fx, '--dry-run', '--json', '--projects', 'proj-b').stdout);
+  assert.ok(w.effect.rules['proj-a'], 'аудит видит все проекты');
+  assert.deepStrictEqual([...new Set([...w.actions, ...w.questions].map((a) => a.project))], ['proj-b']);
+  weekly(fx, '--apply', '--projects', 'proj-b');
+  const rules = JSON.parse(fs.readFileSync(path.join(fx.hub, 'projects', 'proj-a', 'rules.json'), 'utf8'));
+  assert.strictEqual(rules.modes['demo-rm'], undefined, 'проект вне канарейки не тронут');
+});
+
+test('откат урока с CRLF возвращает статус и обновляет триггеры', (t) => {
+  const fx = fixture(t);
+  const f = path.join(fx.hub, 'projects', 'proj-b', 'memory', 'lessons', 'old-rule.md');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/\n/g, '\r\n'));
+  weekly(fx, '--apply');
+  assert.match(fs.readFileSync(f, 'utf8'), /^status: retired\r$/m);
+  const retire = improveEvents(fx).find((e) => e.kind === 'retire');
+  weekly(fx, '--revert', retire.id);
+  assert.match(fs.readFileSync(f, 'utf8'), /^status: active\r$/m);
+  const triggers = JSON.parse(fs.readFileSync(path.join(fx.hub, 'projects', 'proj-b', 'memory', '.triggers.json'), 'utf8'));
+  assert.ok(JSON.stringify(triggers).includes('old-rule'), 'урок вернулся в горячий путь');
+});
+
+test('откат повышения — только если режим сейчас тот, что записал цикл', (t) => {
+  const fx = fixture(t);
+  weekly(fx, '--apply');
+  const promote = improveEvents(fx).find((e) => e.kind === 'promote');
+  const file = path.join(fx.hub, 'projects', 'proj-a', 'rules.json');
+  const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  j.modes['demo-rm'] = 'deny';  // the user changed it by hand since
+  fs.writeFileSync(file, JSON.stringify(j));
+  const r = weeklyRaw(fx, '--revert', promote.id);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /deny/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).modes['demo-rm'], 'deny');
+  assert.ok(!improveEvents(fx).some((e) => e.kind === 'revert'));
+});
+
+test('частота для deny — по всем вызовам проекта: проект без Bash в окне — вопрос, не deny', (t) => {
+  const fx = fixture(t);
+  // a path rule on Edit at deny-once in project B (no Bash calls of B carry it): 5 windows, all repeats
+  write(path.join(fx.hub, 'projects', 'proj-b', 'rules.json'), JSON.stringify({ rules: [
+    { id: 'demo-path', tools: '^Edit$', path: '\\.lock$', text: 'лок-файл не править' }], modes: { 'demo-path': 'deny-once' } }));
+  const db = path.join(fx.data, 'analytics', 'calls.db');
+  const py = `import sqlite3,sys\ndb=sqlite3.connect(sys.argv[1])\nt=${UNTIL - DAY}\nfor w in range(5):\n  for k,p in enumerate(['/w/a.lock','/w/b.lock','/w/c.ts','/w/d.ts','/w/e.ts']):\n    t+=60\n    db.execute("insert into calls values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(f'e{w}{k}',t,'','b2','','',0,w*5+k+1,'m',None,'${PD_B}','Edit',None,p,0,0,0,0,0))\ndb.commit()\n`;
+  write(path.join(fx.base, 'more.py'), py);
+  assert.strictEqual(spawnSync('python3', [path.join(fx.base, 'more.py'), db], { encoding: 'utf8' }).status, 0);
+  const w = JSON.parse(weekly(fx, '--dry-run', '--json').stdout);
+  const s = w.effect.rules['proj-b']['demo-path'];
+  assert.strictEqual(s.windows, 5);
+  // 10 hits over 28 calls of B in the window (3 Bash + 25 Edit), not over its 3 Bash calls
+  assert.strictEqual(s.per100, 35.714);
+  assert.ok(!w.actions.some((a) => a.rule === 'demo-path'));
+  assert.ok(w.questions.some((q) => q.rule === 'demo-path'));
+});
+
+test('сбой действия: итог не называет его сделанным, кандидат после сбоя предлагается снова', (t) => {
+  const fx = fixture(t);
+  // the candidates folder cannot be made: a file stands in its way
+  write(path.join(fx.data, 'process-audit', 'candidates'), 'not a folder');
+  const out = path.join(fx.base, 'week.json');
+  weekly(fx, '--apply', '--out', out);
+  const w = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.match(w.summary, /не удалось: 2/);
+  assert.match(w.summary, /кандидатов 2\b/);
+  assert.ok(improveEvents(fx).filter((e) => e.kind === 'failed').every((e) => !e.id && e.action_id));
+  fs.rmSync(path.join(fx.data, 'process-audit', 'candidates'));
+  const again = JSON.parse(weekly(fx, '--dry-run', '--json').stdout);
+  assert.strictEqual(again.actions.filter((a) => a.kind === 'candidate' && a.what === 'polygon').length, 2);
+});
+
+test('dry-run: «сделал бы», не «сделано»', (t) => {
+  const fx = fixture(t);
+  const w = JSON.parse(weekly(fx, '--dry-run', '--json').stdout);
+  assert.match(w.summary, /Сделал бы \(dry-run\)/);
+  assert.doesNotMatch(w.summary, /Сделано сам/);
+});
