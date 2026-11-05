@@ -4,25 +4,29 @@
 //   gc.cjs retire [--days N] [--now YYYY-MM-DD]     rules not shown nor repeated for N days (default 30) — proposals
 //   gc.cjs review --model <id> | review --list      after a model change: mark every live lesson for review (events)
 //   gc.cjs reviewed <id> [--note <текст>]           the lesson was looked at under the new model
+//   gc.cjs fold [--months 3] [--now YYYY-MM-DD] [--apply]   event months older than N: one shown per lesson
 // Reports change nothing: merge and retire are `recall merge|retire` after the user's «да». Only review/reviewed
-// append events. A project without memory/lessons/ has no v2 memory: said so, code 0. Codes: 0 done, 1 refused, 2 usage.
+// append events, only fold --apply rewrites old event months (the source kept in events/archive/). A project without memory/lessons/ has no v2 memory: said so, code 0. Codes: 0 done, 1 refused, 2 usage.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const S = require('../../../lib/memory/store.cjs');
-const { appendEvent, readEvents } = require('../../../lib/memory/events.cjs');
+const { appendEvent, readEvents, eventFiles } = require('../../../lib/memory/events.cjs');
 const { parseLesson } = require('../../../lib/memory/format.cjs');
 
-const USAGE = 'команды: dups · retire [--days N] · review --model <id> · review --list · reviewed <id> [--note <текст>]';
+const USAGE = 'команды: dups · retire [--days N] · review --model <id> · review --list · reviewed <id> [--note <текст>] · '
+  + 'fold [--months 3] [--apply]';
 const LIVE = ['core', 'active'];
 const REVIEW = ['review', 'reviewed'];
 
 function parse(argv) {
-  const a = { _: [], memory: null, days: 30, now: null, model: null, list: false, note: undefined };
+  const a = { _: [], memory: null, days: 30, months: 3, now: null, model: null, list: false, note: undefined, apply: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--memory') a.memory = argv[++i];
     else if (k === '--days') a.days = Math.max(1, Number(argv[++i]) || 30);
+    else if (k === '--months') a.months = Math.max(1, Number(argv[++i]) || 3);
+    else if (k === '--apply') a.apply = true;
     else if (k === '--now') a.now = argv[++i];
     else if (k === '--model') a.model = argv[++i];
     else if (k === '--list') a.list = true;
@@ -140,10 +144,68 @@ function reviewed(mem, id, a) {
   return `${id}: пересмотрен`;
 }
 
+// Fold of old event months (decision 05.11, without a library change): in a month older than `months` every event
+// stays except `shown` — of those only the last per lesson (or rule). So repeats, merges, retirements and `last` stay
+// exact; `shown` of a folded month means «was shown in that month», not how often (delivery effect — by the delivery
+// log, not by folded memory events). The month as it was goes to events/archive/<ГГГГ-ММ>.jsonl byte for byte (the
+// reader does not see it); an archive already there is never overwritten. Lines are kept as written, in their order.
+function foldMonth(text) {
+  const rows = [];
+  let broken = 0;
+  for (const l of text.split('\n')) {
+    if (!l.trim()) continue;
+    let e = null;
+    try { e = JSON.parse(l); } catch { /* below */ }
+    if (e && typeof e === 'object' && !Array.isArray(e)) rows.push({ l, e }); else broken++;
+  }
+  const lastShown = new Map();
+  rows.forEach((r, i) => {
+    if (r.e.kind !== 'shown') return;
+    const key = typeof r.e.lesson === 'string' ? `l:${r.e.lesson}` : `r:${r.e.rule}`;
+    const cur = lastShown.get(key);
+    if (cur === undefined || String(r.e.at) >= String(rows[cur].e.at)) lastShown.set(key, i);
+  });
+  const keep = new Set(lastShown.values());
+  const kept = rows.filter((r, i) => r.e.kind !== 'shown' || keep.has(i)).map((r) => r.l);
+  return { total: rows.length + broken, kept, broken };
+}
+
+const writeVia = (file, data) => {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, file);
+};
+
+function fold(mem, a) {
+  const now = a.now ? new Date(`${a.now}T00:00:00.000Z`) : new Date();
+  if (Number.isNaN(now.getTime())) throw Object.assign(new Error(`--now ${a.now}: нужна дата ГГГГ-ММ-ДД`), { code: 2 });
+  const edge = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - a.months, 1)).toISOString().slice(0, 7);
+  const dir = path.join(mem, 'events');
+  const out = [];
+  for (const f of eventFiles(mem)) {
+    const month = f.slice(0, 7);
+    if (month >= edge) continue;
+    const file = path.join(dir, f);
+    const src = fs.readFileSync(file);
+    const r = foldMonth(src.toString('utf8'));
+    if (!r.broken && r.kept.length === r.total) continue; // at most one shown per lesson already
+    const arch = path.join(dir, 'archive', f);
+    if (fs.existsSync(arch)) { out.push(`${month}: архив events/archive/${f} уже есть — не трогаю`); continue; }
+    out.push(`${month}: событий ${r.total} → ${r.kept.length}${r.broken ? ` (битых строк ${r.broken} — только в архиве)` : ''}`);
+    if (!a.apply) continue;
+    fs.mkdirSync(path.dirname(arch), { recursive: true });
+    writeVia(arch, src); // the source first: a crash between the two writes leaves the month whole
+    writeVia(file, r.kept.length ? `${r.kept.join('\n')}\n` : '');
+  }
+  if (!out.length) return `сворачивать нечего: в месяцах до ${edge} по одному показу на урок`;
+  return [a.apply ? 'Свёрнуто (исходники — events/archive/; shown свёрнутого месяца = «был показан в месяце»):'
+    : 'Свернуть можно (после «да» — fold --apply; shown свёрнутого месяца = «был показан в месяце»):', ...out.map((l) => `- ${l}`)].join('\n');
+}
+
 function main(argv) {
   const a = parse(argv);
   const [cmd, ...rest] = a._;
-  if (!['dups', 'retire', 'review', 'reviewed'].includes(cmd)) {
+  if (!['dups', 'retire', 'review', 'reviewed', 'fold'].includes(cmd)) {
     throw Object.assign(new Error(cmd ? `неизвестная команда ${cmd}\n${USAGE}` : USAGE), { code: 2 });
   }
   const m = where(a);
@@ -153,6 +215,7 @@ function main(argv) {
     case 'dups': return dups(m.dir);
     case 'retire': return retire(m.dir, a);
     case 'review': return review(m.dir, a);
+    case 'fold': return fold(m.dir, a);
     default:
       if (!rest[0]) throw Object.assign(new Error(`reviewed: нужен id\n${USAGE}`), { code: 2 });
       return reviewed(m.dir, rest[0], a);
