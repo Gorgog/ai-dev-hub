@@ -31,10 +31,23 @@ function survives(meta, text) {
   return out;
 }
 
+// --validate: stdin — a JSON list of file paths of a live memory; stdout — [{file, problems}] by validateLesson.
+const fs = require('fs');
+const VALIDATE = process.argv[2] === '--validate';
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', () => {
+  if (VALIDATE) {
+    const out = JSON.parse(input).map((file) => {
+      let buf;
+      try { buf = fs.readFileSync(file); } catch (e) { return { file, problems: [`не читается — ${e.code || e.message}`] }; }
+      return { file, problems: validateLesson(buf, { file }) };
+    });
+    process.stdout.write(JSON.stringify(out), () => process.exit(0));
+    return;
+  }
   const docs = JSON.parse(input);
   const out = docs.map(({ file, meta, body }) => {
     const text = render(meta, body);
