@@ -131,3 +131,14 @@ test('the core block within a small room: whole lines only, what does not fit go
   assert.match(cut, /по касанию: c-three/);
   assert.match(cut, /ещё 2 урока/);
 });
+
+test('no memory library next to the hooks (an old copy): the core brief falls back to the index, the start keeps a brief', () => {
+  const { hub, repo } = project({ lessons: V2 });
+  const plugin = path.join(hub, 'plugin-copy');
+  for (const f of ['session-start.cjs', 'rules-guard.cjs', 'base-rules.json']) fs.cpSync(path.join(__dirname, f), path.join(plugin, 'hooks', f));
+  fs.cpSync(path.join(__dirname, 'lib'), path.join(plugin, 'hooks', 'lib'), { recursive: true });
+  const copy = require(path.join(plugin, 'hooks', 'session-start.cjs'));
+  const text = copy.buildBrief(repo, hub, '', { core: true });
+  assert.ok(text.includes(INDEX_LINE), text);
+  assert.doesNotMatch(text, /Ядро уроков/);
+});

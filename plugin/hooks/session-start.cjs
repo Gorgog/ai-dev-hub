@@ -10,7 +10,6 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { findProject, HUB_ROOT } = require('./rules-guard.cjs');
-const { parseLesson } = require('../lib/memory/format.cjs');
 
 const BUDGET = 9500;
 const NOTE_BUDGET = 1500;
@@ -100,16 +99,20 @@ const KIND_ORDER = { once: 0, rule: 1, knowledge: 2, decision: 3 };
 
 // Live lessons as the brief needs them: the core (first line and id; class «once» first, then by date and id) and the
 // count of the rest by touch. A file without frontmatter is skipped (memory-check names it); a lesson of an external
-// source is never a core rule (format.cjs refuses it too) — it counts as by touch.
+// source is never a core rule (format.cjs refuses it too) — it counts as by touch. The memory library is required here,
+// not at the top: stop.cjs and the v1 entry of this file load it and must not depend on lib/memory. null — no
+// lessons/ or no library: the brief falls back to the index, so memory-brief stepping aside never leaves the start
+// without a brief.
 function lessonLayers(dir) {
-  let files = [];
+  let files = [], parse;
   try { files = fs.readdirSync(LESSONS(dir)).filter((f) => f.endsWith('.md') && !f.startsWith('.')).sort(); } catch { return null; }
+  try { parse = require('../lib/memory/format.cjs').parseLesson; } catch { return null; }
   const core = [];
   let touch = 0;
   for (const f of files) {
     const text = read(path.join(LESSONS(dir), f));
     if (text === null) continue;
-    const { meta, body, frontmatter } = parseLesson(text.replace(/\u0000/g, ''));
+    const { meta, body, frontmatter } = parse(text.replace(/\u0000/g, ''));
     if (!frontmatter) continue;
     const first = (body.find((l) => l.trim()) || '').trim();
     const external = String(meta.source || '').startsWith('внешний');
