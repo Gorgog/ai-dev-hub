@@ -41,13 +41,19 @@ for (let i = 0; ; i++) {
   Atomics.wait(pause, 0, 0, 7);
 }
 `;
-// A «session» that asks the memory: rebuild by signature, then index fold vs. the fold of the files and events.
+// A «session» that asks the memory: rebuild by signature, then index fold vs. the fold of the files and events. Then,
+// with everything still frozen, the two paths the writers never leave to chance: no change — the index stays as it is;
+// one event alone — the index is rebuilt and equals the fold again (a signature blind to events fails here).
 const CHECKER = `'use strict';
 const [lib, mem] = process.argv.slice(2);
 const S = require(lib);
+const same = () => JSON.stringify(S.indexFold(mem)) === JSON.stringify(S.fold(mem));
 const ix = S.ensureIndex(mem);
-const a = S.indexFold(mem), b = S.fold(mem);
-process.stdout.write(JSON.stringify({ equal: JSON.stringify(a) === JSON.stringify(b), engine: ix.engine, rebuilt: ix.rebuilt, ms: ix.ms }));
+const first = same();
+const fresh = S.ensureIndex(mem).rebuilt === false;
+S.shown(mem, 'l0', { session_id: 'checker', mode: 'polygon' });
+const afterEvent = S.ensureIndex(mem).rebuilt === true && same();
+process.stdout.write(JSON.stringify({ equal: first && fresh && afterEvent, first, fresh, afterEvent, engine: ix.engine, rebuilt: ix.rebuilt, ms: ix.ms }));
 `;
 
 function lastSeq(mem, w) {
@@ -70,6 +76,7 @@ function audit(mem) {
       lines++;
       let e;
       try { e = JSON.parse(l); } catch { torn++; continue; }
+      if (e && e.session_id === 'checker') continue; // the checker's own probe events
       const w = e && typeof e.session_id === 'string' ? Number(e.session_id.slice(1)) : -1;
       if (!seen[w]) { torn++; continue; }
       seen[w].set(e.epoch, (seen[w].get(e.epoch) || 0) + 1);

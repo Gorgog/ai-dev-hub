@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { parseLesson, validateLesson, compileWhen, layer, STATUSES, KINDS } = require('./format.cjs');
+const { parseLesson, validateLesson, layer, STATUSES, KINDS } = require('./format.cjs');
 const { appendEvent, readEvents, foldEvents, eventFiles } = require('./events.cjs');
 
 const INDEX = '.index.db';
@@ -50,7 +50,7 @@ function loadDocs(memDir) {
         id, dir, rel: `${dir}/${f}`, raw, meta, body,
         kind: KINDS.includes(meta.kind) ? meta.kind : null,
         status: STATUSES.includes(meta.status) ? meta.status : 'active',
-        first: body[0] || '',
+        first: body.find((l) => l.trim()) || '',
         keys: Array.isArray(meta.keys) ? meta.keys : [],
         sha: crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12),
       });
@@ -109,8 +109,9 @@ function openIndex(memDir) {
   return db;
 }
 
-// 'missing' | 'broken' | {sig} — what the index on disk says about itself.
+// 'nosqlite' | 'missing' | 'broken' | {sig} — what the index on disk says about itself.
 function indexState(memDir) {
+  if (!sqlite() || ftsBroken) return 'nosqlite';
   if (!fs.existsSync(path.join(memDir, INDEX))) return 'missing';
   let db;
   try {
@@ -121,9 +122,20 @@ function indexState(memDir) {
   } catch { return 'broken'; } finally { try { db && db.close(); } catch { /* closed */ } }
 }
 
+// Temp files of rebuilds killed midway (kill -9 leaves them): older than 10 minutes — nobody is writing them.
+function sweepTemps(memDir) {
+  let names = [];
+  try { names = fs.readdirSync(memDir); } catch { return; }
+  for (const f of names) {
+    if (!/^(?:\.index\.db|\.triggers\.json)\.tmp-/.test(f)) continue;
+    try { if (Date.now() - fs.statSync(path.join(memDir, f)).mtimeMs > 600000) fs.rmSync(path.join(memDir, f), { force: true }); } catch { /* gone */ }
+  }
+}
+
 function buildIndex(memDir, sig) {
   const DB = sqlite();
   const file = path.join(memDir, INDEX);
+  sweepTemps(memDir);
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   const docs = loadDocs(memDir);
   const stats = foldEvents(readEvents(memDir).events);
@@ -193,7 +205,8 @@ function indexFold(memDir) {
 
 // ---------- find ----------
 
-const relFile = (memDir, dir, id) => `${path.basename(memDir)}/${dir}/${id}.md`;
+// Absolute: the agent's cwd is a worktree or repo/, and Read takes absolute paths.
+const relFile = (memDir, dir, id) => path.join(path.resolve(memDir), dir, `${id}.md`);
 const hitOf = (memDir, d, stats, score) => {
   const s = stats[d.id] || {};
   return { id: d.id, dir: d.dir, kind: d.kind, status: d.status, layer: layer(d), first: d.first,
@@ -250,6 +263,7 @@ function find(memDir, query, { top = 3, archive = false, engine } = {}) {
   const ts = terms(query);
   const statuses = archive ? STATUSES : LIVE;
   const ix = ensureIndex(memDir, { engine });
+  refreshTriggers(memDir); // both derived files follow the files on every search (plan: «пересборка при каждом поиске»)
   if (!ts.length) return { engine: ix.engine, hits: [], index: ix };
   if (ix.engine === 'fts5') {
     try { return { engine: 'fts5', hits: findFts(memDir, ts, statuses, top), index: ix }; } catch { /* JS below */ }
@@ -283,24 +297,27 @@ function writeAtomic(file, data) {
   fs.renameSync(tmp, file);
 }
 
-// One field line of the frontmatter replaced (a block list under it removed), every other byte kept.
-function setField(file, key, value) {
-  const text = fs.readFileSync(file, 'utf8');
-  const end = text.indexOf('\n---', 4);
-  if (!text.startsWith('---\n') || end < 0) throw new Error(`${path.basename(file)}: нет frontmatter`);
-  const head = text.slice(0, end + 1).split('\n');
-  const i = head.findIndex((l) => l.startsWith(`${key}:`));
+// The text with one frontmatter field line replaced (a block list under it removed), every other byte kept — CRLF
+// files stay CRLF. Pure: callers compute every new text first and write only when all of them are ready.
+function withField(file, text, key, value) {
+  const nl = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(nl);
+  const end = lines.indexOf('---', 1);
+  if (lines[0] !== '---' || end < 0) throw new Error(`${path.basename(file)}: нет frontmatter`);
+  const i = lines.findIndex((l, k) => k > 0 && k < end && l.startsWith(`${key}:`));
   const line = `${key}: ${value}`;
-  if (i < 0) head.splice(head.length - 1, 0, line);
+  if (i < 0) lines.splice(end, 0, line);
   else {
     let j = i + 1;
-    while (j < head.length && /^\s+\S/.test(head[j])) j++;
-    head.splice(i, j - i, line);
+    while (j < end && /^\s+\S/.test(lines[j])) j++;
+    lines.splice(i, j - i, line);
   }
-  writeAtomic(file, head.join('\n') + text.slice(end + 1));
+  return lines.join(nl);
 }
 
 const metaOf = (file) => parseLesson(fs.readFileSync(file, 'utf8')).meta;
+// After a status change the hot path's file follows at once; a failure there never undoes the change.
+const refreshTriggers = (memDir) => { try { ensureTriggers(memDir); } catch { /* rebuilt by the next search */ } };
 const addr = (a = {}) => {
   const o = {};
   for (const k of ['at', 'session_id', 'agent_id', 'tool_use_id', 'epoch', 'model', 'mode', 'note']) if (a[k] !== undefined) o[k] = a[k];
@@ -317,7 +334,14 @@ function addLesson(memDir, text, { dir = 'lessons' } = {}) {
   if (!problems.length && DIRS.some((d) => fs.existsSync(path.join(memDir, d, `${id}.md`)))) problems.push(`урок ${id} уже есть`);
   if (problems.length) return { ok: false, id, problems };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(file, String(text));
+  // Created whole and never over another: link(2) of the finished temp fails if a session took the id meanwhile.
+  const tmp = path.join(path.dirname(file), `.${id}.md.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`);
+  fs.writeFileSync(tmp, String(text));
+  try { fs.linkSync(tmp, file); } catch (e) {
+    if (e.code === 'EEXIST') return { ok: false, id, problems: [`урок ${id} уже есть`] };
+    throw e;
+  } finally { fs.rmSync(tmp, { force: true }); }
+  refreshTriggers(memDir);
   return { ok: true, id, file, problems: [] };
 }
 
@@ -326,18 +350,25 @@ function repeat(memDir, id, a) { lessonFile(memDir, id); return appendEvent(memD
 
 function retire(memDir, id, a) {
   const f = lessonFile(memDir, id);
-  if (metaOf(f).kind === 'once') throw new Error(`урок ${id} — класс «одного раза» (kind once): в отставку не уходит`);
-  setField(f, 'status', 'retired');
+  const text = fs.readFileSync(f, 'utf8');
+  if (parseLesson(text).meta.kind === 'once') throw new Error(`урок ${id} — класс «одного раза» (kind once): в отставку не уходит`);
+  writeAtomic(f, withField(f, text, 'status', 'retired'));
+  refreshTriggers(memDir);
   return appendEvent(memDir, { ...addr(a), kind: 'retired', lesson: id });
 }
 
+// Both new texts are computed before either file is written: a lesson without frontmatter fails with nothing changed.
 function absorb(memDir, old, neu, kind, a) {
   const fo = lessonFile(memDir, old), fn = lessonFile(memDir, neu);
   if (old === neu) throw new Error(`${old}: урок не сливается сам с собой`);
-  const sup = metaOf(fn).supersedes;
+  const to = fs.readFileSync(fo, 'utf8'), tn = fs.readFileSync(fn, 'utf8');
+  const sup = parseLesson(tn).meta.supersedes;
   const list = Array.isArray(sup) ? sup : [];
-  if (!list.includes(old)) setField(fn, 'supersedes', `[${[...list, old].join(', ')}]`);
-  setField(fo, 'status', 'superseded');
+  const newTo = withField(fo, to, 'status', 'superseded');
+  const newTn = list.includes(old) ? tn : withField(fn, tn, 'supersedes', `[${[...list, old].join(', ')}]`);
+  if (newTn !== tn) writeAtomic(fn, newTn);
+  writeAtomic(fo, newTo);
+  refreshTriggers(memDir);
   return appendEvent(memDir, { ...addr(a), kind, lesson: old, into: neu });
 }
 // merge: `from` goes into `into` (its text is the agent's Edit); supersede: `old` is replaced by the new lesson.
@@ -362,9 +393,10 @@ function ensureTriggers(memDir) {
   const sig = signature(memDir, { events: false });
   const cur = readTriggers(memDir);
   if (cur.sig === sig) return { rebuilt: false, count: cur.lessons.length };
+  // Only lessons the write check would accept: a file written past the hook (Bash, an external import) gets no trigger.
   const lessons = loadDocs(memDir)
     .filter((d) => d.dir === 'lessons' && LIVE.includes(d.status) && Array.isArray(d.meta.when) && d.meta.when.length)
-    .filter((d) => !compileWhen(d.meta.when).problems.length)
+    .filter((d) => !validateLesson(d.raw, { file: `${path.basename(memDir)}/${d.rel}` }).length)
     .map((d) => ({ id: d.id, kind: d.kind, layer: layer(d), first: d.first, when: d.meta.when }));
   const now = signature(memDir, { events: false });
   const file = path.join(memDir, TRIGGERS);

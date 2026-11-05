@@ -22,6 +22,12 @@ const STATUSES = ['core', 'active', 'retired', 'superseded'];
 const SOURCES = ['пользователь', 'модель', 'внешний'];
 const WHEN_FIELDS = ['tool', 'cmd', 'path', 'body', 'out'];
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
+// A whole word: «пользовательский» is not «пользователь».
+const SOURCE_RE = /^(?:пользователь|модель|внешний)(?=$|[\s(,.:;—-])/;
+const realDate = (s) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  return /^\d{4}-\d\d-\d\d$/.test(String(s)) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
 const FIRST_MAX = 160;
 
 const layer = (meta) => (meta.status === 'core' ? 'core' : meta.status === 'active' ? 'touch' : 'archive');
@@ -112,13 +118,17 @@ function compileWhen(when) {
 }
 
 // Lessons are facts, not orders: text that would act (push, send, delete) or points outside (URL) is refused.
+// `git` may carry global options before the subcommand (`git -C <dir> push` is the hub's own form); `rm` flags may
+// come split or long (`rm -r -f`, `--recursive --force`).
+const GIT = String.raw`\bgit(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*\s+`;
 const DANGER = [
-  [/\bgit\s+push\b/i, 'git push'],
-  [/\bgit\s+reset\s+--hard\b/i, 'git reset --hard'],
-  [/\bgit\s+clean\s+-\w*f/i, 'git clean -f'],
-  [/\bgit\s+branch\s+-D\b/, 'git branch -D'],
-  [/\brm\s+-\w*(?:r\w*f|f\w*r)/i, 'rm -rf'],
+  [new RegExp(`${GIT}push\\b`, 'i'), 'git push'],
+  [new RegExp(`${GIT}reset\\s+--hard\\b`, 'i'), 'git reset --hard'],
+  [new RegExp(`${GIT}clean\\s+-\\w*f`, 'i'), 'git clean -f'],
+  [new RegExp(`${GIT}branch\\s+-D\\b`), 'git branch -D'],
+  [/\brm\b(?=[^\n`;|&]*\s(?:-\w*r|--recursive\b))(?=[^\n`;|&]*\s(?:-\w*f|--force\b))/i, 'rm -rf'],
   [/\bcurl\b[^\n`]*\s(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--request\s+(?:POST|PUT|PATCH|DELETE)|-d\b|--data\b|-F\b|--form\b|-T\b)/i, 'curl с отправкой'],
+  [/\bwget\b[^\n`]*--(?:post-(?:data|file)|method[= ](?:POST|PUT|PATCH|DELETE))/i, 'wget с отправкой'],
   [/\b(?:gh|glab)\s+(?:pr|mr|release|issue|repo)\s+(?:create|merge|close|delete|edit)\b/i, 'gh/glab create|merge|delete'],
   [/\bnpm\s+publish\b/i, 'npm publish'],
   [/\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b/i, 'DROP/TRUNCATE'],
@@ -155,8 +165,8 @@ function validateLesson(buf, { file } = {}) {
   }
   if ('kind' in meta && !KINDS.includes(meta.kind)) problems.push(`kind «${meta.kind}»: нужен один из ${KINDS.join(', ')}`);
   if ('status' in meta && !STATUSES.includes(meta.status)) problems.push(`status «${meta.status}»: нужен один из ${STATUSES.join(', ')}`);
-  if ('created' in meta && !/^\d{4}-\d\d-\d\d$/.test(meta.created)) problems.push(`created «${meta.created}»: нужна дата ГГГГ-ММ-ДД`);
-  if ('source' in meta && !SOURCES.some((s) => String(meta.source).startsWith(s))) {
+  if ('created' in meta && !realDate(meta.created)) problems.push(`created «${meta.created}»: нужна дата ГГГГ-ММ-ДД`);
+  if ('source' in meta && !SOURCE_RE.test(String(meta.source))) {
     problems.push(`source «${meta.source}»: начинается с одного из ${SOURCES.join(', ')}`);
   }
   if (String(meta.source || '').startsWith('внешний') && (['rule', 'once'].includes(meta.kind) || meta.status === 'core')) {
@@ -172,11 +182,12 @@ function validateLesson(buf, { file } = {}) {
   }
   if (Array.isArray(meta.when)) problems.push(...compileWhen(meta.when).problems);
   if (body.length < 2 || body.length > 5) problems.push(`текст урока — 2–5 строк, а их ${body.length}`);
+  if (body.length && !body[0].trim()) problems.push('первая строка текста пустая: подаётся именно она — убери пустую строку после ---');
   if (body.length && [...body[0]].length > FIRST_MAX) problems.push(`первая строка — ${[...body[0]].length} знаков (лимит ${FIRST_MAX})`);
   const prose = [...body, ...(Array.isArray(meta.keys) ? meta.keys : [])].join('\n');
   if (URL_RE.test(prose)) problems.push('URL в тексте урока: урок — факт, не ссылка наружу');
   for (const [re, name] of DANGER) {
-    if (re.test(body.join('\n'))) problems.push(`команда пуша/отправки/удаления в тексте урока (${name}): урок — факт, не приказ`);
+    if (re.test(prose)) problems.push(`команда пуша/отправки/удаления в тексте урока (${name}): урок — факт, не приказ`);
   }
   return problems;
 }
