@@ -179,9 +179,11 @@ module.exports = {
     return [
       { id: 'real:hit', real: true, source: SRC, pass: r1.hits >= 17, detail: `${own}: попадание ${r1.hits}/${r1.n} (${kinds(r1)}); вне матчера PostToolUse ${r1.unseen}; промахи: ${misses(r1)}` },
       { id: 'noise-base', observe: true, source: NOISE, pass: r1.noiseTrue <= 1 / 20 && r1.medianTrue <= 10, detail: base(r1, own) },
-      { id: 'merged-base', observe: true, source: NOISE, pass: rm.hits >= 17 && rm.noiseTrue <= 1 / 20 && rm.medianTrue <= 10,
-        detail: `семейства слиты: попадание ${rm.hits}/${rm.n}; ${base(rm, 'шум')}` },
-      { id: 'goal-22', observe: true, source: SRC, pass: r1.hits >= 22, detail: `цель 22/32: как есть ${r1.hits}, слиты ${rm.hits}` },
+      ...(memDir ? [] : [
+        { id: 'merged-base', observe: true, source: NOISE, pass: rm.hits >= 17 && rm.noiseTrue <= 1 / 20 && rm.medianTrue <= 10,
+          detail: `семейства слиты: попадание ${rm.hits}/${rm.n}; ${base(rm, 'шум')}` },
+      ]),
+      { id: 'goal-22', observe: true, source: SRC, pass: r1.hits >= 22, detail: memDir ? `цель 22/32: ${own} ${r1.hits}` : `цель 22/32: как есть ${r1.hits}, слиты ${rm.hits}` },
       { id: 'skipped-when', observe: true, source: 'горячий путь: `when` с вложенным повтором не берётся', pass: true,
         detail: `уроков без единого годного when: ${r1.skipped} из ${corpus.lessons.length}; прогон ${Date.now() - t0} мс` },
     ];

@@ -49,6 +49,9 @@ function checkWrite(ev, ctx) {
 // Commands worth reading: they name the memory, or remove / move something (a folder that holds the memory).
 const GATE = /lessons|decisions|memory|\b(?:rm|rmdir|shred|mv|find)\b/;
 const DESTROY = new Set(['rm', 'unlink', 'shred', 'rmdir']);
+// Programs a find -exec may run over the memory without writing it.
+const FIND_READERS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'wc', 'cat', 'head', 'tail', 'ls', 'stat', 'file', 'md5sum', 'sha1sum',
+  'sha256sum', 'du', 'echo', 'printf', 'basename', 'dirname', 'realpath', 'readlink', 'test', '[', 'diff', 'cmp', 'jq', 'less']);
 const WRITE_ALL = new Set(['tee', 'touch', 'truncate']);
 const WRITE_TARGET = new Set(['cp', 'install', 'ln', 'rsync']);
 const INTERP = new Set(['node', 'nodejs', 'python', 'python3', 'perl', 'ruby', 'deno', 'bun', 'php']);
@@ -197,23 +200,24 @@ function bashWritesMemory(cmd, cwd, mem) {
       const sources = opt(args, ['-t', '--target-directory']) != null ? plain.filter((x) => x !== target) : plain.slice(0, -1);
       t = hit(target) || (sources.some((x) => /^(lessons|decisions)$/.test(path.basename(expand(x).replace(/\/+$/, '')))) ? hit(target, 'into') : null);
     } else if (n === 'find') {
-      // -delete, or -exec of a program that writes (rm, mv, sed -i …); -exec grep / wc reads.
-      const ex = args.findIndex((x) => /^-(exec|execdir|ok|okdir)$/.test(x));
-      const prog = ex >= 0 ? path.basename(String(args[ex + 1] || '')) : '';
-      const progArgs = ex >= 0 ? args.slice(ex + 2) : [];
-      const writes = args.includes('-delete') || DESTROY.has(prog) || WRITE_ALL.has(prog) || prog === 'mv' || WRITE_TARGET.has(prog)
-        || ((prog === 'sed' || prog === 'perl') && progArgs.some(IN_PLACE)) || INTERP.has(prog);
-      if (writes) {
+      // -delete, or any -exec / -ok whose program is not a known reader (sh -c, env rm, gzip … write): the start paths
+      // inside the memory are judged. A folder above the memory is not: find deletes by its mask, not the memory.
+      const progs = args.flatMap((x, k) => (/^-(exec|execdir|ok|okdir)$/.test(x) ? [path.basename(String(args[k + 1] || ''))] : []));
+      if (args.includes('-delete') || progs.some((p) => !FIND_READERS.has(p))) {
         const starts = [];
         for (const x of args) { if (x.startsWith('-') || x === '(' || x === '!') break; starts.push(x); }
-        t = starts.map((x) => hit(x, args.includes('-delete') || DESTROY.has(prog) ? 'destroy' : 'write')).find(Boolean);
+        t = starts.map((x) => hit(x, 'into')).find(Boolean);
       }
     } else if ((n === 'sed' || n === 'perl') && args.some(IN_PLACE)) t = plain.map((x) => hit(x)).find(Boolean);
     else if ((n === 'awk' || n === 'gawk') && (args.some((x, i) => x === '-i' && args[i + 1] === 'inplace') || args.includes('--inplace'))) t = plain.map((x) => hit(x)).find(Boolean);
     else if (n === 'patch') t = hit(opt(args, ['-o', '--output'])) || hit(plain[0]);
     else if (n === 'dd') t = args.filter((x) => x.startsWith('of=')).map((x) => hit(x.slice(3))).find(Boolean);
-    else if (n === 'curl') t = hit(opt(args, ['-o', '--output']));
-    else if (n === 'wget') t = hit(opt(args, ['-O', '--output-document'])) || hit(opt(args, ['-P', '--directory-prefix']));
+    else if (n === 'curl') t = hit(opt(args, ['-o', '--output'])) || hit(opt(args, ['--output-dir']));
+    else if (n === 'wget') {
+      // A recursive download into the memory makes its folders (lessons/ too); a single file there does not.
+      const deep = args.some((x) => /^-[a-zA-Z]*[rm]/.test(x) && !x.startsWith('--') || x === '--recursive' || x === '--mirror');
+      t = hit(opt(args, ['-O', '--output-document'])) || hit(opt(args, ['-P', '--directory-prefix']), deep ? 'into' : 'write');
+    }
     else if (n === 'tar' && ((args[0] && /^[a-zA-Z]*x[a-zA-Z]*$/.test(args[0])) || args.some((x) => /^-[a-zA-Z]*x[a-zA-Z]*$/.test(x)) || args.includes('--extract'))) {
       t = hit(opt(args, ['-C', '--directory']), 'into');
     }
