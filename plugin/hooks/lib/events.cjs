@@ -1,8 +1,8 @@
 // Event journal of the delivery (slice 12): every delivery — shown, dropped by a limit, a deny / block / ask — and
 // every outcome of a «prevented» window — repeat, prevented, expired — is one JSON line in
-// <data>/events/<YYYY-MM>.jsonl, the month of its `at`. All lines of one hook call go in one appendFileSync
-// (O_APPEND, one write; P15: 7 processes with kill -9 tore none at this size); a line stays small, fields are cut; a
-// torn tail is closed with a newline first.
+// <data>/events/<YYYY-MM>.jsonl, the month of its `at`. All lines of one hook call go in one write to a file opened
+// for append (O_APPEND; P15: 7 processes with kill -9 tore none at this size); a line stays small, fields are cut; a
+// torn tail is closed with a newline in the same write.
 // The format is shared with the memory events (slice 14): {at, kind, lesson | rule, session_id, agent_id,
 // tool_use_id, epoch, model, mode, ...}. The reader skips a torn line and counts it.
 // usage: node events.cjs stats [YYYY-MM]  — the «prevented» counter from the journal of the hooks' data folder

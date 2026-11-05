@@ -12,7 +12,7 @@ const { dir: dataDir } = require('./journal.cjs');
 const SWEEP_DAYS = 30;
 // The critical section takes a millisecond: a lock older than LOCK_STALE_MS has a dead owner, and the wait is longer
 // than that, so a hook killed a moment ago costs a wait, not a lost update.
-const LOCK_WAIT_MS = 1200, LOCK_STALE_MS = 1000;
+const LOCK_WAIT_MS = 2000, LOCK_STALE_MS = 1500;
 const V = 1;
 
 const freshAgent = (epoch) => ({ epoch, counts: { lesson: 0, reminder: 0 }, calls: 0, recent: [], shown: {}, once: {}, detectors: {}, pending: [] });
@@ -112,6 +112,7 @@ function startEpoch(ev, dir = dataDir(), close = expireAll) {
 
 // SessionEnd: the windows of every agent of the session close (close(agent) → events).
 function endSession(sid, dir = dataDir(), close = expireAll) {
+  if (!fs.existsSync(file(sid, dir))) return { events: [], model: null };
   return update(sid, (st) => {
     const out = [];
     for (const id of Object.keys(st.agents)) {
