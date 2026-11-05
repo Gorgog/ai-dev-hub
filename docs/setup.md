@@ -28,9 +28,11 @@
 Bash с `git push` (правило `push` = ask намеренно), 3 прочих; обратимых чтений и проверок — 0. Список пуст.
 
 ## base-rules.json
-Сняты `agent-memory-write` и `agent-memory-shell`: запись в `.claude/agent-memory` запрещает модуль `agent-roles`
-(срез 13). `cd-no-subshell` остаётся, пока переменная `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` не стоит и не
-проверена вживую: дрейф cwd 05.11 — 872 из 4069 Bash основной сессии (21 %); с переменной (P1) — 0.
+Без изменений. `agent-memory-write` и `agent-memory-shell` дублируют модуль `agent-roles` (срез 13), но остаются, пока
+он в `canary`: иначе вне канареечных проектов напоминание пропадёт; снять — когда `agent-roles` перейдёт в `on`.
+`cd-no-subshell` остаётся, пока переменная `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` не стоит и не проверена вживую:
+дрейф cwd 05.11 — 872 из 4069 Bash основной сессии (21 %); с переменной (P1) — 0. `sed-in-place`, `git-add-all` —
+режим log (deny по журналу rules-guard дал бы ложные блоки выше порога).
 
 ## Выкат и откат
 R1 (скилл) + R2 (модуль SessionStart, новый файл, имена прежних не меняются). Модуль приходит в стадии `canary`:
