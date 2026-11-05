@@ -118,3 +118,16 @@ test('a lesson of an external source never comes as a core rule; a broken file i
   assert.doesNotMatch(text, /Внешний текст|нет frontmatter/);
   assert.match(text, /\[cd-subshell\]/);
 });
+
+test('the core block within a small room: whole lines only, what does not fit goes to the «по касанию» line by id', () => {
+  const { coreBlock } = require('./session-start.cjs');
+  const layers = { core: ['a-one', 'b-two', 'c-three'].map((id) => ({ id, first: `Правило ${id} — достаточно длинное, чтобы не влезть.` })), touch: 2 };
+  const full = coreBlock(layers, 10000);
+  assert.match(full, /\[c-three\]/);
+  const room = full.length - 10;
+  const cut = coreBlock(layers, room);
+  assert.ok(cut.length <= room, cut);
+  assert.doesNotMatch(cut, /^- .*\[c-three\]$/m);
+  assert.match(cut, /по касанию: c-three/);
+  assert.match(cut, /ещё 2 урока/);
+});

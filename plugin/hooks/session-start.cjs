@@ -2,16 +2,20 @@
 // SessionStart: a short brief of the hub project into Claude's context instead of «read the index first».
 // Project, branch and changes; preflight (configs parse, checks background, index limits); the errors index (cut
 // to the budget); the latest session note of this branch — its «Дальше». Silent outside projects/<name>/ of the hub.
-// A library of the module sessionstart.d/10-memory-brief.cjs.
+// A project with memory v2 (memory/lessons/) on the canary of memory-core (slice 29) gets the core of lessons
+// (status core, ≤ CORE_MAX lines) in place of the index: the rest comes by touch (the lesson hooks) and /hub:recall.
+// A library of the modules sessionstart.d/10-memory-brief.cjs and 11-memory-core.cjs.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { findProject, HUB_ROOT } = require('./rules-guard.cjs');
+const { parseLesson } = require('../lib/memory/format.cjs');
 
 const BUDGET = 9500;
 const NOTE_BUDGET = 1500;
 const CORE_MAX = 15;
+const CORE_RECORD = path.join(__dirname, '..', 'mechanisms', 'memory-core.json');
 
 const git = (cwd, ...a) => {
   try { return execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; }
@@ -89,20 +93,86 @@ function workTree(cwd, proj) {
   return null;
 }
 
-function buildBrief(cwd, hub = HUB_ROOT, version = '') {
+// ---------- the core of lessons (memory v2, slice 29) ----------
+
+const LESSONS = (dir) => path.join(dir, 'memory', 'lessons');
+const KIND_ORDER = { once: 0, rule: 1, knowledge: 2, decision: 3 };
+
+// Live lessons as the brief needs them: the core (first line and id; class «once» first, then by date and id) and the
+// count of the rest by touch. A file without frontmatter is skipped (memory-check names it); a lesson of an external
+// source is never a core rule (format.cjs refuses it too) — it counts as by touch.
+function lessonLayers(dir) {
+  let files = [];
+  try { files = fs.readdirSync(LESSONS(dir)).filter((f) => f.endsWith('.md') && !f.startsWith('.')).sort(); } catch { return null; }
+  const core = [];
+  let touch = 0;
+  for (const f of files) {
+    const text = read(path.join(LESSONS(dir), f));
+    if (text === null) continue;
+    const { meta, body, frontmatter } = parseLesson(text.replace(/\u0000/g, ''));
+    if (!frontmatter) continue;
+    const first = (body.find((l) => l.trim()) || '').trim();
+    const external = String(meta.source || '').startsWith('внешний');
+    if (meta.status === 'core' && first && !external) core.push({ id: f.slice(0, -3), first, kind: meta.kind, created: String(meta.created || '') });
+    else if (meta.status === 'core' || meta.status === 'active') touch++;
+  }
+  const rank = (l) => (l.kind in KIND_ORDER ? KIND_ORDER[l.kind] : 9);
+  core.sort((a, b) => rank(a) - rank(b) || a.created.localeCompare(b.created) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return { core, touch };
+}
+
+// memory-core gives the brief where the spine runs it: its record on, or canary with the project's canary.json naming
+// its id or handler (the same test as run.cjs) — and only in a project with memory/lessons/. memory-brief steps aside
+// exactly there, so the session gets one brief, never two or none.
+function coreOn(proj) {
+  if (!proj || !fs.existsSync(LESSONS(proj.dir))) return false;
+  const rec = readJsonSafe(CORE_RECORD);
+  if (!rec || rec.stage === 'off') return false;
+  if (rec.stage === 'on') return true;
+  const canary = readJsonSafe(path.join(proj.dir, 'canary.json'));
+  return rec.stage === 'canary' && !!canary && Array.isArray(canary.mechanisms)
+    && canary.mechanisms.some((m) => m === rec.id || m === rec.handler);
+}
+
+const lessonsWord = (n) => {
+  const d = n % 10, h = n % 100;
+  return d === 1 && h !== 11 ? 'урок' : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 'урока' : 'уроков';
+};
+
+// The core block within `room` characters: whole lines only, what does not fit goes to the «по касанию» line by id.
+function coreBlock(layers, room) {
+  const shown = layers.core.slice(0, CORE_MAX);
+  const over = layers.core.slice(CORE_MAX).map((l) => l.id);
+  const foot = () => [
+    over.length ? `Ядро сверх ${CORE_MAX} — по касанию: ${over.join(', ')}` : '',
+    `По касанию — ещё ${layers.touch} ${lessonsWord(layers.touch)}: хук подаёт урок при касании его темы, поиск — /hub:recall. `
+      + 'memory/errors-index.md — выводимый экспорт, не читать.',
+  ].filter(Boolean);
+  const lines = shown.map((l) => `- ${l.first} [${l.id}]`);
+  const text = () => ['Ядро уроков (memory/lessons/, status core) — действует всегда:', ...lines, ...foot()].join('\n');
+  while (text().length > room && lines.length) { lines.pop(); over.unshift(shown[lines.length].id); }
+  return text();
+}
+
+function buildBrief(cwd, hub = HUB_ROOT, version = '', { core = false } = {}) {
   const proj = findProject(cwd, hub);
   if (!proj || !fs.existsSync(proj.dir)) return '';
+  const layers = core ? lessonLayers(proj.dir) : null;
   const wt = workTree(cwd, proj) || (fs.existsSync(path.join(proj.dir, 'repo')) ? path.join(proj.dir, 'repo') : null);
   const branch = wt ? git(wt, 'branch', '--show-current') : '';
   const changed = wt ? git(wt, 'status', '--porcelain').split('\n').filter(Boolean).length : 0;
   const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}${version ? ` · хаб ${version}` : ''}`];
   const warn = preflight(proj.dir);
+  if (layers && layers.core.length > CORE_MAX) {
+    warn.push(`ядро уроков: ${layers.core.length} > ${CORE_MAX} — лишние перевести в active (/hub:memory-gc), сверх ${CORE_MAX} подаются по касанию`);
+  }
   if (warn.length) head.push('Предполётная проверка:', ...warn.map((w) => `- ${w}`));
   const note = latestNote(proj.dir, branch);
   const tail = [];
   if (note) tail.push(`Последняя заметка этой ветки: ${note.file}`, note.next ? `Дальше:\n${note.next}` : '');
-  const raw = read(path.join(proj.dir, 'memory', 'errors-index.md'));
   const room = BUDGET - head.join('\n').length - tail.join('\n').length - 200;
+  if (layers) return [...head, coreBlock(layers, room), ...tail].filter(Boolean).join('\n').slice(0, BUDGET);
+  const raw = read(path.join(proj.dir, 'memory', 'errors-index.md'));
   let idx = raw;
   const cfg = readJsonSafe(path.join(proj.dir, 'brief.json'));
   if (raw !== null && cfg && Array.isArray(cfg.indexSections)) {
@@ -120,7 +190,22 @@ function buildBrief(cwd, hub = HUB_ROOT, version = '') {
   return [...head, body ? `Правила из ошибок (memory/errors-index.md):\n${body}` : '', ...tail].filter(Boolean).join('\n').slice(0, BUDGET);
 }
 
-module.exports = { buildBrief, workTree, BUDGET, CORE_MAX };
+// The brief as delivery items (decision 05.11): the header and the rules (index or core) are instructions of the hub
+// and go as they are; the note of the session — written by a model — is data from memory, framed by the delivery.
+// Where the note begins: buildBrief puts it last. The first match: rules quoting this line only move more text into
+// the frame, never a note's text out of it.
+const NOTE = '\nПоследняя заметка этой ветки: ';
+function briefItems(brief) {
+  if (!brief) return null;
+  const at = brief.indexOf(NOTE);
+  if (at < 0) return { items: [{ text: brief, priority: 'info', key: 'memory-brief' }] };
+  return { items: [
+    { text: brief.slice(0, at), priority: 'info', key: 'memory-brief' },
+    { text: brief.slice(at + 1), priority: 'info', key: 'memory-brief-note', source: 'memory' },
+  ] };
+}
+
+module.exports = { buildBrief, briefItems, coreOn, lessonLayers, coreBlock, workTree, BUDGET, CORE_MAX };
 
 // v1 entry of SessionStart, kept for sessions started before the spine (their hooks.json calls this file): the
 // brief now comes from sessionstart.d/10-memory-brief.cjs through the spine.
