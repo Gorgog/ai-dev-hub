@@ -608,3 +608,34 @@ test('push-slice: network — «  * items()» generator, Makefile @curl / -wget,
   const res = r.push('--solo', '--dry-run');
   assert.strictEqual(res.status, 0, out(res));
 });
+
+// Review round 3 of HUBV2-33 (fixed without a review round, rule 8): «N failures» anywhere in the line is red unless
+// a number of its own follows; a number in front of «word: 0» keeps the counter unless the zero ends it; one-line
+// generators in every shape are code.
+test('push-slice verify: «3 failures» mid-line is red, «2 errors: 0 warnings» stays red, «pass=6 fail=0» stays green', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['10 examples, 3 failures', true], ['1 example, 1 failure', true],
+    ['10 runs, 20 assertions, 3 failures, 0 errors, 0 skips', true], ['Summary: 4 passed, 2 failures', true], ['pass 5 · 1 fail', true],
+    ['5 pass 1 fail', true], ['2 errors: 0 warnings', true], ['Found 2 errors: 0 fixable', true], ['1 failed: 0 passed', true],
+    ['1 failed=0 skipped', true], ['10 runs, 20 assertions, 0 failures, 0 errors, 0 skips', false], ['pass=6 fail=0', false],
+    ['pass 6 fail 0 skip 1', false], ['A: pass 15 fail 0 · 15 db=wt_a · too many clients: 0', false], ['tests 6 failures 0', false]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+test('push-slice: network — one-line generators with a space after «*» in every shape are code, a JSDoc line is not', (t) => {
+  for (const [i, line] of ['  * items(): Generator<Promise<Response>> { yield fetch(url); }', '  * items(a = f()) { yield fetch(url); }',
+    '  * [Symbol.iterator]() { yield fetch(url); }', '  * #items() { yield fetch(url); }', '  * items<T>() { yield fetch(url); }'].entries()) {
+    const file = `src/g${i}.ts`;
+    const r = stand(t, { files: { [file]: `class A {\n${line}\n}\n` } });
+    const res = r.push('--solo', '--dry-run');
+    assert.strictEqual(res.status, 1, `${line}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — src/g${i}\\.ts`), line);
+  }
+  const r = stand(t, { files: { 'src/doc3.ts': '/**\n * fetch(url) returns the body; see {@link https://example.test}.\n * Example: await fetch(url)\n */\nexport const a = 1;\n' } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+});
