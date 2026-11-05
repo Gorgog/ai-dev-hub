@@ -144,7 +144,8 @@ test('validator: source is a whole word; created is a real date', () => {
 // Review round 2 (05.11): no exponential backtracking; keys are search labels, not text that acts.
 test('validator: 30 flags after `git` without a subcommand — linear time, not exponential', () => {
   const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
-  for (const tail of [`${'--a '.repeat(30)}x`, `${'-C a '.repeat(30)}x`, `${'-c k=v '.repeat(30)}x`]) {
+  for (const tail of [`${'--a '.repeat(30)}x`, `${'-C a '.repeat(30)}x`, `${'-c k=v '.repeat(30)}x`,
+    `${'-C -x '.repeat(30)}x`, `${'-c '.repeat(40)}x`]) { // review round 3: an option argument that looks like a flag
     const t0 = Date.now();
     problems(`${head}Пример: git ${tail}.\nВторая.\n`);
     assert.ok(Date.now() - t0 < 200, `${tail.slice(0, 12)}…: ${Date.now() - t0} мс`);
