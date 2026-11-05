@@ -101,6 +101,14 @@ test('check names a NUL lesson and a torn event line; export → import → the 
   assert.deepStrictEqual(fs.readdirSync(path.join(out, 'v1')).sort(), ['decisions.md', 'errors-index.md', 'errors.md']);
 });
 
+test('SKILL.md: the sample lesson passes the validator (the doc shows a format that is accepted)', () => {
+  const { validateLesson } = require('../../../lib/memory/format.cjs');
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const sample = skill.match(/```\n(---\n[\s\S]*?)```/)[1];
+  const id = sample.match(/^id: (.+)$/m)[1];
+  assert.deepStrictEqual(validateLesson(Buffer.from(sample), { file: `memory/lessons/${id}.md` }), []);
+});
+
 test('usage: no command or an unknown one — code 2 with the list of commands', () => {
   const { mem } = project();
   const r = run(['--memory', mem, 'frobnicate']);
