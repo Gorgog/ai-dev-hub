@@ -109,6 +109,8 @@ test('decide by program: source файла, запуск по пути, прог
     'tar --to-command="npx jest" -xf a.tar', "rg --pre 'npx jest' x .", "node polygon/run.cjs --only 'M01|M02' --model opus"])
     assert.ok(prog(p, cmd), `ждали блок: ${cmd}`);
   assert.ok(prog(p, "sed 's/x/npx jest/e' a.txt"), 's///e');
+  assert.ok(prog(p, "sed --expression='1e npx jest' a.txt"), 'sed --expression= (ревью р3)');
+  assert.ok(prog(p, "sed -n --expression '1e npx jest' a.txt"), 'sed --expression <скрипт>');
   for (const cmd of ['. ./lib.sh; echo $L', 'git log --oneline -3', "sed -n '1,5p' a.txt", "sed -i 's/npx jest/x/' a.txt", 'tar -xf a.tar',
     "sed -i 's#node a/snippets/x.cjs#node /home/george/b/snippets/x.cjs#; s#--a#--b#' c.json"])
     assert.strictEqual(prog(p, cmd), null, cmd);
