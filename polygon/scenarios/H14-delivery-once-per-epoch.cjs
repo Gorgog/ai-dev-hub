@@ -9,7 +9,7 @@ const { makeHub } = require('../lib/hub.cjs');
 const { runEvent } = require('../lib/hooks.cjs');
 
 const SRC = 'plan.md: «Подача (срез 12)» — ключ «уже показан» = (session_id, agent_id, эпоха); P16 — границы эпох';
-const CD = 'cd /tmp && ls';
+const CD = "sed -i 's/a/b/' notes.txt"; // a sed-in-place reminder (cd-no-subshell is gone: the cwd is kept)
 
 // Text the hooks hand to Claude for one event: additionalContext of JSON outputs, plain stdout otherwise.
 const said = (res) => res.map((r) => (r.json && r.json.hookSpecificOutput ? r.json.hookSpecificOutput.additionalContext || '' : r.json ? '' : r.stdout)).join('');
@@ -50,7 +50,7 @@ module.exports = {
     c.start('startup');
     const c1 = c.bash('t1', CD), c2 = c.bash('t2', CD);
 
-    const has = (s) => /cd-no-subshell/.test(s);
+    const has = (s) => /sed-in-place/.test(s);
     return [
       { id: 'first-shown', source: SRC, pass: has(r1), detail: `первое напоминание: ${r1.slice(0, 80) || 'пусто'}` },
       { id: 'repeat-silent', kind: 'quiet', source: SRC, pass: has(r1) && !has(r2), detail: `повтор в той же эпохе: ${r2.slice(0, 80) || 'пусто'}` },

@@ -22,17 +22,17 @@ module.exports = {
     const ctx = (res) => res.map((r) => (r.json && r.json.hookSpecificOutput && r.json.hookSpecificOutput.additionalContext) || '').join('');
 
     runEvent(pluginDir, 'SessionStart', { hook_event_name: 'SessionStart', session_id: 'eval-h16', source: 'startup', cwd: repo }, { AI_DEV_HUB: hub, HUB_LOG_DIR: data });
-    const first = ctx(pre('t1', 'cd /tmp && ls'));
-    const again = ctx(pre('t2', 'cd /tmp && ls'));
+    const first = ctx(pre('t1', "sed -i 's/a/b/' notes.txt"));
+    const again = ctx(pre('t2', "sed -i 's/a/b/' notes.txt"));
     const states = path.join(data, 'sessions');
     let broken = 0;
     try { for (const f of fs.readdirSync(states)) { fs.writeFileSync(path.join(states, f), '\0\0{"agents":'); broken++; } } catch { /* no state: the check below says so */ }
-    const corrupt = pre('t3', 'cd /tmp && ls');
+    const corrupt = pre('t3', "sed -i 's/a/b/' notes.txt");
     const blocked = path.join(work, 'data-h16-file');
     fs.writeFileSync(blocked, '');
-    const noDir = pre('t4', 'cd /tmp && ls', { HUB_LOG_DIR: blocked });
+    const noDir = pre('t4', "sed -i 's/a/b/' notes.txt", { HUB_LOG_DIR: blocked });
     const ask = preToolVerdict(pre('t5', 'git push origin DEMO-1', { HUB_LOG_DIR: blocked }));
-    const has = (s) => /cd-no-subshell/.test(s);
+    const has = (s) => /sed-in-place/.test(s);
     return [
       { id: 'control-dedupe-works', source: 'контроль: исправная подача подавляет повтор', pass: has(first) && !has(again) && broken > 0,
         detail: `первое ${has(first)}, повтор ${has(again)}, файлов состояния ${broken}` },

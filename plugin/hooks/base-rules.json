@@ -1,6 +1,4 @@
 [
-  { "id": "cd-no-subshell", "tools": "^Bash$", "commands": "(^|&&|\\|\\||;|\\n)\\s*cd\\s",
-    "text": "вызовы делят рабочую папку сессии: `cd` — только в подоболочке `( cd /abs && … )`, либо абсолютные пути и `git -C`" },
   { "id": "git-add-all", "tools": "^Bash$", "commands": "\\bgit(\\s+-[Cc]\\s+(\"[^\"]*\"|\\S+))*\\s+add\\s+([^|;&\\n]*\\s)?(-A\\b|--all\\b|\\.(?=\\s|$))",
     "text": "добавляй конкретные пути: `git add -A` / `.` затягивает чужое (agent-memory, мусор, файлы соседних правок)" },
   { "id": "checkout-dot", "tools": "^Bash$", "commands": "\\bgit(\\s+-[Cc]\\s+(\"[^\"]*\"|\\S+))*\\s+(checkout|restore)\\s+([^|;&\\n]*\\s)?(--\\s+)?\\.(?=\\s|$)",
