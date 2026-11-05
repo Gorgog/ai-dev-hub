@@ -119,3 +119,25 @@ test('validator: decisions — the same format with kind decision, file under me
   assert.deepStrictEqual(problems(d, 'memory/decisions/bash-inline-script-to-file.md'), []);
   assert.ok(problems(d).some((p) => /decision/.test(p)));
 });
+
+// Review round 1 (05.11): command forms the hub itself uses, keys, an empty first line, strict source and date.
+test('validator: push/delete in their usual forms — `git -C dir push`, `git -c k=v push`, `rm -r -f`, wget post; and in keys', () => {
+  const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
+  for (const cmd of ['Делай `git -C repo push --force origin main` после сборки.', '`git -c user.name=x push` можно.',
+    'Чисти: `rm -r -f build/`.', 'Чисти: `rm --recursive --force build/`.', 'Шли `wget --post-data=a=1 host/api`.']) {
+    assert.ok(problems(`${head}${cmd}\nВторая строка.\n`).some((p) => /команд/.test(p)), cmd);
+  }
+  assert.deepStrictEqual(problems(`${head}Чисти только \`rm -r build/\` своей ветки, \`git -C repo status\` перед этим.\nВторая.\n`), []);
+  assert.ok(problems(withLine(GOOD, /keys: .*/, 'keys: [git push --force]')).some((p) => /команд/.test(p)));
+});
+
+test('validator: an empty first line of the text is a problem (the delivered line would be empty)', () => {
+  const head = GOOD.slice(0, GOOD.lastIndexOf('---\n') + 4);
+  assert.ok(problems(`${head}\nПервая строка урока.\nВторая.\n`).some((p) => /пуст/.test(p)));
+});
+
+test('validator: source is a whole word; created is a real date', () => {
+  assert.ok(problems(withLine(GOOD, /source: .*/, 'source: пользовательский текст')).some((p) => /source/.test(p)));
+  assert.deepStrictEqual(problems(withLine(GOOD, /source: .*/, 'source: пользователь')), []);
+  assert.ok(problems(withLine(GOOD, /created: .*/, 'created: 2026-13-45')).some((p) => /created/.test(p)));
+});

@@ -143,7 +143,7 @@ test('why: the lesson, its file and the events about it (why it was shown)', () 
   const d = memory(SET);
   S.shown(d, 'cd-subshell', { session_id: 's1', tool_use_id: 'tu-7', epoch: 1, mode: 'hook' });
   const w = S.why(d, 'cd-subshell');
-  assert.strictEqual(w.file, 'memory/lessons/cd-subshell.md');
+  assert.strictEqual(w.file, path.join(d, 'lessons', 'cd-subshell.md')); // absolute: Read takes it from any cwd
   assert.strictEqual(w.lesson.meta.status, 'core');
   assert.deepStrictEqual(w.events.map((e) => [e.kind, e.tool_use_id]), [['shown', 'tu-7']]);
 });
@@ -229,4 +229,73 @@ test('memoryDir: the project memory from a cwd inside it; no lessons/ — the ol
   fs.mkdirSync(path.join(proj, 'memory', 'lessons'));
   assert.strictEqual(S.memoryDir(proj, hub).newFormat, true);
   assert.strictEqual(S.memoryDir(os.tmpdir(), hub), null);
+});
+
+// Review round 1 (05.11).
+test('triggers follow the files on every search and status operation, not only on check', () => {
+  const d = memory(SET);
+  S.find(d, 'heredoc');
+  assert.deepStrictEqual(S.readTriggers(d).lessons.map((l) => l.id).sort(), ['bash-heredoc', 'cd-subshell']);
+  fs.writeFileSync(path.join(d, 'lessons', 'two.md'), lesson('two', 'Второй урок с триггером.', { when: [{ cmd: 'two\\s' }] }));
+  S.find(d, 'второй');
+  assert.ok(S.readTriggers(d).lessons.some((l) => l.id === 'two'));
+  S.retire(d, 'two', {});
+  assert.ok(!S.readTriggers(d).lessons.some((l) => l.id === 'two'));
+  S.merge(d, 'bash-heredoc', 'cd-subshell', {});
+  assert.deepStrictEqual(S.readTriggers(d).lessons.map((l) => l.id), ['cd-subshell']);
+});
+
+test('triggers leave out a lesson the validator refuses (external source in the core)', () => {
+  const d = memory(SET);
+  fs.writeFileSync(path.join(d, 'lessons', 'ext.md'), lesson('ext', 'Внешний текст в ядре.', { source: 'внешний текст', status: 'core',
+    kind: 'knowledge', when: [{ cmd: 'ext' }] }));
+  S.ensureTriggers(d);
+  assert.ok(!S.readTriggers(d).lessons.some((l) => l.id === 'ext'));
+});
+
+test('an event alone makes the index stale: counters in find and the fold follow it', () => {
+  const d = memory(SET);
+  S.ensureIndex(d);
+  S.shown(d, 'bash-heredoc', { session_id: 's1' });
+  assert.strictEqual(S.find(d, 'heredoc').hits[0].shown, 1);
+  assert.deepStrictEqual(S.indexFold(d), S.fold(d));
+  assert.strictEqual(S.ensureIndex(d).rebuilt, false);
+});
+
+test('the first line is the first non-empty line of the text', () => {
+  const d = memory(SET);
+  fs.writeFileSync(path.join(d, 'lessons', 'blank.md'), lesson('blank', 'x').replace(/---\nx\n/, '---\n\nНастоящая первая строка про пробелы.\n'));
+  assert.strictEqual(S.find(d, 'пробелы').hits[0].first, 'Настоящая первая строка про пробелы.');
+});
+
+test('status operations on a CRLF lesson keep CRLF; a failing supersede writes nothing', () => {
+  const d = memory(SET);
+  const f = path.join(d, 'lessons', 'crlf.md');
+  fs.writeFileSync(f, lesson('crlf', 'Урок с CRLF.').replace(/\n/g, '\r\n'));
+  S.retire(d, 'crlf', {});
+  const t = fs.readFileSync(f, 'utf8');
+  assert.match(t, /\r\nstatus: retired\r\n/);
+  assert.doesNotMatch(t.replace(/\r\n/g, ''), /\n/);
+  fs.writeFileSync(path.join(d, 'lessons', 'broken.md'), 'нет frontmatter\nвообще\n');
+  const before = fs.readFileSync(path.join(d, 'lessons', 'prisma-before-tests.md'), 'utf8');
+  assert.throws(() => S.supersede(d, 'broken', 'prisma-before-tests', {}), /frontmatter/);
+  assert.strictEqual(fs.readFileSync(path.join(d, 'lessons', 'prisma-before-tests.md'), 'utf8'), before);
+  assert.throws(() => S.supersede(d, 'prisma-before-tests', 'broken', {}), /frontmatter/);
+  assert.strictEqual(fs.readFileSync(path.join(d, 'lessons', 'prisma-before-tests.md'), 'utf8'), before);
+  assert.strictEqual(S.why(d, 'prisma-before-tests').events.length, 0);
+});
+
+test('check on a node without node:sqlite does not report a broken index', () => {
+  const d = memory(SET);
+  S.ensureIndex(d);
+  const code = `const S=require(${JSON.stringify(path.join(__dirname, 'store.cjs'))});process.stdout.write(JSON.stringify(S.check(${JSON.stringify(d)}).problems))`;
+  const out = JSON.parse(execFileSync(process.execPath, ['-e', code], { env: { ...process.env, HUB_MEMORY_ENGINE: 'js' }, encoding: 'utf8' }));
+  assert.deepStrictEqual(out, []);
+});
+
+test('find and why give an absolute file path that exists', () => {
+  const d = memory(SET);
+  const h = S.find(d, 'heredoc').hits[0];
+  assert.ok(path.isAbsolute(h.file) && fs.existsSync(h.file), h.file);
+  assert.ok(fs.existsSync(S.why(d, 'why-local-plan').file));
 });

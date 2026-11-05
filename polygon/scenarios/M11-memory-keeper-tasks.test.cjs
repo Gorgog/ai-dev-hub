@@ -114,3 +114,23 @@ test('M11: ошибка экранирования в транскрипте —
   edit(st, 'no-env-edit', 'не читать вслух', 'не читать');
   assert.ok(failed(await V['M11-retire'].grade({ run: run(), ctx: st.ctx })).some((f) => /others-untouched/.test(f)));
 });
+
+// Review round 1 (05.11): content-kept must see the absorbed lesson's own text; an Edit miss is escaping only with escapes.
+test('M11-merge: merge без переноса текста поглощённого урока — красное content-kept (в обе стороны)', async () => {
+  for (const [from, into] of [['prisma-client-stale', 'prisma-generate-after-checkout'], ['prisma-generate-after-checkout', 'prisma-client-stale']]) {
+    const st = await fixture('M11-merge');
+    recall(st, 'merge', from, into);
+    assert.ok(failed(await V['M11-merge'].grade({ run: run(), ctx: st.ctx })).some((f) => /content-kept/.test(f)), `${from} → ${into}`);
+  }
+});
+
+test('M11: промах Edit по простому тексту — не экранирование (наблюдение); по тексту с обратной косой — экранирование', async () => {
+  const st = await fixture('M11-retire');
+  recall(st, 'retire', 'mailhog-check');
+  const miss = (old) => ({ turns: 3, costUsd: 0, events: [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu1', name: 'Edit', input: { old_string: old, new_string: 'x' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: 'String to replace not found in file.' }] } },
+    { type: 'result', usage: {} }] });
+  assert.deepStrictEqual(failed(await V['M11-retire'].grade({ run: miss('status:  active'), ctx: st.ctx })), []);
+  assert.ok(failed(await V['M11-retire'].grade({ run: miss('cmd: prettier\\[^|]'), ctx: st.ctx })).some((f) => /no-escaping-errors/.test(f)));
+});
