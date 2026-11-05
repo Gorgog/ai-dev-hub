@@ -65,21 +65,38 @@ const TASKS = [
         detail: `новые строки errors.md: ${v1New.join(' | ').slice(0, 200) || 'нет'}` }] },
 ];
 
-// Bash that writes into the memory (errors.md, decisions.md, lessons/, events/), judged by the TARGET of the write: a
-// redirect, tee, sed -i, the last argument of cp/mv/install/rsync, dd of=, or a script that writes files and names
-// the memory. Reading the memory with a redirect elsewhere (`grep … errors.md > /dev/null`) is not a write.
+// Bash that writes into the memory (errors.md, decisions.md, lessons/, events/), judged by the TARGET of each write in
+// each simple command: a redirect (`>`, `>>`, `&>>`, `2>`), tee, dd of=, sed/perl -i, truncate, the target of
+// cp/mv/install/rsync/ln (`-t DIR` or the last argument), or a script that writes files and names the memory. Heredoc
+// bodies and quoted text with spaces (a note, a sentence) are data, not commands: masked before the checks.
 const MEM_TARGET = /errors(-index)?\.md|lessons\/|decisions\.md|events\//;
 const mem = (t) => MEM_TARGET.test(String(t || '').replace(/^['"]|['"]$/g, ''));
-function writesMemory(cmd) {
-  for (const m of cmd.matchAll(/(?:^|[^<>&0-9])>>?\|?\s*([^\s;|&<>]+)/g)) if (mem(m[1])) return true;
-  for (const m of cmd.matchAll(/\btee\b((?:\s+-[a-z]+)*)\s+([^\s;|&]+)/g)) if (mem(m[2])) return true;
-  for (const m of cmd.matchAll(/\bdd\b[^;|&]*\bof=([^\s;|&]+)/g)) if (mem(m[1])) return true;
-  if (/\bsed\b[^;|&]*\s-i/.test(cmd) && MEM_TARGET.test(cmd)) return true;
-  for (const m of cmd.matchAll(/\b(?:cp|mv|install|rsync|ln)\b([^;|&]*)/g)) {
-    const args = m[1].trim().split(/\s+/).filter((x) => x && !x.startsWith('-'));
-    if (args.length >= 2 && mem(args[args.length - 1])) return true;
+function mask(cmd) {
+  const noHeredoc = cmd.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, (m) => m.slice(0, m.indexOf('\n')));
+  return noHeredoc.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (q) => (/\s/.test(q) ? 'Q' : q.slice(1, -1)));
+}
+function segmentWrites(seg) {
+  for (const m of seg.matchAll(/(?:\d*|&)>>?\|?\s*([^\s<>&|;]+)/g)) if (mem(m[1])) return true;
+  const w = seg.trim().split(/\s+/).filter(Boolean);
+  while (w.length && (/^\w+=/.test(w[0]) || w[0] === 'sudo' || w[0] === 'command')) w.shift();
+  const prog = path.basename(w[0] || '');
+  const args = w.slice(1);
+  const plain = args.filter((x) => !x.startsWith('-'));
+  if (prog === 'tee' || prog === 'truncate') return plain.some(mem);
+  if (prog === 'dd') return args.some((x) => x.startsWith('of=') && mem(x.slice(3)));
+  if ((prog === 'sed' || prog === 'perl') && args.some((x) => /^-[a-zA-Z]*i/.test(x) || x.startsWith('--in-place'))) return plain.some(mem);
+  if (['cp', 'mv', 'install', 'rsync', 'ln'].includes(prog)) {
+    const t = args.findIndex((x) => x === '-t' || x === '--target-directory');
+    if (t >= 0) return mem(args[t + 1]);
+    const eq = args.find((x) => x.startsWith('--target-directory='));
+    if (eq) return mem(eq.split('=')[1]);
+    return plain.length >= 2 && mem(plain[plain.length - 1]);
   }
-  return /writeFileSync|appendFileSync|\bopen\([^)]*['"][wax]\+?['"]|\.write_text\(/.test(cmd) && MEM_TARGET.test(cmd);
+  return false;
+}
+function writesMemory(cmd) {
+  if (/writeFileSync|appendFileSync|\bopen\([^)]*['"][wax]\+?['"]|\.write_text\(/.test(cmd) && MEM_TARGET.test(cmd)) return true;
+  return mask(cmd).split(/\n|;|&&|\|\||(?<![>&])\|(?![|&])/).some(segmentWrites);
 }
 function bashMemoryWrites(events) {
   const out = [];

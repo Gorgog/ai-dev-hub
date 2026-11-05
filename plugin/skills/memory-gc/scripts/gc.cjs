@@ -3,7 +3,7 @@
 //   gc.cjs [--memory <dir>] dups                    pairs of live lessons that are each other's nearest (merge candidates)
 //   gc.cjs retire [--days N] [--now YYYY-MM-DD]     rules not shown nor repeated for N days (default 30) — proposals
 //   gc.cjs review --model <id> | review --list      after a model change: mark every live lesson for review (events);
-//                                                   no model in the events yet — the call writes the baseline
+//                                                   no review mark yet — the call writes the baseline
 //   gc.cjs reviewed <id> [--note <текст>]           the lesson was looked at under the new model
 //   gc.cjs fold [--months 3] [--now YYYY-MM-DD] [--apply]   event months older than N: one shown per lesson
 // Reports change nothing: merge and retire are `recall merge|retire` after the user's «да». Only review/reviewed
@@ -94,17 +94,6 @@ function retire(mem, a) {
     + 'после «да» — `recall retire <id> --note …`):', ...ids.map((id) => `- ${id}`)].join('\n');
 }
 
-// The model of the newest event that names one — the model the lessons were last seen under. Writers of the model:
-// wind-down (`episode.cjs --model`) and this command itself (review / reviewed and the baseline).
-function lastModel(events) {
-  let best = null;
-  for (const e of events) {
-    if (typeof e.model !== 'string' || !e.model) continue;
-    if (!best || String(e.at) >= String(best.at)) best = e;
-  }
-  return best ? best.model : null;
-}
-
 // Per lesson, the newest review-family event: `review` — waits for a look, `reviewed` — done.
 function reviewState(events) {
   const st = {};
@@ -127,21 +116,42 @@ function review(mem, a) {
       ...wait.map((l) => `- ${l.id} (${st[l.id].note || st[l.id].model})`)].join('\n');
   }
   if (!a.model) throw Object.assign(new Error(`review: нужна --model <id> или --list\n${USAGE}`), { code: 2 });
-  const prev = lastModel(events);
-  if (!prev) {
-    // No model in the events yet: this call is the baseline (decision 05.11) — a `reviewed` mark with the model on
-    // every live lesson, so the next call under another model sees the change.
+  // The model each lesson was last looked at under: its own review mark, else the newest mark of any lesson (a lesson
+  // written after it). Only review marks count — a wind-down repeat under the new model must not hide the change.
+  const marks = Object.values(st);
+  if (!marks.length) {
+    // No review mark yet. Any other model the events already carry (wind-down `--model`, delivery) means the lessons
+    // were seen under it — a change, even if a newer event is under this model (a needless review is cheaper than a
+    // missed one). Otherwise this call is the baseline (decision 05.11): `reviewed` with the model on every live
+    // lesson; from then on only review marks count.
+    const prev = newestModel(events.filter((e) => e.model !== a.model));
+    if (prev) return mark(mem, live, () => prev, a.model);
     for (const l of live) {
       appendEvent(mem, { kind: 'reviewed', lesson: l.id, session_id: session(), model: a.model, mode: 'memory-gc', note: 'опорная модель' });
     }
-    return `опорная модель ${a.model} записана для ${live.length} живых уроков — пересмотр не нужен; смена модели будет видна`;
+    return newestModel(events) ? `модель не менялась (${a.model}) — пересмотр не нужен; опорная отметка записана`
+      : `опорная модель ${a.model} записана для ${live.length} живых уроков — пересмотр не нужен; смена модели будет видна`;
   }
-  if (prev === a.model) return `модель не менялась (${prev}) — пересмотр не нужен`;
-  const note = `смена модели ${prev} → ${a.model}`;
-  // Idempotent: a lesson already marked (or reviewed) under this model is not marked again.
-  const todo = live.filter((l) => !(st[l.id] && st[l.id].model === a.model));
-  for (const l of todo) appendEvent(mem, { kind: 'review', lesson: l.id, session_id: session(), model: a.model, mode: 'memory-gc', note });
-  return `${note}: на пересмотр поставлено ${todo.length} из ${live.length} живых уроков (список — review --list)`;
+  const newest = marks.reduce((x, y) => (String(y.at) >= String(x.at) ? y : x)).model;
+  const ref = (l) => (st[l.id] ? st[l.id].model : newest);
+  if (!live.some((l) => ref(l) !== a.model)) return `модель не менялась (${a.model}) — пересмотр не нужен`;
+  return mark(mem, live, ref, a.model);
+}
+
+function mark(mem, live, ref, model) {
+  const todo = live.filter((l) => ref(l) !== model);
+  const from = [...new Set(todo.map(ref))].join(', ');
+  for (const l of todo) {
+    appendEvent(mem, { kind: 'review', lesson: l.id, session_id: session(), model, mode: 'memory-gc', note: `смена модели ${ref(l)} → ${model}` });
+  }
+  return `смена модели ${from} → ${model}: на пересмотр поставлено ${todo.length} из ${live.length} живых уроков (список — review --list)`;
+}
+
+// The model of the newest event that names one — wind-down `--model`, delivery; the reference before any review mark.
+function newestModel(events) {
+  let best = null;
+  for (const e of events) if (typeof e.model === 'string' && e.model && (!best || String(e.at) >= String(best.at))) best = e;
+  return best ? best.model : null;
 }
 
 function reviewed(mem, id, a) {
