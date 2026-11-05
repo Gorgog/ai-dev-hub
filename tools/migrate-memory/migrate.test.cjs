@@ -323,3 +323,14 @@ test('--verify-live: a --map that is missing or not JSON — a usage error, code
     assert.doesNotMatch(r.log, /Traceback/);
   }
 });
+
+test('--verify-live: a --map of valid JSON but the wrong shape — a usage error, code 2, no traceback', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'shape.json');
+  for (const body of ['{"projects":[1]}', '[]', '{"version":1,"projects":{"demo":[1]}}']) {
+    fs.writeFileSync(bad, body);
+    const r = run(['--verify-live', l.mem, '--map', bad]);
+    assert.strictEqual(r.code, 2, `${body}: ${r.log}`);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+});

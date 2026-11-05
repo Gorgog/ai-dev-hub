@@ -198,3 +198,14 @@ test('append under the lock: a fragment of an unlocked writer that lands between
   assert.strictEqual(execFileSync(process.execPath, ['-e', code], { encoding: 'utf8' }), 'ok', 'the fragment was put in on the locked path');
   assert.deepStrictEqual(readEvents(d).events.map((e) => e.lesson), ['a', 'b']);
 });
+
+test('append: 8 processes at once, the lock is busy but nobody is stuck — every write takes the lock (no line crosses a page)', async () => {
+  const d = mem();
+  const lib = path.join(__dirname, 'events.cjs');
+  const code = (w) => `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<400;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'l',session_id:'w${w}',epoch:i,note:'ж'.repeat(150+(i*53+${w}*7)%750),at:'2026-11-05T00:00:00.000Z'})`;
+  await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((w) => new Promise((ok, no) => spawn(process.execPath, ['-e', code(w)], { stdio: 'inherit' })
+    .on('exit', (c) => (c === 0 ? ok() : no(new Error(`писатель ${w}: код ${c}`)))))));
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad.slice(0, 5), [], `строк через страницу: ${p.bad.length}`);
+  assert.strictEqual(readEvents(d).events.length, 3200);
+});
