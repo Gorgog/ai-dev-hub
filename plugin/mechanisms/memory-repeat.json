@@ -6,7 +6,9 @@
   "stage": "canary",
   "onError": "open",
   "failScope": "any",
-  "state": [],
+  "state": [
+    "memory/.triggers-quarantine.json"
+  ],
   "reads": [
     "memory/.triggers.json",
     "<data>/sessions/<session_id>.json"

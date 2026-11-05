@@ -31,15 +31,21 @@ function checkWrite(ev, ctx) {
   try { buf = fs.readFileSync(path.join(mem, rel)); } catch { return null; }
   const { validateLesson, parseLesson } = require('../lib/memory/format.cjs');
   const problems = validateLesson(buf, { file: `memory/${rel}` });
+  const warnings = [];
   if (!problems.length) {
     const { meta } = parseLesson(buf.toString('utf8'));
     (Array.isArray(meta.when) ? meta.when : []).forEach((w, i) => {
       const c = compileItem(w);
       if (c.error) problems.push(`when[${i}].${c.error}: хук его не возьмёт`);
+      else for (const x of c.warn) warnings.push(`memory/${rel}: when[${i}].${x}`);
     });
   }
   try { require('../lib/memory/store.cjs').ensureTriggers(mem); } catch { /* the next search rebuilds it */ }
-  if (!problems.length) return null;
+  if (!problems.length) {
+    // A risky but valid `when` keeps its trigger (the watchdog guards the hot path): named, not blocked.
+    return warnings.length ? { items: [{ text: `Хаб: урок записан, но его триггер стоит сузить:\n${warnings.map((w) => `- ${w}`).join('\n')}`,
+      priority: 'reminder', key: `memory-warn:${rel}`, source: 'memory' }] } : null;
+  }
   return { decision: 'block', reason: `Хаб: урок memory/${rel} не прошёл проверку памяти:\n${problems.slice(0, 12).map((p) => `- ${p}`).join('\n')}\n`
     + 'Исправь файл (Edit/Write) — пока он с ошибкой, у урока нет триггера и подачи. Проверка всей памяти — recall check.' };
 }
@@ -334,10 +340,18 @@ function preflight(ev, ctx) {
   const mem = memoryOf(ctx);
   if (!mem) return null;
   const { problems } = require('../lib/memory/store.cjs').check(mem);
-  // A `when` the hot path will not use (backreference or lookaround with unbounded repetition): the file is valid,
-  // the lesson is silently never delivered by that trigger — named here, for memory written past the write check.
+  // For memory written past the write check: a `when` that does not compile, one that may backtrack long (a warning),
+  // and a source the watchdog cut twice — in the quarantine, skipped by the hot path until the lesson's `when` changes.
+  const q = hot.readQuarantine(mem);
   for (const t of hot.loadTriggers(mem)) {
-    t.when.forEach((w, i) => { const c = compileItem(w); if (c.error) problems.push(`lessons/${t.id}.md: when[${i}].${c.error}`); });
+    t.when.forEach((w, i) => {
+      const c = compileItem(w);
+      if (c.error) problems.push(`lessons/${t.id}.md: when[${i}].${c.error}`);
+      else for (const x of c.warn) problems.push(`lessons/${t.id}.md: when[${i}].${x}`);
+      for (const [k, src] of Object.entries(w && typeof w === 'object' ? w : {})) {
+        if (typeof src === 'string' && q[hot.keyOf(src)]) problems.push(`lessons/${t.id}.md: when[${i}].${k} в карантине — сторож дважды прервал его на поле ${q[hot.keyOf(src)].field}; поправь регэксп, правка снимет карантин`);
+      }
+    });
   }
   if (!problems.length) return null;
   const shown = problems.slice(0, 20).map((p) => `- ${p}`);

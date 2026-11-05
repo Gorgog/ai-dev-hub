@@ -184,7 +184,7 @@ module.exports = {
           detail: `семейства слиты: попадание ${rm.hits}/${rm.n}; ${base(rm, 'шум')}` },
       ]),
       { id: 'goal-22', observe: true, source: SRC, pass: r1.hits >= 22, detail: memDir ? `цель 22/32: ${own} ${r1.hits}` : `цель 22/32: как есть ${r1.hits}, слиты ${rm.hits}` },
-      { id: 'skipped-when', observe: true, source: 'горячий путь: `when` с вложенным повтором не берётся', pass: true,
+      { id: 'skipped-when', observe: true, source: 'горячий путь: `when`, который не компилируется, не берётся (опасные формы — под сторожем vm)', pass: true,
         detail: `уроков без единого годного when: ${r1.skipped} из ${corpus.lessons.length}; прогон ${Date.now() - t0} мс` },
     ];
   },
