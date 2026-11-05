@@ -142,6 +142,33 @@ test('a symlinked settings.json stays a link: the change lands in its target', (
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dots, 'settings.json'), 'utf8')).env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR, '1');
 });
 
+test('a dangling symlink stays a link (its target is created); a wrapper around our status line is the user\'s', () => {
+  const fx = fixture();
+  const dots = path.join(fx.root, 'dots');
+  fs.mkdirSync(dots);
+  fs.symlinkSync(path.join(dots, 'settings.json'), path.join(fx.claude, 'settings.json'));
+  assert.strictEqual(run(fx, ['apply', 'journal-retention']).status, 0);
+  assert.ok(fs.lstatSync(path.join(fx.claude, 'settings.json')).isSymbolicLink(), 'the link survives');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dots, 'settings.json'), 'utf8')).cleanupPeriodDays, 365);
+
+  const wrap = { type: 'command', command: `bash -c "node ${fx.hub}/plugin/skills/setup/scripts/statusline.cjs | tee /tmp/l"` };
+  fs.writeFileSync(path.join(dots, 'settings.json'), JSON.stringify({ statusLine: wrap }));
+  assert.strictEqual(checkJson(fx).find((c) => c.id === 'status-line').ok, true);
+  assert.strictEqual(run(fx, ['apply', 'status-line']).status, 0);
+  assert.deepStrictEqual(settings(fx).statusLine, wrap);
+});
+
+test('the file mode of settings.json is kept, the backup too (keys in env stay private)', () => {
+  const fx = fixture();
+  const file = path.join(fx.claude, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ env: { SOME_KEY: 'x' } }), { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+  assert.strictEqual(run(fx, ['apply', 'bash-cwd']).status, 0);
+  assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+  const bak = fs.readdirSync(fx.claude).find((f) => f.startsWith('settings.json.bak-'));
+  assert.strictEqual(fs.statSync(path.join(fx.claude, bak)).mode & 0o777, 0o600);
+});
+
 test('project files of the dispatcher: missing only where the project uses it; written by hand, a template copy is not ready', () => {
   const fx = fixture();
   assert.deepStrictEqual(checkJson(fx).filter((c) => HAND.includes(c.id)).map((c) => c.ok), [null, null, null], 'no board — not counted');
@@ -223,6 +250,9 @@ test('auto-memory in a worktree: the worktree root gets the local settings, excl
   const c = checkJson(fx, wt2).find((x) => x.id === 'auto-memory');
   assert.strictEqual(c.ok, null);
   assert.match(c.have, /worktree/);
+  assert.doesNotMatch(c.have, /ставит wt-new/, 'no mechanism is named that does not exist');
+  const r = run(fx, ['apply', 'dispatch-rules']);
+  assert.strictEqual((r.stdout.match(/не нужен/g) || []).length, 1, r.stdout);
 });
 
 test('module: SessionStart says «не хватает N» with /hub:setup, silent when nothing is missing or on compact', async () => {
