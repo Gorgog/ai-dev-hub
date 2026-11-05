@@ -204,3 +204,22 @@ test('fold: shown events without lesson or rule, or without at, are kept, not me
   const month = fs.readFileSync(path.join(mem, 'events', '2026-05.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.deepStrictEqual(month.map((e) => `${e.key || e.lesson}:${e.at ? e.at.slice(8, 10) : '-'}`), ['dev-port:02', 'x:03', 'y:04', 'dev-port:-']);
 });
+
+test('review: a wind-down repeat written under the new model before gc does not hide the change (review round 2)', () => {
+  const mem = memory();
+  const ep = path.join(__dirname, '..', '..', 'wind-down', 'scripts', 'episode.cjs');
+  assert.match(run(['--memory', mem, 'review', '--model', 'model-a']).out, /опорная модель model-a/);
+  const w = spawnSync(process.execPath, [ep, '--memory', mem, 'repeat', 'dev-port', '--note', 'снова', '--model', 'model-b'], { encoding: 'utf8' });
+  assert.strictEqual(w.status, 0, w.stderr);
+  const r = run(['--memory', mem, 'review', '--model', 'model-b']);
+  assert.match(r.out, /на пересмотр поставлено 5/);
+  assert.match(run(['--memory', mem, 'review', '--model', 'model-b']).out, /модель не менялась/);
+});
+
+test('review: a lesson written after the baseline is not marked under the same model, is marked after a change', () => {
+  const mem = memory();
+  run(['--memory', mem, 'review', '--model', 'model-a']);
+  fs.writeFileSync(path.join(mem, 'lessons', 'late-one.md'), lesson('late-one', 'Урок, записанный после опорной отметки.'));
+  assert.match(run(['--memory', mem, 'review', '--model', 'model-a']).out, /модель не менялась/);
+  assert.match(run(['--memory', mem, 'review', '--model', 'model-b']).out, /на пересмотр поставлено 6/);
+});

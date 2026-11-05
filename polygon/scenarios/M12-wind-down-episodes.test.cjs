@@ -113,3 +113,13 @@ test('bashMemoryWrites: cp, mv, python, dd into the memory — yes; reading with
   for (const c of ['grep -c 3000 ../memory/errors.md > /dev/null', 'ls ../memory/lessons/ >/tmp/list.txt',
     'cp ../memory/errors.md /tmp/errors.bak', 'wc -l memory/errors.md 2>&1 | tee /tmp/count.txt']) assert.strictEqual(n(c), 0, c);
 });
+
+test('bashMemoryWrites, round 2: &>>, tee --append, cp -t, perl -i, truncate — yes; sed -i elsewhere and heredoc text — no', () => {
+  const { bashMemoryWrites } = variants;
+  const n = (c) => bashMemoryWrites([bash(c)]).length;
+  for (const c of ['echo x &>> memory/errors.md', 'echo x | tee --append memory/errors.md', 'cp -t memory/lessons/ /tmp/d.md',
+    "perl -i -pe 's/a/b/' memory/errors.md", 'truncate -s0 memory/errors.md', "sed -i 's/a/b/' ../memory/errors.md"]) assert.strictEqual(n(c), 1, c);
+  for (const c of ['sed -n 1,5p memory/errors.md; sed -i s/a/b/ /tmp/x',
+    "cat > /tmp/draft.md <<'EOF'\nУрок: не писать > memory/errors.md напрямую\nEOF",
+    "node episode.cjs repeat x --note 'не пишем в memory/lessons/ через cp a b'"]) assert.strictEqual(n(c), 0, c);
+});
