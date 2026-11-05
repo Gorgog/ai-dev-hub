@@ -140,3 +140,12 @@ test('review 2: a report with a question later on its line is a report; a line t
   for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.', 'Готово к пушу — когда?', 'Готово к пушу, если ревью чистое?'])
     assert.strictEqual(isReport(t), null, t);
 });
+
+test('review 3: only the phrase itself is a question; a report without a sha and a question after it is judged', () => {
+  for (const t of ['Готово к пушу. Пушить?', 'Готово к пушу: проверено — пушить?', 'Готово к пушу — ветка K-16, пушить?', 'Готово к пушу: ждёт ответа — пушить?'])
+    assert.strictEqual(isReport(t), 'push', t);
+  for (const t of ['Готово к пушу?', 'Готово к пушу — когда?', '**Готово к пушу** — если ревью чистое?', 'Готово к мержу, или ещё круг?', 'Готово к пушу ли?'])
+    assert.strictEqual(isReport(t), null, t);
+  // Accepted false block (decision 05.11): a sentence after a sign stays a report.
+  assert.strictEqual(isReport('Готово к пушу, но после ревью.'), 'push');
+});
