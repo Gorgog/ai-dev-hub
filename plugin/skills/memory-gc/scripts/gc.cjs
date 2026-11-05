@@ -2,7 +2,8 @@
 // gc — memory-gc over memory v2 of a hub project (skill `memory-gc`); the library is plugin/lib/memory/.
 //   gc.cjs [--memory <dir>] dups                    pairs of live lessons that are each other's nearest (merge candidates)
 //   gc.cjs retire [--days N] [--now YYYY-MM-DD]     rules not shown nor repeated for N days (default 30) — proposals
-//   gc.cjs review --model <id> | review --list      after a model change: mark every live lesson for review (events)
+//   gc.cjs review --model <id> | review --list      after a model change: mark every live lesson for review (events);
+//                                                   no model in the events yet — the call writes the baseline
 //   gc.cjs reviewed <id> [--note <текст>]           the lesson was looked at under the new model
 //   gc.cjs fold [--months 3] [--now YYYY-MM-DD] [--apply]   event months older than N: one shown per lesson
 // Reports change nothing: merge and retire are `recall merge|retire` after the user's «да». Only review/reviewed
@@ -93,11 +94,12 @@ function retire(mem, a) {
     + 'после «да» — `recall retire <id> --note …`):', ...ids.map((id) => `- ${id}`)].join('\n');
 }
 
-// The model of the newest event that names one — the model the lessons were last seen under.
+// The model of the newest event that names one — the model the lessons were last seen under. Writers of the model:
+// wind-down (`episode.cjs --model`) and this command itself (review / reviewed and the baseline).
 function lastModel(events) {
   let best = null;
   for (const e of events) {
-    if (REVIEW.includes(e.kind) || typeof e.model !== 'string' || !e.model) continue;
+    if (typeof e.model !== 'string' || !e.model) continue;
     if (!best || String(e.at) >= String(best.at)) best = e;
   }
   return best ? best.model : null;
@@ -126,7 +128,14 @@ function review(mem, a) {
   }
   if (!a.model) throw Object.assign(new Error(`review: нужна --model <id> или --list\n${USAGE}`), { code: 2 });
   const prev = lastModel(events);
-  if (!prev) return 'модель прошлых событий неизвестна (в событиях нет поля model) — пересмотр не нужен';
+  if (!prev) {
+    // No model in the events yet: this call is the baseline (decision 05.11) — a `reviewed` mark with the model on
+    // every live lesson, so the next call under another model sees the change.
+    for (const l of live) {
+      appendEvent(mem, { kind: 'reviewed', lesson: l.id, session_id: session(), model: a.model, mode: 'memory-gc', note: 'опорная модель' });
+    }
+    return `опорная модель ${a.model} записана для ${live.length} живых уроков — пересмотр не нужен; смена модели будет видна`;
+  }
   if (prev === a.model) return `модель не менялась (${prev}) — пересмотр не нужен`;
   const note = `смена модели ${prev} → ${a.model}`;
   // Idempotent: a lesson already marked (or reviewed) under this model is not marked again.

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // episode — wind-down writes an episode into memory v2 of a hub project; the library is plugin/lib/memory/.
 //   episode.cjs [--memory <dir>] add <draft.md> [--new] [--user-said]   a new episode (lesson file) + its v1 line
-//   episode.cjs repeat <id> --note <что было>                           the same thing again: event + v1 line
+//   episode.cjs repeat <id> --note <что было> [--model <id>]            the same thing again: event + v1 line
+// --model — the session's model id: written into the event, memory-gc sees a model change by it.
 // Rule 7 of the hub: an episode always, a rule by repeat. A first episode is `kind: knowledge`; `kind: rule` right
 // away only with --user-said; class «once» (`kind: once`) at once. A draft close to a lesson already there is not
 // written — it is a repeat (or --new after reading both). Double write: while the project keeps its v1 errors.md, each
@@ -15,16 +16,17 @@ const S = require('../../../lib/memory/store.cjs');
 const { parseLesson } = require('../../../lib/memory/format.cjs');
 const { overlap, wordsOf, MIN_OVERLAP } = require('../../memory-gc/scripts/gc.cjs');
 
-const USAGE = 'команды: add <черновик.md> [--new] [--user-said] · repeat <id> --note <что было>';
+const USAGE = 'команды: add <черновик.md> [--new] [--user-said] · repeat <id> --note <что было> [--model <id>]';
 const V1_WAY = 'памяти нового формата нет: в проекте нет memory/lessons/ — эпизод пиши по-старому, записью в memory/errors.md '
   + '(формат — в шапке файла; Edit или Write, не heredoc)';
 
 function parse(argv) {
-  const a = { _: [], memory: null, note: undefined, fresh: false, userSaid: false };
+  const a = { _: [], memory: null, note: undefined, model: undefined, fresh: false, userSaid: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--memory') a.memory = argv[++i];
     else if (k === '--note') a.note = argv[++i];
+    else if (k === '--model') a.model = argv[++i] || undefined;
     else if (k === '--new') a.fresh = true;
     else if (k === '--user-said') a.userSaid = true;
     else a._.push(k);
@@ -38,7 +40,7 @@ function where(a) {
   return S.memoryDir(process.cwd());
 }
 
-const who = (a) => ({ session_id: process.env.CLAUDE_SESSION_ID || process.env.CLAUDE_CODE_SESSION_ID || undefined, mode: 'wind-down',
+const who = (a) => ({ session_id: process.env.CLAUDE_SESSION_ID || process.env.CLAUDE_CODE_SESSION_ID || undefined, model: a.model, mode: 'wind-down',
   ...(a.note !== undefined ? { note: a.note } : {}) });
 const refuse = (msg) => Object.assign(new Error(msg), { code: 1 });
 
