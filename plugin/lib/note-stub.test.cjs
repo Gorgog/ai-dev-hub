@@ -125,3 +125,13 @@ test('atStart: a previous session that is still fresh (maybe alive), resume and 
   }
   assert.deepStrictEqual(notes(), []);
 });
+
+test('review 1: a wind-down note whose key is only in its title counts (as latestNote reads it)', () => {
+  const { proj, wt, tdir, notes } = setup();
+  const f = path.join(proj.dir, 'memory', 'sessions', '2026-11-05-demo-41-42.md');
+  fs.writeFileSync(f, '# Итог: DEMO-41 / DEMO-42\n');
+  fs.utimesSync(f, (T0 + 60_000) / 1000, (T0 + 60_000) / 1000);
+  const tr = transcript(tdir, 'abcd0001-t', { cwd: wt, branch: 'DEMO-41', tools: 1, edits: 1 });
+  assert.strictEqual(atEnd({ session_id: 'abcd0001-t', transcript_path: tr, cwd: wt }, proj), null);
+  assert.deepStrictEqual(notes(), ['2026-11-05-demo-41-42.md']);
+});

@@ -241,3 +241,22 @@ test('the fast run leaves last-full.json alone', () => {
   assert.strictEqual(res.status, 0, res.stderr);
   assert.ok(!fs.existsSync(git(r, 'rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json').trim()));
 });
+
+test('review 1: last-full.json keeps the HEAD of the start of the run — a commit during a background --full is not «checked»', () => {
+  const hub = tmp();
+  const proj = path.join(hub, 'projects', 'demo');
+  const r = path.join(proj, 'repo');
+  fs.mkdirSync(r, { recursive: true });
+  git(r, 'init', '-q', '-b', 'main');
+  git(r, 'config', 'user.email', 't@t'); git(r, 'config', 'user.name', 't');
+  write(path.join(r, 'a.txt'), '1'); git(r, 'add', '.'); git(r, 'commit', '-q', '-m', 'base');
+  const before = git(r, 'rev-parse', 'HEAD').trim();
+  // The step itself commits: the same as the session committing docs while the full run goes on.
+  write(path.join(proj, 'checks.json'), JSON.stringify({ full: [{ name: 'commits', cmd: 'echo x > d.md && git add d.md && git -c user.email=t@t -c user.name=t commit -q -m docs' }] }));
+  const res = spawnSync(process.execPath, [path.join(__dirname, 'checks.cjs'), '--full', '--base', 'main', '--config', path.join(proj, 'checks.json')],
+    { cwd: r, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: path.join(hub, 'cache') } });
+  assert.strictEqual(res.status, 0, res.stdout + res.stderr);
+  assert.notStrictEqual(git(r, 'rev-parse', 'HEAD').trim(), before, 'the step did commit');
+  const file = git(r, 'rev-parse', '--path-format=absolute', '--git-path', 'hub/last-full.json').trim();
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).sha, before);
+});

@@ -98,3 +98,37 @@ test('facts: a branch behind its base blocks a push report, not a merge report; 
   writeFull(behind, { sha: p.git(behind, 'rev-parse', 'HEAD'), code: 0, clean: true });
   assert.deepStrictEqual(facts(behind, p.proj, 'push'), [], 'an unreadable base is no proof of being behind');
 });
+
+test('review 1: isReport — no punctuation after the phrase, a numbered list, an emoji; a question is not', () => {
+  for (const t of ['Готово к пушу HEAD abc1234, дерево чистое', '1. Готово к пушу: abc1234', 'Готово к пушу ✅ abc1234', 'ГОТОВО К ПУШУ: x'])
+    assert.strictEqual(isReport(t), 'push', t);
+  for (const t of ['Готово к пушу?', 'Готово к пушу — когда?', 'готово к пушуху']) assert.strictEqual(isReport(t), null, t);
+});
+
+test('review 1: target — the own copy whose HEAD the report names wins over a worktree it only mentions', () => {
+  const p = project();
+  const w16 = p.wt('K-16'), w17 = p.wt('K-17');
+  p.commit(w17, 'x.txt');
+  const h16 = p.git(w16, 'rev-parse', '--short', 'HEAD');
+  const h17 = p.git(w17, 'rev-parse', '--short', 'HEAD');
+  assert.strictEqual(target(w16, `Готово к пушу: K-16 ${h16}. Пересекается с worktrees/K-17 (не трогал).`, p.proj), w16);
+  assert.strictEqual(target(w16, `Готово к пушу: работа в worktrees/K-17, HEAD ${h17}`, p.proj), w17);
+  assert.strictEqual(target(w16, 'Готово к пушу: K-16 1234567. Пересекается с worktrees/K-17.', p.proj), w16, 'no sha matches — the own copy');
+  assert.strictEqual(target(p.proj.dir, `Готово к пушу: worktrees/K-17 ${h17}`, p.proj), w17, 'from the project folder — the named one');
+});
+
+test('review 1: base without checks.json — the trunk (main/master), not the branch of the main copy, not a neighbour', () => {
+  const p = project();
+  const feat = p.wt('feat');
+  p.commit(feat, 'f.txt');
+  p.git(p.repo, 'switch', '-q', '-c', 'TASK-1');
+  p.commit(p.repo, 't.txt', 'task commit in the main copy');
+  assert.deepStrictEqual(facts(feat, p.proj, 'push'), [], 'the main copy on a task branch is not the base');
+  p.git(p.repo, 'switch', '-q', '--detach');
+  const other = p.wt('other');
+  p.commit(feat, 'g.txt');
+  assert.deepStrictEqual(facts(other, p.proj, 'push'), [], 'detached main copy: not the neighbour\'s branch');
+  p.git(p.repo, 'switch', '-q', 'main');
+  p.commit(p.repo, 'm.txt', 'main moved');
+  assert.match(facts(other, p.proj, 'push').join(), /отстала от main на 1/);
+});
