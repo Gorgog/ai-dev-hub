@@ -226,3 +226,127 @@ test('--list prints every record with its ref, line and text as JSON lines (the 
 test('usage: no --map / --out → code 2', () => {
   assert.strictEqual(run(['--snapshot', SNAP]).code, 2);
 });
+
+// --verify-live (slice 26, acceptance memory test 4): the live memory of a project after the migration — every v1
+// record has an address (map lesson/decision/archive, or a double-write line «урок <id>» of a lesson that exists),
+// every map lesson/decision is in lessons/ or decisions/, every file there passes validateLesson. Reads only.
+function live() {
+  const r = migrate();
+  assert.strictEqual(r.code, 0, r.log);
+  const mem = path.join(r.dir, 'projects', 'demo', 'memory');
+  fs.cpSync(path.join(SNAP, 'projects', 'demo', 'memory'), mem, { recursive: true });
+  for (const sub of ['lessons', 'decisions']) fs.cpSync(path.join(r.out, MEM, sub), path.join(mem, sub), { recursive: true });
+  const mapFile = path.join(r.dir, 'map.json');
+  return { mem, mapFile, verify: () => run(['--verify-live', mem, '--map', mapFile]) };
+}
+
+test('--verify-live: migrated live memory — code 0, orphans 0, the live tree untouched', () => {
+  const l = live();
+  const before = tree(l.mem);
+  const r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /сирот 0/);
+  assert.deepStrictEqual(tree(l.mem), before);
+});
+
+test('--verify-live: a new v1 record with no address — an orphan, code 1', () => {
+  const l = live();
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), '- Новая запись, которой нет в соответствии.\n');
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /сирота: [^\n]*errors\.md#/);
+});
+
+test('--verify-live: a double-write line «урок <id>» is addressed only when that lesson exists', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), `- Эпизод сессии. (2026-11-06, урок ${id})\n`);
+  let r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /двойная запись 1/);
+  fs.appendFileSync(path.join(l.mem, 'errors.md'), '- Эпизод про несуществующий урок. (2026-11-06, урок nope-lesson)\n');
+  r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /сирота: [^\n]*errors\.md#/);
+});
+
+test('--verify-live: a map lesson missing from lessons/ — named, code 1', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.rmSync(path.join(l.mem, 'lessons', `${id}.md`));
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, new RegExp(`не перенесён: lessons/${id}\\.md`));
+});
+
+test('--verify-live: a lesson file the validator refuses — named, code 1; a valid new lesson is fine', () => {
+  const l = live();
+  const id = demo(MAP).lessons[0].id;
+  fs.copyFileSync(path.join(l.mem, 'lessons', `${id}.md`), path.join(l.mem, 'lessons', 'fresh-one.md'));
+  const fresh = path.join(l.mem, 'lessons', 'fresh-one.md');
+  fs.writeFileSync(fresh, fs.readFileSync(fresh, 'utf8').replace(`id: ${id}`, 'id: fresh-one'));
+  let r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  fs.appendFileSync(path.join(l.mem, 'lessons', `${id}.md`), 'хвост\u0000\n');
+  r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, new RegExp(`${id}\\.md`));
+});
+
+test('--verify-live: a project the map does not know — code 1; no --map — code 2', () => {
+  const l = live();
+  const other = path.join(path.dirname(path.dirname(l.mem)), 'stranger', 'memory');
+  fs.cpSync(l.mem, other, { recursive: true });
+  assert.strictEqual(run(['--verify-live', other, '--map', l.mapFile]).code, 1);
+  assert.strictEqual(run(['--verify-live', l.mem]).code, 2);
+});
+
+test('--verify-live: lines of the real writer — episode.cjs add and repeat («, повтор» in Cyrillic) — are double writes', () => {
+  const l = live();
+  const E = path.join(HERE, '..', '..', 'plugin', 'skills', 'wind-down', 'scripts', 'episode.cjs');
+  const id = demo(MAP).lessons[0].id;
+  const r1 = spawnSync(process.execPath, [E, '--memory', l.mem, 'repeat', id, '--note', 'снова то же'], { encoding: 'utf8', timeout: 30000 });
+  assert.strictEqual(r1.status, 0, `${r1.stdout}${r1.stderr}`);
+  assert.match(fs.readFileSync(path.join(l.mem, 'errors.md'), 'utf8'), new RegExp(`урок ${id}, повтор\\)\\n$`));
+  const r = l.verify();
+  assert.strictEqual(r.code, 0, r.log);
+  assert.match(r.log, /двойная запись 1/);
+});
+
+test('--verify-live: a --map that is missing or not JSON — a usage error, code 2, no traceback', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'bad.json');
+  fs.writeFileSync(bad, '{ не json');
+  for (const m of [path.join(path.dirname(l.mapFile), 'nope.json'), bad]) {
+    const r = run(['--verify-live', l.mem, '--map', m]);
+    assert.strictEqual(r.code, 2, r.log);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+});
+
+test('--verify-live: a --map of valid JSON but the wrong shape — a usage error, code 2, no traceback', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'shape.json');
+  for (const body of ['{"projects":[1]}', '[]', '{"version":1,"projects":{"demo":[1]}}']) {
+    fs.writeFileSync(bad, body);
+    const r = run(['--verify-live', l.mem, '--map', bad]);
+    assert.strictEqual(r.code, 2, `${body}: ${r.log}`);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+});
+
+test('--verify-live: map items that are not objects — code 2; an unreadable memory file — a memory problem, code 1, not «--map»', () => {
+  const l = live();
+  const bad = path.join(path.dirname(l.mapFile), 'items.json');
+  for (const k of ['lessons', 'archive']) {
+    fs.writeFileSync(bad, JSON.stringify({ version: 1, projects: { demo: { lessons: [], decisions: [], archive: [], [k]: ['x'] } } }));
+    const r = run(['--verify-live', l.mem, '--map', bad]);
+    assert.strictEqual(r.code, 2, `${k}: ${r.log}`);
+    assert.doesNotMatch(r.log, /Traceback/);
+  }
+  fs.writeFileSync(path.join(l.mem, 'errors.md'), Buffer.from([0xff, 0xfe, 0x2d, 0x20, 0x0a]));
+  const r = l.verify();
+  assert.strictEqual(r.code, 1, r.log);
+  assert.match(r.log, /память не читается/);
+  assert.doesNotMatch(r.log, /--map/);
+});

@@ -4,6 +4,7 @@ v2 format (slice 14) by a map the agent writes once; this script only applies it
 
     migrate.py --snapshot <dir with projects/> --map <map.json> --out <dir> [--check-twice]
     migrate.py --snapshot <dir with projects/> --list [--project <name>]
+    migrate.py --verify-live <projects/<p>/memory> --map <map.json> [--project <name>]
 
 Sources: projects/<p>/memory/{errors.md, errors-index.md, recipes.md, decisions.md}, cut into records by records.py;
 a record's ref is `<file>#<sha12>`. The map (schema — README.md, sample — example/map.json):
@@ -20,12 +21,16 @@ counts, orphans). On any problem — exit 1, the problems listed, nothing writte
 --out is replaced whole, so it must be empty, absent or an earlier run, and must not hold or sit in the inputs.
 --check-twice: the whole run twice from the inputs, the two trees compared byte by byte, one kept.
 --list: every record as a JSON line {project, ref, file, line, unit, head, text} — what the map is written from.
+--verify-live: the live memory of one project after the migration (acceptance memory test 4), read only — every v1
+record has an address (map lesson, decision or archive; or a double-write line «(…, урок <id>)» of a lesson that is in
+lessons/), every map lesson and decision is in lessons/ or decisions/, every file there passes validateLesson.
 Codes: 0 done, 1 refused, 2 usage. Stdlib only; node (HUB_NODE, else ~/.local/bin/node, else node) for render.cjs.
 """
 import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,21 +55,23 @@ def node():
     return str(local) if local.exists() else 'node'
 
 
+def sources(mem):
+    """{'sources': {file: sha256}, 'records': [...]} of one memory folder."""
+    srcs, recs = {}, []
+    for name in SOURCES:
+        f = Path(mem) / name
+        if not f.is_file():
+            continue
+        raw = f.read_bytes()
+        srcs[name] = hashlib.sha256(raw).hexdigest()
+        recs += records(raw.decode('utf-8'), name)
+    return {'sources': srcs, 'records': recs}
+
+
 def snapshot(snap):
     """{project: {'sources': {file: sha256}, 'records': [...]}} for every projects/<p>/memory of the snapshot."""
-    out = {}
     root = Path(snap) / 'projects'
-    for p in sorted(x.name for x in root.iterdir() if (x / 'memory').is_dir()):
-        srcs, recs = {}, []
-        for name in SOURCES:
-            f = root / p / 'memory' / name
-            if not f.is_file():
-                continue
-            raw = f.read_bytes()
-            srcs[name] = hashlib.sha256(raw).hexdigest()
-            recs += records(raw.decode('utf-8'), name)
-        out[p] = {'sources': srcs, 'records': recs}
-    return out
+    return {p: sources(root / p / 'memory') for p in sorted(x.name for x in root.iterdir() if (x / 'memory').is_dir())}
 
 
 def plan(snap, mp):
@@ -238,9 +245,80 @@ def write(out, files):
     shutil.rmtree(old, ignore_errors=True)
 
 
+# The double write (wind-down episode.cjs, exportV1): «- <text> (<created>, урок <id>[, <status>])».
+# The status may be Cyrillic: episode.cjs repeat writes «, повтор» (review 1).
+DOUBLE_RE = re.compile(r'\((?:[^()]*), урок ([a-z0-9][a-z0-9-]{0,79})(?:, [a-zа-яё]+)?\)\s*$')
+
+
+def validate(files):
+    if not files:
+        return []
+    r = subprocess.run([node(), str(HERE / 'render.cjs'), '--validate'], input=json.dumps([str(f) for f in files]),
+                       capture_output=True, text=True, encoding='utf-8')
+    if r.returncode != 0:
+        raise SystemExit(f'render.cjs --validate: код {r.returncode}\n{r.stderr}')
+    return json.loads(r.stdout)
+
+
+class MapError(Exception):
+    """The --map cannot be read or has the wrong shape: a usage error (code 2), apart from problems of the memory."""
+
+
+def load_map(map_file, p):
+    """→ the project's part of the map; MapError when the file is unreadable or not the map's shape."""
+    try:
+        mp = json.loads(Path(map_file).read_bytes().decode('utf-8'))
+    except (OSError, ValueError) as e:  # JSONDecodeError and UnicodeDecodeError are ValueError
+        raise MapError(str(e)) from e
+    if not isinstance(mp, dict) or not isinstance(mp.get('projects'), dict):
+        raise MapError('нужен {"version": 1, "projects": {...}}')
+    pm = mp['projects'].get(p)
+    if pm is None:
+        return None
+    lists = {k: pm.get(k, []) for k in ('lessons', 'decisions', 'archive')} if isinstance(pm, dict) else None
+    if lists is None or not all(isinstance(v, list) and all(isinstance(x, dict) for x in v) for v in lists.values()):
+        raise MapError(f'у проекта {p} нужны списки объектов lessons, decisions, archive')
+    return pm
+
+
+def verify_live(mem, map_file, project=None):
+    """→ (summary line, problems). Reads only. MapError — the map is the problem, not the memory."""
+    mem = Path(mem)
+    p = project or mem.parent.name
+    pm = load_map(map_file, p)
+    if pm is None:
+        return f'проект {p}', [f'проекта {p} нет в файле соответствия {map_file}']
+    try:
+        src = sources(mem)
+    except (OSError, UnicodeDecodeError) as e:
+        return f'проект {p}', [f'память не читается ({mem}): {e}']
+    mapped = {f.get('ref') if isinstance(f, dict) else f
+              for k in ('lessons', 'decisions') for d in pm.get(k, []) for f in d.get('from', [])}
+    mapped |= {a.get('ref') for a in pm.get('archive', [])}
+    have = {sub: {f.stem for f in (mem / sub).glob('*.md') if not f.name.startswith('.')} for sub in ('lessons', 'decisions')}
+    recs, double = [], 0
+    for r in src['records']:
+        m = DOUBLE_RE.search(r['text'].strip()) if r['ref'] not in mapped else None
+        if m and m.group(1) in have['lessons']:
+            double += 1
+        else:
+            recs.append(r)
+    _, _, counts, problems = plan({p: {'sources': src['sources'], 'records': recs}}, {'version': 1, 'projects': {p: pm}})
+    for sub, key in (('lessons', 'lessons'), ('decisions', 'decisions')):
+        problems += [f'не перенесён: {sub}/{d["id"]}.md' for d in pm.get(key, []) if d.get('id') not in have[sub]]
+    files = sorted(f for sub in ('lessons', 'decisions') for f in (mem / sub).glob('*.md') if not f.name.startswith('.'))
+    for v in validate(files):
+        problems += [f'{Path(v["file"]).parent.name}/{Path(v["file"]).name}: {x}' for x in v['problems']]
+    line = (f'проект {p}: записей v1 {len(src["records"])}: в уроки {counts.get("to_lesson", 0)}, в решения '
+            f'{counts.get("to_decision", 0)}, в архив {counts.get("to_archive", 0)}, двойная запись {double}; '
+            f'сирот {counts.get("orphans", 0)} · файлов уроков и решений {len(files)}')
+    return line, problems
+
+
 def main(argv):
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument('--snapshot', required=True)
+    ap.add_argument('--snapshot')
+    ap.add_argument('--verify-live')
     ap.add_argument('--map')
     ap.add_argument('--out')
     ap.add_argument('--check-twice', action='store_true')
@@ -249,6 +327,23 @@ def main(argv):
     try:
         a = ap.parse_args(argv)
     except SystemExit:
+        return 2
+    if a.verify_live:
+        if not a.map:
+            print('--verify-live: нужен --map', file=sys.stderr)
+            return 2
+        try:
+            line, problems = verify_live(a.verify_live, a.map, a.project)
+        except MapError as e:
+            print(f'--verify-live: не прочитать --map {a.map}: {e}', file=sys.stderr)
+            return 2
+        print(line)
+        for p in problems:
+            print(p)
+        print(f'отказ: проблем {len(problems)}' if problems else 'живая память сходится с соответствием')
+        return 1 if problems else 0
+    if not a.snapshot:
+        print('нужен --snapshot (или --verify-live)\n' + __doc__, file=sys.stderr)
         return 2
     if a.list:
         for p, s in snapshot(a.snapshot).items():

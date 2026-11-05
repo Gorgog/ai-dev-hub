@@ -89,7 +89,8 @@ test('check names a NUL lesson and a torn event line; export → import → the 
   const c = run(['--memory', mem, 'check']);
   assert.strictEqual(c.code, 0);
   assert.match(c.out, /bash-heredoc\.md[^\n]*NUL/);
-  assert.match(c.out, new RegExp(`${ev.replace('.', '\\.')}:2`));
+  const tornAt = fs.readFileSync(path.join(mem, 'events', ev), 'utf8').split('\n').length; // physical line of the fragment
+  assert.match(c.out, new RegExp(`${ev.replace('.', '\\.')}:${tornAt}`));
   const out = tmp();
   assert.strictEqual(run(['--memory', mem, 'export', path.join(out, 'm.json')]).code, 0);
   const mem2 = path.join(tmp(), 'memory');

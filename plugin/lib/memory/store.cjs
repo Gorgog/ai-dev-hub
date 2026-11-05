@@ -86,20 +86,7 @@ const docFields = (d) => ({ keys: `${d.id.replace(/-/g, ' ')} ${d.keys.join(' ')
 
 // ---------- node:sqlite ----------
 
-let sqliteCache;
-function sqlite() {
-  if (sqliteCache !== undefined) return sqliteCache;
-  if (process.env.HUB_MEMORY_ENGINE === 'js') return (sqliteCache = null);
-  // node 22 warns «SQLite is an experimental feature» on stderr — a hook's stderr must stay clean (P2).
-  const orig = process.emitWarning;
-  process.emitWarning = function (w, ...a) {
-    const type = typeof a[0] === 'string' ? a[0] : a[0] && a[0].type;
-    if (type === 'ExperimentalWarning' || (w && w.name === 'ExperimentalWarning')) return undefined;
-    return orig.call(process, w, ...a);
-  };
-  try { sqliteCache = require('node:sqlite').DatabaseSync; } catch { sqliteCache = null; } finally { process.emitWarning = orig; }
-  return sqliteCache;
-}
+const sqlite = require('./sqlite.cjs');
 
 function openIndex(memDir) {
   const DB = sqlite();
@@ -437,11 +424,12 @@ function check(memDir) {
 
 // ---------- export / import ----------
 
-const SOURCE_RE = /^(lessons|decisions|events)\/[^/\\]+$/;
+// events/archive/ — months folded by memory-gc, kept byte for byte (the reader does not see them, export must).
+const SOURCE_RE = /^(lessons|decisions|events|events\/archive)\/[^/\\]+$/;
 
 function exportAll(memDir) {
   const files = [];
-  for (const d of [...DIRS, 'events']) {
+  for (const d of [...DIRS, 'events', 'events/archive']) {
     let names = [];
     try { names = fs.readdirSync(path.join(memDir, d)).filter((f) => !f.startsWith('.')).sort(); } catch { continue; }
     for (const f of names) {

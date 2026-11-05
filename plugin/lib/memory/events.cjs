@@ -33,23 +33,61 @@ function eventLine(ev) {
   return { line, month: /^\d{4}-\d\d/.test(o.at) ? o.at.slice(0, 7) : new Date().toISOString().slice(0, 7) };
 }
 
-// One write. A torn tail left by a killed writer (no final newline) is closed first, inside the same write, so the
-// new line never glues onto the fragment.
+// H22 (slice 26, probe in ~/hub-data/probes/26): a SIGKILL tears a write only between 4 KB pages (the kernel checks a
+// fatal signal between page-sized chunks), and «read the last byte, then write» raced: a killed writer's fragment
+// landed in between and a neighbour's whole event glued onto it. So the write goes under a kernel lock — node:sqlite
+// BEGIN EXCLUSIVE on memory/.events.lock.db (an fcntl lock: dropped by the kernel when its holder dies) — and inside
+// it: a leading \n, pad with bare \n up to the page boundary when the line would cross it, one write. A line
+// (≤ MAX_LINE ≤ PAGE) then lies in one page and a kill cannot tear it. Without node:sqlite: a \n frame, no tail read —
+// no glue, a torn fragment stays its own (skipped) line. Local file systems only: NFS/FUSE keep neither guarantee.
+const PAGE = 4096;
+// The lock is held for tens of µs. Waiting is our own poll every ~1 ms (review 2): SQLite's busy handler sleeps up to
+// tens of ms and starves under 8+ writers — the wait ran out with nobody stuck. Past WAIT_MS the holder is stuck.
+const WAIT_MS = 400;
+const nap = new Int32Array(new SharedArrayBuffer(4));
+const LOCK = '.events.lock.db'; // outside events/: readers and the memory commit never see it
+if (MAX_LINE > PAGE) throw new Error('MAX_LINE больше страницы: строка события не помещается в одну страницу');
+const sqlite = require('./sqlite.cjs');
+const STUCK_MS = 5000; // the lock was not taken: this process frames its next events at once for a while (review 1)
+let stuckUntil = 0;
+
 function appendEvent(memDir, ev) {
   const { line, month } = eventLine(ev);
   const dir = path.join(memDir, 'events');
   fs.mkdirSync(dir, { recursive: true });
-  const fd = fs.openSync(path.join(dir, `${month}.jsonl`), 'a+');
+  const file = path.join(dir, `${month}.jsonl`);
+  const D = sqlite();
+  // A holder that is stuck (stopped, hung) must not hold a hook: past WAIT_MS — the \n frame, as without node:sqlite,
+  // and so for STUCK_MS more in this process (a Stop mirrors many events: one wait, not one per event).
+  const frame = () => { fs.appendFileSync(file, `\n${line}`); };
+  if (!D || Date.now() < stuckUntil) { frame(); return line; }
+  let db;
   try {
-    let buf = Buffer.from(line);
-    const size = fs.fstatSync(fd).size;
-    if (size > 0) {
-      const last = Buffer.alloc(1);
-      fs.readSync(fd, last, 0, 1, size - 1);
-      if (last[0] !== 0x0a) buf = Buffer.concat([Buffer.from('\n'), buf]);
+    db = new D(path.join(memDir, LOCK), { timeout: 0 });
+    for (const t0 = Date.now(); ;) {
+      try { db.exec('BEGIN EXCLUSIVE'); break; } catch (e) {
+        const busy = e && (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(String(e.message))); // SQLITE_BUSY, _LOCKED
+        if (!busy || Date.now() - t0 >= WAIT_MS) throw e;
+        Atomics.wait(nap, 0, 0, 0.5 + Math.random());
+      }
     }
-    fs.writeSync(fd, buf);
-  } finally { fs.closeSync(fd); }
+  } catch {
+    stuckUntil = Date.now() + STUCK_MS;
+    try { if (db) db.close(); } catch { /* closed */ }
+    frame();
+    return line;
+  }
+  try {
+    const fd = fs.openSync(file, 'a+');
+    try {
+      // Always a leading \n, no tail read (review 1): a framed writer works without the lock, and its fragment may land
+      // between any check and this write — a line that starts on its own never glues. Empty lines are skipped by readers.
+      const at = fs.fstatSync(fd).size + 1;
+      const room = PAGE - (at % PAGE);
+      fs.writeSync(fd, `\n${Buffer.byteLength(line) > room ? '\n'.repeat(room) : ''}${line}`);
+    } finally { fs.closeSync(fd); }
+    try { db.exec('COMMIT'); } catch { /* the line is written; close() drops the lock — no error, no repeated event */ }
+  } finally { db.close(); }
   return line;
 }
 
@@ -87,4 +125,4 @@ function foldEvents(events) {
   return out;
 }
 
-module.exports = { appendEvent, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };
+module.exports = { LOCK, appendEvent, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };

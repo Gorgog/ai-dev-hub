@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { appendEvent, readEvents, foldEvents, MAX_LINE } = require('./events.cjs');
 
 const mem = () => {
@@ -14,12 +14,12 @@ const mem = () => {
   return d;
 };
 
-test('append: a line in events/<YYYY-MM>.jsonl with the address fields in a fixed order', () => {
+test('append: a line in events/<YYYY-MM>.jsonl with the address fields in a fixed order; a leading \\n (review 1)', () => {
   const d = mem();
   appendEvent(d, { kind: 'shown', lesson: 'a-1', session_id: 's1', agent_id: null, tool_use_id: 't1', epoch: 2,
     model: 'm', mode: 'hook', at: '2026-11-05T10:00:00.000Z' });
   const text = fs.readFileSync(path.join(d, 'events', '2026-11.jsonl'), 'utf8');
-  assert.strictEqual(text, '{"at":"2026-11-05T10:00:00.000Z","kind":"shown","lesson":"a-1","session_id":"s1","agent_id":null,'
+  assert.strictEqual(text, '\n{"at":"2026-11-05T10:00:00.000Z","kind":"shown","lesson":"a-1","session_id":"s1","agent_id":null,'
     + '"tool_use_id":"t1","epoch":2,"model":"m","mode":"hook"}\n');
 });
 
@@ -41,7 +41,7 @@ test('read: a torn last line is skipped and named; the next append closes it wit
   let r = readEvents(d);
   assert.strictEqual(r.events.length, 1);
   assert.strictEqual(r.problems.length, 1);
-  assert.match(r.problems[0], /2026-11\.jsonl:2/);
+  assert.match(r.problems[0], new RegExp(`2026-11\\.jsonl:${fs.readFileSync(f, 'utf8').split('\n').length}`), 'the physical line of the fragment');
   appendEvent(d, { kind: 'repeat', lesson: 'a-1', at: '2026-11-05T10:00:02.000Z' });
   r = readEvents(d);
   assert.deepStrictEqual(r.events.map((e) => e.kind), ['shown', 'repeat']);
@@ -76,4 +76,136 @@ test('7 processes × 300 events in parallel: every line whole, none lost', async
   assert.deepStrictEqual(problems, []);
   assert.strictEqual(events.length, 2100);
   for (let w = 0; w < 7; w++) assert.strictEqual(events.filter((e) => e.session_id === `s${w}`).length, 300);
+});
+
+// H22 (slice 26): a SIGKILL tears a write only between 4 KB pages, and healing a torn tail by «read the last byte, then
+// write» glued a neighbour's whole event onto a fragment. Now: under a kernel lock (node:sqlite BEGIN EXCLUSIVE) — heal,
+// pad with \n to the page boundary when the line would cross it, one write. Without node:sqlite — a \n frame.
+const PAGE = 4096;
+function pages(file) {
+  const buf = fs.readFileSync(file);
+  const bad = [];
+  let off = 0, n = 0;
+  while (off < buf.length) {
+    let nl = buf.indexOf(0x0a, off);
+    if (nl < 0) nl = buf.length - 1;
+    if (nl > off) {
+      n++;
+      if (Math.floor(off / PAGE) !== Math.floor(nl / PAGE)) bad.push(`строка с ${off} до ${nl} через границу страницы`);
+      if (/^\s+$/.test(buf.subarray(off, nl).toString('latin1'))) bad.push(`строка из пробелов с ${off}`);
+    }
+    off = nl + 1;
+  }
+  return { n, bad };
+}
+
+test('append: no line crosses a 4 KB page; the padding is bare \\n; every event reads back', () => {
+  const d = mem();
+  for (let i = 0; i < 200; i++) appendEvent(d, { kind: 'shown', lesson: 'l', epoch: i, note: 'ж'.repeat((i * 37) % 900), at: '2026-11-05T00:00:00.000Z' });
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad, []);
+  assert.strictEqual(p.n, 200);
+  const { events, problems } = readEvents(d);
+  assert.strictEqual(events.length, 200);
+  assert.deepStrictEqual(problems, []);
+  assert.ok(MAX_LINE <= PAGE, 'a line must fit one page');
+});
+
+test('append: 4 processes at once — no line crosses a page, none lost, the lock file is neither read nor exported', async () => {
+  const d = mem();
+  const lib = path.join(__dirname, 'events.cjs');
+  const code = (w) => `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<150;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'l',session_id:'w${w}',epoch:i,note:'ж'.repeat((i*53+${w}*7)%1200),at:'2026-11-05T00:00:00.000Z'})`;
+  await Promise.all([0, 1, 2, 3].map((w) => new Promise((ok, no) => spawn(process.execPath, ['-e', code(w)], { stdio: 'inherit' })
+    .on('exit', (c) => (c === 0 ? ok() : no(new Error(`писатель ${w}: код ${c}`)))))));
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad, []);
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(problems, []);
+  assert.strictEqual(events.length, 600);
+  const S = require('./store.cjs');
+  assert.ok(!S.exportAll(d).files.some((f) => /lock/.test(f.path)), 'lock file not exported');
+  assert.deepStrictEqual(fs.readdirSync(path.join(d, 'events')), ['2026-11.jsonl'], 'events/ holds only the month');
+});
+
+test('append: a torn tail left by a killed writer stays its own line — the next event is whole', () => {
+  const d = mem();
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  fs.appendFileSync(path.join(d, 'events', '2026-11.jsonl'), '{"kind":"sho');
+  appendEvent(d, { kind: 'shown', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(events.map((e) => e.lesson), ['a', 'b']);
+  assert.strictEqual(problems.length, 1);
+});
+
+test('append without node:sqlite: a \\n frame — a torn fragment never glues onto the next event', () => {
+  const d = mem();
+  const f = path.join(d, 'events', '2026-11.jsonl');
+  const lib = path.join(__dirname, 'events.cjs');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, '{"kind":"sho');
+  execFileSync(process.execPath, ['-e', `require(${JSON.stringify(lib)}).appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'b',at:'2026-11-05T00:00:01.000Z'})`],
+    { env: { ...process.env, HUB_MEMORY_ENGINE: 'js' } });
+  assert.match(fs.readFileSync(f, 'utf8'), /^\{"kind":"sho\n\{"at"[^\n]*"lesson":"b"[^\n]*\}\n$/);
+  assert.ok(!fs.readdirSync(d).some((x) => /lock/.test(x)), 'no lock file without node:sqlite');
+});
+
+test('append: a lock held by a stuck process (stopped, hung) — no long wait: the \\n frame within a second, the event whole', async () => {
+  const d = mem();
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  const { LOCK } = require('./events.cjs');
+  const holder = spawn(process.execPath, ['-e', `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(path.join(d, LOCK))});db.exec('BEGIN EXCLUSIVE');process.stdout.write('held');setTimeout(()=>{},5000)`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((ok) => holder.stdout.once('data', ok));
+  try {
+    const t0 = Date.now();
+    appendEvent(d, { kind: 'shown', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });
+    assert.ok(Date.now() - t0 < 600, `ждал ${Date.now() - t0} мс`);
+  } finally { holder.kill('SIGKILL'); }
+  const { events, problems } = readEvents(d);
+  assert.deepStrictEqual(events.map((e) => e.lesson), ['a', 'b']);
+  assert.deepStrictEqual(problems, []);
+});
+
+test('append: a stuck lock costs one wait per process — 20 events of one hook process within a second', async () => {
+  const d = mem();
+  const { LOCK } = require('./events.cjs');
+  appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });
+  const holder = spawn(process.execPath, ['-e', `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(${JSON.stringify(path.join(d, LOCK))});db.exec('BEGIN EXCLUSIVE');process.stdout.write('held');setTimeout(()=>{},8000)`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((ok) => holder.stdout.once('data', ok));
+  const lib = path.join(__dirname, 'events.cjs');
+  try {
+    const t0 = Date.now();
+    execFileSync(process.execPath, ['-e', `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<20;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'b',epoch:i,at:'2026-11-05T00:00:01.000Z'})`]);
+    assert.ok(Date.now() - t0 < 1000, `20 событий за ${Date.now() - t0} мс`);
+  } finally { holder.kill('SIGKILL'); }
+  assert.strictEqual(readEvents(d).events.length, 21);
+});
+
+test('append under the lock: a fragment of an unlocked writer that lands between the size check and the write never glues', () => {
+  // In a fresh process: a lock found stuck earlier in this one would frame the write and skip the locked path.
+  const d = mem();
+  const f = path.join(d, 'events', '2026-11.jsonl');
+  const fragment = '\n{"at":"2026-11-05T00:00:00.500Z","kind":"sho'; // a frame writer killed mid-write
+  const code = [
+    "const fs = require('fs');",
+    `const { appendEvent } = require(${JSON.stringify(path.join(__dirname, 'events.cjs'))});`,
+    `const d = ${JSON.stringify(d)}, f = ${JSON.stringify(f)}, fragment = ${JSON.stringify(fragment)};`,
+    "appendEvent(d, { kind: 'shown', lesson: 'a', at: '2026-11-05T00:00:00.000Z' });",
+    'const orig = fs.writeSync; let once = true;',
+    'fs.writeSync = function (fd, ...rest) { if (once) { once = false; fs.appendFileSync(f, fragment); } return orig.call(fs, fd, ...rest); };',
+    "appendEvent(d, { kind: 'repeat', lesson: 'b', at: '2026-11-05T00:00:01.000Z' });",
+    "fs.writeSync = orig; process.stdout.write(once ? 'no-fragment' : 'ok');",
+  ].join('\n');
+  assert.strictEqual(execFileSync(process.execPath, ['-e', code], { encoding: 'utf8' }), 'ok', 'the fragment was put in on the locked path');
+  assert.deepStrictEqual(readEvents(d).events.map((e) => e.lesson), ['a', 'b']);
+});
+
+test('append: 8 processes at once, the lock is busy but nobody is stuck — every write takes the lock (no line crosses a page)', async () => {
+  const d = mem();
+  const lib = path.join(__dirname, 'events.cjs');
+  const code = (w) => `const {appendEvent}=require(${JSON.stringify(lib)});for(let i=0;i<400;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'l',session_id:'w${w}',epoch:i,note:'ж'.repeat(150+(i*53+${w}*7)%750),at:'2026-11-05T00:00:00.000Z'})`;
+  await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((w) => new Promise((ok, no) => spawn(process.execPath, ['-e', code(w)], { stdio: 'inherit' })
+    .on('exit', (c) => (c === 0 ? ok() : no(new Error(`писатель ${w}: код ${c}`)))))));
+  const p = pages(path.join(d, 'events', '2026-11.jsonl'));
+  assert.deepStrictEqual(p.bad.slice(0, 5), [], `строк через страницу: ${p.bad.length}`);
+  assert.strictEqual(readEvents(d).events.length, 3200);
 });
