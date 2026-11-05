@@ -11,15 +11,25 @@ const { execFileSync } = require('child_process');
 
 const run = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const git = (cwd, ...a) => run(cwd, ...a).trim();
-// A quote («> …») is a relay of someone else's report; a list marker (`-`, `1.`), bold or a heading is still the report
-// itself. After the phrase — anything but a letter or a digit (`:`, `,`, a space, an emoji, the end); a question is not.
-const REPORT = /^[ \t*#_-]*(?:\d+[.)][ \t]+)?[*_]*готово к (пушу|мержу)(?![\p{L}\p{N}])(?![^\n]*\?[ \t]*$)/imu;
+// A report is a line that starts with the phrase. Before it: a list marker (`-`, `1.`), bold, a heading, an emoji; a
+// quote («> …») is a relay of someone else's report. After it: a sign (`:`, `,`, `—`, `(`), the end, an emoji, or
+// a word in Latin (HEAD, a key, a sha). A lowercase Russian word goes on as a sentence — a status or a plan («Готово
+// к пушу после ревью»); a line that ends with «?» and names no sha is a question («Готово к пушу — когда?»), while
+// a report with a question after its sha («Готово к пушу: abc1234. Пушить?») is a report.
+const START = /^[ \t*#_-]*(?:\d+[.)][ \t]+)?(?:\p{Extended_Pictographic}\uFE0F?[ \t]*)?[*_]*готово к (пушу|мержу)(?![\p{L}\p{N}])/iu;
+const SHA = /\b[0-9a-f]{7,40}\b/;
 
 // 'push' | 'merge' | null.
 function isReport(text) {
-  const m = String(text || '').match(REPORT);
-  if (!m) return null;
-  return /пушу/i.test(m[1]) ? 'push' : 'merge';
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(START);
+    if (!m) continue;
+    const rest = line.slice(m[0].length).replace(/^[*_ \t]+/, '');
+    if (/^[а-яё]/.test(rest)) continue;
+    if (/\?\s*$/.test(line) && !SHA.test(line)) continue;
+    return /пушу/i.test(m[1]) ? 'push' : 'merge';
+  }
+  return null;
 }
 
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
