@@ -35,11 +35,11 @@ const KINDS = ['sha', 'file', 'output', 'shot', 'review', 'last-full'];
 const MAX_ITEMS = 7;
 
 // Network is judged by what runs, not by the word: a line of a comment or a name in data is not a call. Docs and tests —
-// never. Shell (scripts, CI steps, Dockerfile, Makefile, a file without extension): curl/wget/nc at the place of a
-// command, # comments skipped. Code: a network API, a shell command line, or the command string of an
-// exec/spawn/subprocess call on the line; whole-line comments skipped. Any other file (json, conf): the API, the
-// command, a string that starts with the command and its arguments; nothing skipped. A bare name (`- curl` of a package
-// list, "curl" in a lock file) is data, not a call.
+// never. Every kind of file: a network API, curl/wget/nc at the place of a command. Shell (scripts, CI steps,
+// Dockerfile, Makefile, a file without extension) and any other file (json, conf): also a string that starts with the
+// command and its arguments ('curl -fsSL …' of a YAML step, sh "curl …") and the exec form ["curl", "-…" or a URL];
+// shell — # comment lines skipped. Code: also the command string of an exec/spawn/subprocess call on the line; comment
+// lines skipped, code after a closed /* … */ is read. A bare name (`- curl` of a package list, "curl" in a lock file) is data, not a call.
 const NET = {
   skip: /\.(md|txt|rst|adoc)$|(^|\/)(tests?|__tests__|fixtures?)\/|\.(test|spec)\.[^/]+$/,
   shell: /\.(sh|bash|zsh|ksh|fish|mk|ya?ml)$|(^|\/)(Makefile|GNUmakefile|Dockerfile[^/]*|[^/]*\.Dockerfile|Jenkinsfile|Procfile)$|(^|\/)[^/.]+$/,
@@ -50,16 +50,24 @@ const NET = {
   cmd: /(^|[\s;|&(`/!{])(curl|wget|nc|ncat)\s/,
   str: /['"`]([^'"`\s]*\/)?(curl|wget|nc|ncat)(['"`]|\s)/,
   strArgs: /['"`]([^'"`\s]*\/)?(curl|wget|nc|ncat)\s/,
-  exec: /\b(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|run|call|check_call|check_output|getoutput|getstatusoutput)\s*\(/,
+  execForm: /\[\s*['"]([^'"\s]*\/)?(curl|wget|nc|ncat)['"]\s*,\s*['"](-|https?:)/,
+  exec: /\b(exec|execSync|execFile|execFileSync|execa|execaSync|spawn|spawnSync|system|popen|Popen|run|call|check_call|check_output|getoutput|getstatusoutput)\s*\(/,
 };
+// A line of code without its leading closed comments, or null when the rest is a comment: //, an open /*, a JSDoc
+// line « * …» (not a generator method «*items()»); a line opening with «*/» is read after it.
+function codeLine(file, s) {
+  if (NET.hash.test(file) && /^\s*#/.test(s)) return null;
+  if (!NET.slash.test(file)) return s;
+  let t = s.replace(/^\s*\*\//, '');
+  for (let m; (m = /^\s*\/\*.*?\*\//.exec(t));) t = t.slice(m[0].length);
+  return /^\s*(\/\/|\/\*)/.test(t) || /^\s*\*(\s|$)/.test(t) ? null : t;
+}
 function netCall(file, s) {
   if (NET.skip.test(file)) return false;
-  if (NET.shell.test(file)) return !/^\s*#/.test(s) && NET.cmd.test(s);
-  if (NET.code.test(file)) {
-    if ((NET.hash.test(file) && /^\s*#/.test(s)) || (NET.slash.test(file) && /^\s*(\/\/|\/\*|\*)/.test(s))) return false;
-    return NET.api.test(s) || NET.cmd.test(s) || (NET.exec.test(s) && NET.str.test(s));
-  }
-  return NET.api.test(s) || NET.cmd.test(s) || NET.strArgs.test(s);
+  const any = (t) => NET.api.test(t) || NET.cmd.test(t);
+  if (NET.shell.test(file)) return !/^\s*#/.test(s) && (any(s) || NET.strArgs.test(s) || NET.execForm.test(s));
+  if (NET.code.test(file)) { const t = codeLine(file, s); return t !== null && (any(t) || (NET.exec.test(t) && NET.str.test(t))); }
+  return any(s) || NET.strArgs.test(s) || NET.execForm.test(s);
 }
 
 // Risk categories of a diff: by path, by added lines (line — a regexp, added — a function of the file and the line).
@@ -161,13 +169,15 @@ function confirm(repo, c, sha, dir) {
     if (!sha.startsWith(String(c.head).toLowerCase()) || String(c.head).length < 7) return `output: ${val} снят на HEAD ${short(c.head)}, а квитанция на ${short(sha)} — прогон не на итоговом HEAD`;
     if (!text.includes(String(c.head).slice(0, 7))) return `output: в ${val} нет HEAD ${short(c.head)}`;
     // Red: FAIL/FAILED, TAP «not ok», ✖, «N failed/failing/error(s)», pytest ERROR and «Interrupted»; a line of a
-    // passed test (✔, ✓, TAP «ok») is not a summary, whatever its name says. A counter is judged by its number: zero
-    // («FAIL: 0», «fail 0», «errors=0») is dropped before the check, a non-zero one («ℹ fail 2», «# fail 1») is red.
+    // passed test (✔, ✓, TAP «ok») is not a summary, whatever its name says. A counter is judged by its number: a zero
+    // one («FAIL: 0», «fail 0 ·», «Errors: 0,») is dropped before the check — only when no number of its own stands in
+    // front («1 failed 0 passed» stays) and the zero ends the counter («FAIL 0 of 2», «FAIL 0 x.test.js», «FAIL 0,5»
+    // stay); a non-zero one («ℹ fail 2», «# fail 1», «Errors: 1», «1 fail») is red.
     const red = text.split('\n').find((raw) => {
       if (/^\s*(✔|✓|ok\b)/.test(raw)) return false;
-      const l = raw.replace(/\b(fail(ed|ures?|ing)?|errors?)\b\s*[:=]?\s*0+(?![\w.\-/])/gi, '');
-      return /(^|[\s·|=])FAIL(ED)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(failed|failing|errors?)\b|^ERROR\b|\bInterrupted:/.test(l) ||
-        /\bfail(ed|ures?|ing)?\b\s*[:=]?\s*[1-9]\d*(?![\w.])/i.test(l);
+      const l = raw.replace(/(?<!\d\s*)\b(fail(ed|ures?|ing)?|errors?)\b(\s*[:=]\s*0+(?![\w.\-/]|,\d)|\s+0+(?=\s*($|[·|;)\]]|,(?!\d))))/gi, '');
+      return /(^|[\s·|=])FAIL(ED)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(fail|failed|failing|failures?|errors?)\b|^ERROR\b|\bInterrupted:/.test(l) ||
+        /\bfail(ed|ures?|ing)?\b\s*[:=]?\s*[1-9]\d*(?![\w.])/i.test(l) || /\berrors?\b\s*[:=]\s*[1-9]/i.test(l);
     });
     return red ? `output: в ${val} прогон не зелёный — «${red.trim().slice(0, 80)}»` : null;
   }
