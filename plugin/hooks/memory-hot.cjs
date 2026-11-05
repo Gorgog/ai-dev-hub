@@ -14,8 +14,8 @@ const WHEN_FIELDS = ['tool', 'cmd', 'path', 'body', 'out'];
 // `{1,30}` too), three repeated atoms in a row, and with lookaround or a backreference three unbounded repetitions at
 // all. Second, V8's own: after 10 000 backtracks it reruns a regex on its linear engine — which takes no `i` flag, no
 // lookaround, no backreference and no large bounded repetition, so it only adds to the static check. To give it the
-// most triggers, a source whose meaning survives it runs case-folded by hand (lowerPattern on a lower-cased field);
-// any other runs with `i` as written.
+// most triggers, every source runs case-folded by hand (foldPattern on a foldText field) where it can; the rare one
+// that cannot runs with `i` as written.
 try {
   const v8 = require('v8');
   v8.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
@@ -91,7 +91,7 @@ const ADJACENT = /(?:(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\\()[\]|^$])(?:[*+]|\{\d+,\d*
 const WIDE = /(?:\.|\[\^(?:\\.|[^\]\\])*\]|\\[SWD]|\[\\s\\S\]|\[\\S\\s\])(?:[*+]|\{\d+,\})/g;
 function whenProblem(src) {
   try { new RegExp(src, 'i'); } catch (e) { return `регэксп не компилируется — ${e.message}`; }
-  const noLinear = LINEAR_UNSUPPORTED.test(src) || lowerPattern(src) === null;
+  const noLinear = LINEAR_UNSUPPORTED.test(src) || foldPattern(src) === null;
   const bad = nestedQuantifier(src) ? 'повтор группы, внутри которой повтор'
     : /\((?:\?:)?[^()]*\|[^()]*\)(?:[*+]|\{\d+,|\{\d{2,}\})/.test(src) ? 'повтор группы с альтернативой'
       : noLinear && ADJACENT.test(src) ? 'три повтора подряд при просмотре, обратной ссылке или флаге i'
@@ -119,7 +119,7 @@ function compileItem(w) {
 // regex, so a cold hook process compiles only the regexes whose literal is in the call (V8 compiles a regex on its
 // first run; 250 lessons are ≈ 670 of them). Conservative: only top-level atoms count — a top-level `|` gives none,
 // groups and classes break a run, a character made optional or repeated by `?`, `*`, `{` leaves it.
-function literalOf(src) {
+function literalOf(src, { raw = false } = {}) {
   let best = '', cur = '', depth = 0, inClass = false;
   const quant = (j) => src[j] === '{' && /^\{\d+(?:,\d*)?\}/.test(src.slice(j, j + 24));
   const flush = () => { if (cur.length > best.length) best = cur; cur = ''; };
@@ -156,6 +156,7 @@ function literalOf(src) {
     if (nx === '?' || nx === '*' || quant(i + 1)) { cur = cur.slice(0, -1); flush(); }
   }
   flush();
+  if (raw) return best.length >= 2 ? best : ''; // a folded pattern against a folded field: exact
   const lit = best.toLowerCase();
   // A letter whose case folding differs from toLowerCase (ς, µ) could make `includes` miss what `i` matches.
   return lit.length >= 2 && [...lit].every((ch) => ch.toUpperCase().toLowerCase() === ch) ? lit : '';
@@ -164,57 +165,69 @@ function literalOf(src) {
 // What the hot path knows of a regex source, computed on first use and shared by every item with that source: the
 // literal, whether it is safe (no nested repetition — such a condition never matches) and the compiled regex (only
 // past the literal; a source that does not compile never matches).
-// The source with its literal letters through toLowerCase, for a lower-cased field and no `i`; null — lowering would
-// change its meaning, so it runs with `i` as written: an escaped letter that is not a known escape (`\Z` is a plain Z
-// without the u flag), a class range unless both ends are letters of one case (`[A-z]`, `[Z-a]`, `[\x00-\x5A]` cover
-// other characters). Escapes stay as written (\S, \B); a well-formed \xHH or \uHHHH outside a class is re-escaped as
-// its lower-case letter. Left: letters whose case folding differs from toLowerCase (σ/ς, µ/μ) — literalOf drops them.
-const KNOWN_ESC = /[dDwWsSbBnrtfv0-9cxukpP]/;
-const cased = (ch) => ch.toLowerCase() !== ch.toUpperCase();
-function lowerPattern(src) {
-  let out = '', inClass = false;
-  const endAt = (i) => { // a class range end at i: [char, next index] or null
-    if (src[i] !== '\\') return src[i] === undefined || src[i] === ']' ? null : [src[i], i + 1];
+// Case folding by hand, exactly as the `i` flag without `u` compares characters (ECMAScript Canonicalize): a character
+// is its toUpperCase when that is one character and does not take a non-ASCII character to ASCII. A pattern folded
+// by foldPattern, run without `i` on a field folded by foldText, matches what the `i` regex matched — σ/ς, the Kelvin
+// sign, ß/ẞ included. Outside a class: letters folded, a \xHH / \uHHHH / identity escape of a letter (`\Z` is a plain
+// Z without u) re-escaped as its folded character, other escapes as written. Inside a class: every character and range
+// spelled out as the set of their folded characters; \d \w \s and their negations as written. null — a range of more
+// than 2048 characters with letters in it: the source runs with `i` as written.
+const canon = (ch) => { const u = ch.toUpperCase(); return u.length !== 1 || (ch.charCodeAt(0) >= 128 && u.charCodeAt(0) < 128) ? ch : u; };
+function foldText(s) {
+  const u = s.toUpperCase();
+  if (u.length === s.length && !/[^\x00-\x7f]/.test(s)) return u;
+  let out = '';
+  for (const ch of s) out += ch.length === 1 ? canon(ch) : ch;
+  return out;
+}
+const esc = (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+const KNOWN_ESC = /[dDwWsSbBnrtfv0-9cxuk]/;
+function foldPattern(src) {
+  let out = '';
+  // One character at i (literal or escape) → [char, next] or null when it is a class escape (\d, \w …).
+  const charAt = (i) => {
+    if (src[i] !== '\\') return [src[i], i + 1];
     const n = src[i + 1] || '';
     const hex = n === 'x' ? src.slice(i + 2, i + 4) : n === 'u' ? src.slice(i + 2, i + 6) : '';
     if (hex && /^[0-9a-fA-F]+$/.test(hex) && hex.length === (n === 'x' ? 2 : 4)) return [String.fromCharCode(parseInt(hex, 16)), i + 2 + hex.length];
-    return /[A-Za-z0-9]/.test(n) ? null : [n, i + 2];
+    // An identity escape of a letter is that letter: \Z, and an incomplete \x or \u without the u flag.
+    if ((/[A-Za-z]/.test(n) && !KNOWN_ESC.test(n)) || n === 'x' || n === 'u') return [n, i + 2];
+    if (/[A-Za-z0-9]/.test(n)) return null;
+    return [n, i + 2];
   };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
-    if (inClass) {
-      if (c === ']') { inClass = false; out += c; continue; }
-      const lo = endAt(i);
-      if (lo && src[lo[1]] === '-' && src[lo[1] + 1] !== ']' && src[lo[1] + 1] !== undefined) {
-        const hi = endAt(lo[1] + 1);
-        if (!hi) return null;
-        const [a, b] = [lo[0], hi[0]];
-        const sameCase = cased(a) && cased(b) && (a === a.toLowerCase()) === (b === b.toLowerCase());
-        if (!sameCase) {
-          for (let cp = a.charCodeAt(0); cp <= b.charCodeAt(0); cp++) if (cased(String.fromCharCode(cp))) return null;
-        }
-        out += src.slice(i, hi[1]).toLowerCase() === src.slice(i, hi[1]) || !sameCase ? src.slice(i, hi[1]) : `${a.toLowerCase()}-${b.toLowerCase()}`;
-        i = hi[1] - 1;
-        continue;
+    if (c === '[') {
+      let j = i + 1, neg = '';
+      if (src[j] === '^') { neg = '^'; j++; }
+      const set = new Set(), keep = [];
+      let first = true;
+      while (j < src.length && (src[j] !== ']' || first)) {
+        first = false;
+        const one = charAt(j);
+        if (!one) { keep.push(src.slice(j, j + 2)); j += 2; continue; }
+        const [lo, after] = one;
+        if (src[after] === '-' && src[after + 1] !== undefined && src[after + 1] !== ']') {
+          const two = charAt(after + 1);
+          if (!two) return null;
+          const a = lo.charCodeAt(0), b = two[0].charCodeAt(0);
+          if (b - a > 2048) {
+            for (let cp = a; cp <= b && cp <= 0xffff; cp++) if (canon(String.fromCharCode(cp)) !== String.fromCharCode(cp) || String.fromCharCode(cp).toLowerCase() !== String.fromCharCode(cp)) return null;
+            keep.push(`${esc(lo)}-${esc(two[0])}`);
+          } else for (let cp = a; cp <= b; cp++) set.add(canon(String.fromCharCode(cp)));
+          j = two[1];
+        } else { set.add(canon(lo)); j = after; }
       }
-      if (c === '\\') {
-        const n = src[i + 1] || '';
-        if (/[A-Za-z]/.test(n) && !KNOWN_ESC.test(n)) return null;
-        out += c + n; i++; continue;
-      }
-      out += c.toLowerCase();
+      if (src[j] !== ']') return null;
+      out += `[${neg}${keep.join('')}${[...set].map(esc).join('')}]`;
+      i = j;
       continue;
     }
-    if (c === '[') { inClass = true; out += c; if (src[i + 1] === '^') { out += '^'; i++; } continue; }
-    if (c !== '\\') { out += c.toLowerCase(); continue; }
-    const n = src[i + 1] || '';
-    const hex = n === 'x' ? src.slice(i + 2, i + 4) : n === 'u' ? src.slice(i + 2, i + 6) : '';
-    if (hex && /^[0-9a-fA-F]+$/.test(hex) && hex.length === (n === 'x' ? 2 : 4)) {
-      const ch = String.fromCharCode(parseInt(hex, 16)).toLowerCase();
-      out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
-      i += 1 + hex.length;
-    } else if (/[A-Za-z]/.test(n) && !KNOWN_ESC.test(n)) return null;
-    else { out += c + n; i++; }
+    if (c !== '\\') { out += c.length === 1 && /\p{L}/u.test(c) ? canon(c) : c; continue; }
+    const one = charAt(i);
+    if (!one) { out += src.slice(i, i + 2); i++; continue; }
+    out += /[A-Za-z0-9]/.test(src[i + 1] || '') ? esc(canon(one[0])) : src.slice(i, one[1]);
+    i = one[1] - 1;
   }
   return out;
 }
@@ -222,7 +235,7 @@ function lowerPattern(src) {
 const srcCache = new Map();
 function condOf(src) {
   let c = srcCache.get(src);
-  if (!c) { const pat = lowerPattern(src); c = { pat, lit: literalOf(pat === null ? src : pat), re: undefined }; srcCache.set(src, c); }
+  if (!c) { const pat = foldPattern(src); c = { pat, lit: pat === null ? '' : literalOf(pat, { raw: true }), re: undefined }; srcCache.set(src, c); }
   return c;
 }
 function rxOf(src, c = condOf(src)) {
@@ -281,14 +294,14 @@ function fieldsOf(ev, { withOut = false } = {}) {
 // core first, then the more specific item (more fields), then the id: the delivery keeps 3 per call in this order.
 function match(triggers, f) {
   const hits = [];
-  const low = {};
-  const lower = (k) => (low[k] ??= f[k].toLowerCase());
+  const folded = {};
+  const fold = (k) => (folded[k] ??= foldText(f[k]));
   const holds = (k, src) => {
     if (typeof src !== 'string' || !WHEN_FIELDS.includes(k) || !f[k]) return false;
     const c = condOf(src);
-    if (c.lit && !lower(k).includes(c.lit)) return false;
+    if (c.lit && !fold(k).includes(c.lit)) return false;
     const re = rxOf(src, c);
-    return Boolean(re) && re.test(c.pat === null ? f[k] : lower(k));
+    return Boolean(re) && re.test(c.pat === null ? f[k] : fold(k));
   };
   // An item fires when every field it names holds; `tool` is tried first (few sources, most items stop there).
   const fires = (w) => {
@@ -351,5 +364,5 @@ function repeatBefore(ev, ctx) {
       + `${framed(lessonText(t))}\nЕсли урок здесь не к месту — повтори вызов как есть: второй раз он пройдёт.` };
 }
 
-module.exports = { memoryOf, memoryRel, realish, real, nestedQuantifier, whenProblem, lowerPattern, compileItem, literalOf, loadTriggers, fieldsOf, match,
+module.exports = { memoryOf, memoryRel, realish, real, nestedQuantifier, whenProblem, foldPattern, foldText, compileItem, literalOf, loadTriggers, fieldsOf, match,
   lessonsAfter, repeatBefore, CAP, WHEN_FIELDS };
