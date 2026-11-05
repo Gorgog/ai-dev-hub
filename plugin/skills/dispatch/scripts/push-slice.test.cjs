@@ -576,3 +576,35 @@ test('push-slice verify: a zero counter does not eat a non-zero one in front; no
     assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
   }
 });
+
+// Review round 2 of HUBV2-33: a number of the neighbouring counter does not turn «fail 0» red; a generator method
+// with a space after «*» is code; Makefile recipe prefixes, a compose healthcheck, PHPUnit summaries.
+test('push-slice verify: a one-line summary without separators — «pass 6 fail 0» is green; PHPUnit Failures: 1. and FAILURES! are red', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['A: pass 15 fail 0 · 15 db=wt_a · too many clients: 0', false], ['pass=6 fail=0', false],
+    ['tests 6 failures 0', false], ['duration_ms 12 fail 0', false], ['pass 6 fail 0 skip 1', false],
+    ['1 failed 0 passed', true], ['Tests: 5, Assertions: 10, Failures: 1.', true], ['FAILURES!', true], [' 1 fail', true]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+test('push-slice: network — «  * items()» generator, Makefile @curl / -wget, compose ["CMD", "curl", …], RUN ["curl", "$URL"]', (t) => {
+  for (const [file, body] of [
+    ['src/gen2.js', 'class A {\n  * items() { yield fetch(url); }\n}\n'],
+    ['Makefile', 'get:\n\t@curl -s https://example.test/x\n'],
+    ['build.mk', 'get:\n\t-wget -q https://example.test/x\n'],
+    ['config/compose.yml', 'healthcheck:\n  test: ["CMD", "curl", "-f", "http://localhost"]\n'],
+    ['Dockerfile', 'RUN ["curl", "$URL"]\n'],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run', '--risk-ok', 'deploy');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+  const r = stand(t, { files: { 'src/doc2.js': '/**\n * fetch(url) returns the body; see {@link https://example.test}.\n * @param {string} url\n */\nmodule.exports = 1;\n' } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+});
