@@ -55,7 +55,15 @@ test('open, retro and cancelled rows are not closed; real formats of the column 
   assert.strictEqual(one('60–100 мин', '56 мин / 15 мин ожидания, 2 раунда').active, 56);
   assert.strictEqual(one('9–16 ч', '≈ 5 ч активно (сумма срезов)').active, 300);
   assert.strictEqual(one('1–2 ч', '1,5 ч / 10 мин').active, 90);
-  assert.deepStrictEqual(one('2–4 ч (поле); 4–8 ч (сетка)', '60 / 0 мин').forecast, { min: 120, max: 240 });
+  // Several ranges in one cell (variants, parts of the task): which one the fact is about is unknown — not closed.
+  assert.strictEqual(one('2–4 ч (поле); 4–8 ч (сетка)', '60 / 0 мин').forecast, null);
+  assert.strictEqual(one('01 часть 3,2–5 ч; 02 часть 1,8–3 ч', '570 / 0 мин').closed, false);
+  assert.deepStrictEqual(one('1–2 ч (код ≈ 30–40 мин; проверка ≈ 15–20 мин)', '27 / 0 мин').forecast, { min: 60, max: 120 });
+  // Mixed and compound units.
+  assert.deepStrictEqual(one('40 мин–1,5 ч', '60 / 0 мин').forecast, { min: 40, max: 90 });
+  assert.strictEqual(one('1 ч 30 мин – 2 ч', '60 / 0 мин').closed, false);
+  assert.strictEqual(one('1–2 ч', '1 ч 20 мин / 5 мин').active, 80);
+  assert.strictEqual(one('2–3 ч', '2 ч 10 мин').active, 130);
   assert.deepStrictEqual(one('45-90 мин', '60 / 0 мин').forecast, { min: 45, max: 90 });
 });
 
@@ -98,4 +106,6 @@ test('CLI: «×0.5» as text, {factor} as JSON, no «×<number>» under ten rows
   assert.match(a.stdout, /прогноз 40–80 мин × 0\.5 \(класс 1–3\) = 20–40 мин/);
   assert.strictEqual(run(path.join(d, 'nope.md')).status, 1);
   assert.strictEqual(run(full, '--apply', 'много').status, 1);
+  assert.strictEqual(run(full, '--apply', '40–80', '--complexity', '0').status, 1);
+  assert.strictEqual(run(full, '--apply', '40–80', '--complexity', '11').status, 1);
 });
