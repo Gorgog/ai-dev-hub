@@ -60,7 +60,8 @@ function runsArgs(name, argv) {
       || (a.includes('rebase') && a.some((x) => x === '-x' || x === '--exec' || x.startsWith('--exec=')))
       || a.some((x, k) => a[k - 1] === '-c' && /^alias\.[^=]*=!/.test(x));
     case 'trap': return a.length >= 2 && a[0] !== '-' && a[0] !== '';
-    case 'sed': return a.some((x) => !x.startsWith('-') && (SED_E.test(x) || SED_SE.test(x)));
+    case 'sed': return a.map((x) => x.replace(/^--expression=/, '')) // --expression=SCRIPT: the script itself
+      .some((x) => !x.startsWith('-') && (SED_E.test(x) || SED_SE.test(x)));
     case 'sqlite3': return a.some((x) => /(^|\n)\s*\.(shell|system)\b/.test(x));
     case 'tar': return a.some((x) => x === '-I' || /^--(to-command|use-compress-program|checkpoint-action|info-script|new-volume-script|rsh-command)/.test(x));
     case 'rg': return a.some((x) => x === '--pre' || x.startsWith('--pre='));
