@@ -1,0 +1,14 @@
+{
+  "id": "delivery-end",
+  "event": "SessionEnd",
+  "file": "sessionend.d/00-delivery.cjs",
+  "handler": "delivery",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": ["<data>/sessions/<session_id>.json", "<data>/events/<YYYY-MM>.jsonl"],
+  "reads": [],
+  "polygon": ["H15"],
+  "replaces": "—",
+  "review": "2027-02-05"
+}
