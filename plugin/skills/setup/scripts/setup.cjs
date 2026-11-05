@@ -47,7 +47,13 @@ function readSettings(file) {
 // session) — refused, run again: a lost write would come back as «missing» anyway.
 function realTarget(link) {
   try { return fs.realpathSync.native(link); } catch { /* dangling or absent */ }
-  try { return path.resolve(path.dirname(link), fs.readlinkSync(link)); } catch { return link; }
+  let p = link;
+  for (let i = 0; i < 40; i += 1) { // a dangling chain: follow every hop to the missing end
+    let st; try { st = fs.lstatSync(p); } catch { return p; }
+    if (!st.isSymbolicLink()) return p;
+    p = path.resolve(path.dirname(p), fs.readlinkSync(p));
+  }
+  throw new Refused(`${link}: цепочка ссылок длиннее 40 звеньев — поправь руками`);
 }
 function editSettings(link, fn) {
   const file = realTarget(link);
@@ -112,7 +118,7 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
   const sl = s.statusLine && typeof s.statusLine === 'object' ? s.statusLine : null;
   // Ours — exactly `node "<…>/setup/scripts/statusline.cjs"` (an old hub path is ours to update); anything else, a
   // wrapper around our script included, — the user's.
-  const own = sl && !/^node\s+"?[^"\s]*[\\/]setup[\\/]scripts[\\/]statusline\.cjs"?\s*$/.test(String(sl.command || ''));
+  const own = sl && !/^node\s+(?:"[^"]*[\\/]setup[\\/]scripts[\\/]statusline\.cjs"|[^"\s]*[\\/]setup[\\/]scripts[\\/]statusline\.cjs)\s*$/.test(String(sl.command || ''));
   machine('status-line', 'строка состояния хаба', !!sl && (own || sl.command === wantLine),
     sl ? `${String(sl.command || sl.type)}${own ? ' (своя — не трогаю)' : ''}` : 'нет', wantLine,
     (x) => { if (!own) x.statusLine = { type: 'command', command: wantLine, padding: 0 }; });
