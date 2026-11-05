@@ -134,11 +134,12 @@ test('review 1: base without checks.json — the trunk (main/master), not the br
   assert.match(facts(other, p.proj, 'push').join(), /отстала от main на 1/);
 });
 
-test('review 2: a report with a question later on its line is a report; the phrase going on in Russian words is a status', () => {
+test('review 2: a report with a question later on its line is a report; the phrase going on in Russian words — too', () => {
   for (const t of ['Готово к пушу: 2c049b8. Пушить?', 'Готово к пушу (2c049b8) — пушим?', 'Готово к пушу HEAD 2c049b8 — пушить?', '✅ Готово к пушу: abc1234'])
     assert.strictEqual(isReport(t), 'push', t);
-  for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.'])
-    assert.strictEqual(isReport(t), null, t);
+  // No «status» exception either (decision 05.11): «Готово к пушу после всех проверок» would pass the gate like «Пушить?».
+  for (const t of ['Готово к пушу после ревью второго круга.', 'Готово к мержу будет после правок.', 'Готово к пушу после всех проверок'])
+    assert.ok(isReport(t), t);
 });
 
 test('review 3: every line that starts with the phrase is judged, a question included', () => {
