@@ -1,0 +1,14 @@
+{
+  "id": "bare-push",
+  "event": "PreToolUse",
+  "file": "pretool.d/40-bare-push.cjs",
+  "handler": "push",
+  "stage": "canary",
+  "onError": "closed",
+  "failScope": "project",
+  "state": [],
+  "reads": [],
+  "polygon": ["H34"],
+  "replaces": "v1: «пуш — только по явной просьбе» текстом (правило 4, push.md)",
+  "review": "2027-02-05"
+}
