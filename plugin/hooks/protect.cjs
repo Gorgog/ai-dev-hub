@@ -294,14 +294,18 @@ function writeTargets(cmd) {
     const t = args.findIndex((a) => a.v === '-t' || a.v === '--target-directory');
     if (t >= 0 && args[t + 1]) add(args[t + 1].v, name);
     else if (files.length >= 2) add(files[files.length - 1].v, name);
-  } else if (name === 'mv') files.forEach((a) => add(a.v, 'mv'));
+  } else if (name === 'mv') files.forEach((a, n) => add(a.v, n === files.length - 1 ? 'mv →' : 'mv'));
   else if (['rm', 'unlink', 'shred'].includes(name)) files.forEach((a) => add(a.v, name));
   else if (name === 'truncate') nonFlags(args.filter((a, j) => !/^(-s|--size|-r|--reference)$/.test((args[j - 1] || {}).v || ''))).forEach((a) => add(a.v, 'truncate'));
   else if (name === 'dd') args.filter((a) => a.v.startsWith('of=')).forEach((a) => add(a.v.slice(3), 'dd'));
   else if (name === 'git') {
     const j = gitSub(cmd.words, k);
     const gargs = j >= 0 ? cmd.words.slice(j + 1) : [];
-    if (j >= 0 && ['rm', 'mv'].includes(cmd.words[j].v) && !gargs.some((a) => a.v === '--cached')) nonFlags(gargs).forEach((a) => add(a.v, `git ${cmd.words[j].v}`));
+    const sub = j >= 0 ? cmd.words[j].v : '';
+    const gfiles = nonFlags(gargs);
+    if (['rm', 'mv'].includes(sub) && !gargs.some((a) => a.v === '--cached')) {
+      gfiles.forEach((a, n) => add(a.v, sub === 'mv' && n === gfiles.length - 1 ? 'git mv →' : `git ${sub}`));
+    }
   }
   return res;
 }
@@ -379,8 +383,11 @@ const FILE_REASON = {
 
 function protectFiles(ev) {
   for (const t of callTargets(ev)) {
-    // A whole folder removed or moved: protected when applied migrations are under it.
-    if (/^(rm|unlink|shred|mv|git rm|git mv)$/.test(t.via) && fs.existsSync(t.path) && fs.statSync(t.path).isDirectory()) {
+    // A whole folder removed or moved: protected when applied migrations are under it. The destination folder of mv
+    // (via «… →») is a container — moving a new migration into it is fine.
+    const isDir = fs.existsSync(t.path) && fs.statSync(t.path).isDirectory();
+    if (isDir && t.via.endsWith('→')) continue;
+    if (isDir && /^(rm|unlink|shred|mv|git rm|git mv)$/.test(t.via)) {
       if (appliedMigration(t.path)) return { decision: 'deny', reason: `Хаб (protect-files): ${FILE_REASON.migration(`${t.path} (внутри)`)}` };
       continue;
     }
