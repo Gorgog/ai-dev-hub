@@ -398,7 +398,9 @@ test('review round 2: the matcher means what the `i` regex meant — mixed class
   for (const [src, str] of [['x[A-z]y', 'x_y'], ['[Z-a]q', '_q'], ['foo\\Z', 'fooz'], ['[\\x00-\\x5A]q', '_q'], ['[A-Z]{2}\\d', 'ab1'], ['\\Bstart', 'restart'],
     // review round 3: hex and letters inside a class, Cyrillic and Latin-1 ranges, letters whose folding differs
     ['[\\x41]x', 'ax'], ['[Ж]x', 'жx'], ['[\\x41\\x42]q', 'Aq'], ['[\\x41-\\x5a]x', 'bx'], ['[A-Z]', 'q'], ['[Ё-Я]x', 'Жx'], ['[Ѐ-Я]+', 'ПРИВЕТ'],
-    ['[À-Þ]', '÷'], ['aς', 'aσ'], ['k', '\u212A'], ['ß', 'ẞ'], ['[^A-Z]x', 'ax'], ['[^A-Z]x', 'Bx']]) {
+    ['[À-Þ]', '÷'], ['aς', 'aσ'], ['k', '\u212A'], ['ß', 'ẞ'], ['[^A-Z]x', 'ax'], ['[^A-Z]x', 'Bx'],
+    // variant D check: the literal prefilter folds the field too (letters sharing a capital: ς/σ, µ/μ, ϑ/θ, ᲀ/в)
+    ['λόγοσ', 'λόγος'], ['σοφία', 'ςοφία'], ['μs', 'µs'], ['θeta', 'ϑeta'], ['вход', 'ᲀход']]) {
     const want = new RegExp(src, 'i').test(str);
     const got = match([{ id: 'x', first: '', core: false, when: [{ cmd: src }] }], { cmd: str }).length === 1;
     assert.strictEqual(got, want, `${src} on ${str}: the i regex says ${want}`);
@@ -470,4 +472,26 @@ test('variant D: a risky but valid `when` is written without a block — a warni
   assert.strictEqual(r.block, null, r.out);
   assert.match(r.ctx, /nested[^\n]*when\[0\]/);
   assert.ok(store.readTriggers(s.mem).lessons.some((l) => l.id === 'nested'), 'it keeps its trigger');
+});
+
+test('variant D check: conditions slow only together are quarantined by accumulation; a healthy lesson fires again', () => {
+  const s = setup();
+  for (const [id, rx] of [['s-x', '\\s*x'], ['s-y', '\\s*y'], ['s-z', '\\s*z'], ['s-q', '\\s*q'], ['s-w', '\\s*w'], ['s-v', '\\s*v'], ['s-ok', '^\\s']]) {
+    write(path.join(s.mem, 'lessons', `${id}.md`), lesson({ id, when: [{ tool: '^Bash$', cmd: rx }], first: `Условие ${id}.` }));
+  }
+  store.ensureTriggers(s.mem);
+  const hot = require('./memory-hot.cjs');
+  const f = hot.fieldsOf({ tool_name: 'Bash', tool_input: { command: ' '.repeat(4000) } });
+  let last = [];
+  for (let i = 0; i < 8; i++) last = hot.matchGuarded(hot.loadTriggers(s.mem), f, s.mem);
+  assert.ok(Object.keys(hot.readQuarantine(s.mem)).length > 0, 'slow conditions end up in the quarantine');
+  assert.ok(last.some((t) => t.id === 's-ok'), `the healthy lesson fires once the slow ones are out: ${last.map((t) => t.id)}`);
+});
+
+test('variant D check: SessionStart names a risky `when` as a warning, apart from errors', () => {
+  const s = setup();
+  write(path.join(s.mem, 'lessons', 'risky.md'), lesson({ id: 'risky', when: [{ tool: '^Bash$', cmd: '(\\w+\\s?){1,30}!' }], first: 'Рискованный триггер.' }));
+  const r = start(s);
+  assert.match(r.out, /предупрежд[^\n]*\n(?:[^\n]*\n)*?[^\n]*risky/i);
+  assert.doesNotMatch(r.out, /проблем 1 /, 'a warning is no problem');
 });
