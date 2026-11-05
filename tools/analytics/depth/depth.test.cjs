@@ -137,6 +137,10 @@ test('шаг 0 на синтетике: глубина эпохи, правил�
   assert.deepStrictEqual(main.by_rule['sed-in-place'], { opps: 4, viol: 3 });
   assert.strictEqual(main.raw_ratio, 0.533);
   assert.strictEqual(main.verdict, 'мало данных');  // the late bucket holds < 100 opportunities
+  // Diagnostics, out of the verdict: each rule on its own, and the ratio with the expectation of the session x rule.
+  assert.deepStrictEqual(main.diagnostics?.by_rule['sed-in-place']?.buckets.map((b) => [b.opps, b.viol]), [[3, 2], [0, 0], [0, 0], [1, 1]]);
+  assert.ok('p' in (main.diagnostics?.by_rule['checks-full'] || {}) && 'ratio' in (main.diagnostics?.by_rule['checks-full'] || {}));
+  assert.strictEqual(main.diagnostics?.session_ratio, 0.815);
   // cd - its own line: c1 bare, c2 kept, c1b bare - all early.
   assert.deepStrictEqual(s.threads.main.cd.buckets.map((b) => [b.opps, b.viol]), [[3, 2], [0, 0], [0, 0], [0, 0]]);
 
@@ -191,7 +195,21 @@ test('статистика §4: явный распад — «есть», без
   assert.ok(a.p <= 0.01, `p=${a.p}`);
   assert.ok(a.ratio >= 1.3, `ratio=${a.ratio}`);
   assert.strictEqual(a.verdict, 'распад есть');
+  assert.strictEqual(a.diagnostics?.session_ratio, a.ratio);  // one rule, its rate is the same in every session
   const b = stats(flat, 'main');
   assert.ok(b.p > 0.1, `p=${b.p}`);
   assert.strictEqual(b.verdict, 'распада нет');
+});
+
+test('статистика §4: смесь сессий по глубине — отношение по правилу падает, по сессии остаётся 1', () => {
+  // Session A violates every 2nd and works only early, session B every 20th and only late: no session decays.
+  const opps = [];
+  for (let k = 0; k < 200; k++) {
+    opps.push({ stratum: 'A|r', rule: 'r', depth: 1 + (k % 50), v: k % 2 === 0 ? 1 : 0 });
+    opps.push({ stratum: 'B|r', rule: 'r', depth: 301 + (k % 200), v: k % 20 === 0 ? 1 : 0 });
+  }
+  const s = stats(opps, 'main');
+  assert.strictEqual(s.ratio, 0.1);
+  assert.strictEqual(s.diagnostics?.session_ratio, 1);
+  assert.strictEqual(s.verdict, 'распада нет');
 });
