@@ -78,7 +78,7 @@ function nestedQuantifier(src) {
   return false;
 }
 
-// One `when` item → {field: RegExp} or a reason it is not taken.
+// One `when` item → {rx: {field: RegExp}} or {error}: the check the write hook names (syntax, nested repetition).
 function compileItem(w) {
   if (!w || typeof w !== 'object' || Array.isArray(w)) return { error: 'не блок полей' };
   const out = {};
@@ -92,16 +92,86 @@ function compileItem(w) {
   return { rx: out };
 }
 
-// Live lessons with a trigger, as the hot path uses them: [{id, first, core, items: [{field: RegExp}]}].
+// The longest run of characters every match must contain, lower case ('' — none known): a cheap `includes` before the
+// regex, so a cold hook process compiles only the regexes whose literal is in the call (V8 compiles a regex on its
+// first run; 250 lessons are ≈ 670 of them). Conservative: only top-level atoms count — a top-level `|` gives none,
+// groups and classes break a run, a character made optional or repeated by `?`, `*`, `{` leaves it.
+function literalOf(src) {
+  let best = '', cur = '', depth = 0, inClass = false;
+  const flush = () => { if (cur.length > best.length) best = cur; cur = ''; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inClass) { if (c === '\\') i++; else if (c === ']') inClass = false; continue; }
+    if (c === '[') { flush(); inClass = true; continue; }
+    if (c === '(') { flush(); depth++; continue; }
+    if (c === ')') { flush(); depth = Math.max(0, depth - 1); continue; }
+    if (depth > 0) { if (c === '\\') i++; continue; }
+    if (c === '|') return '';
+    if (c === '\\') {
+      const n = src[i + 1] || '';
+      i++;
+      if (/[A-Za-z0-9]/.test(n)) {
+        flush();
+        if (n === 'x') i += 2;
+        else if (n === 'u') i = src[i + 1] === '{' ? Math.max(i, src.indexOf('}', i)) : i + 4;
+        else if (n === 'c') i += 1;
+        else if ((n === 'p' || n === 'P' || n === 'k') && /[{<]/.test(src[i + 1] || '')) i = Math.max(i, src.indexOf(src[i + 1] === '{' ? '}' : '>', i));
+        continue;
+      }
+      cur += n;
+    } else if (c === '?' || c === '*' || c === '{') {
+      cur = cur.slice(0, -1);
+      flush();
+      if (c === '{') { const e = src.indexOf('}', i); if (e > i) i = e; }
+      continue;
+    } else if (c === '+' || c === '^' || c === '$' || c === '.') { flush(); continue; }
+    else cur += c;
+    const nx = src[i + 1];
+    if (nx === '?' || nx === '*' || nx === '{') { cur = cur.slice(0, -1); flush(); }
+  }
+  flush();
+  return best.length >= 2 ? best.toLowerCase() : '';
+}
+
+// A regex by its source, compiled once per process and shared by every item with the same source (^Bash$); a source
+// that does not compile is cached as null and never matches.
+const rxCache = new Map();
+function rxOf(src) {
+  if (!rxCache.has(src)) { let re = null; try { re = new RegExp(src, 'i'); } catch { re = null; } rxCache.set(src, re); }
+  return rxCache.get(src);
+}
+
+// One `when` item as the hot path holds it: [{k, src, lit}] — no regex compiled yet; null — not taken.
+function prepareItem(w) {
+  if (!w || typeof w !== 'object' || Array.isArray(w)) return null;
+  const conds = [];
+  for (const [k, src] of Object.entries(w)) {
+    if (!WHEN_FIELDS.includes(k) || typeof src !== 'string' || nestedQuantifier(src)) return null;
+    conds.push({ k, src, lit: literalOf(src) });
+  }
+  return conds.length ? conds : null;
+}
+
+// Live lessons with a trigger, as the hot path uses them: [{id, first, core, items: [[{k, src, lit}]]}]. A hook call
+// is one process and reads the file once; a process that serves many calls (a replay) reuses it while the file's
+// size and mtime stay the same.
+const cache = new Map();
 function loadTriggers(mem) {
-  let t;
-  try { t = JSON.parse(fs.readFileSync(path.join(mem, '.triggers.json'), 'utf8')); } catch { return []; }
+  const file = path.join(mem, '.triggers.json');
+  let t, sig;
+  try {
+    const st = fs.statSync(file, { bigint: true });
+    sig = `${st.size}:${st.mtimeNs}:${st.ino}`;
+    if (cache.has(file) && cache.get(file).sig === sig) return cache.get(file).list;
+    t = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { return []; }
   const out = [];
   for (const l of t && Array.isArray(t.lessons) ? t.lessons : []) {
     if (!l || typeof l.id !== 'string' || !Array.isArray(l.when)) continue;
-    const items = l.when.map(compileItem).filter((c) => c.rx).map((c) => c.rx);
+    const items = l.when.map(prepareItem).filter(Boolean);
     if (items.length) out.push({ id: l.id, first: String(l.first || '').slice(0, 300), core: l.layer === 'core', items });
   }
+  cache.set(file, { sig, list: out });
   return out;
 }
 
@@ -130,12 +200,16 @@ function fieldsOf(ev, { withOut = false } = {}) {
 // core first, then the more specific item (more fields), then the id: the delivery keeps 3 per call in this order.
 function match(triggers, f) {
   const hits = [];
+  const low = {};
+  const lower = (k) => (low[k] ??= f[k].toLowerCase());
+  const holds = (c) => {
+    if (!f[c.k] || (c.lit && !lower(c.k).includes(c.lit))) return false;
+    const re = rxOf(c.src);
+    return Boolean(re) && re.test(f[c.k]);
+  };
   for (const t of triggers) {
     let best = 0;
-    for (const it of t.items) {
-      const ks = Object.keys(it);
-      if (ks.every((k) => f[k] && it[k].test(f[k]))) best = Math.max(best, ks.length);
-    }
+    for (const it of t.items) if (it.length > best && it.every(holds)) best = it.length;
     if (best) hits.push({ ...t, score: best });
   }
   return hits.sort((a, b) => (b.core - a.core) || (b.score - a.score) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -364,5 +438,5 @@ function preflight(ev, ctx) {
     + `Исправь файлы (Edit/Write), проверка всей памяти — recall check:\n${shown.join('\n')}`, priority: 'reminder', key: 'memory-check', source: 'memory' }] };
 }
 
-module.exports = { memoryOf, memoryRel, nestedQuantifier, compileItem, loadTriggers, fieldsOf, match, lessonsAfter, repeatBefore,
+module.exports = { memoryOf, memoryRel, nestedQuantifier, compileItem, literalOf, prepareItem, loadTriggers, fieldsOf, match, lessonsAfter, repeatBefore,
   checkWrite, bashWritesMemory, bashWrite, mirrorEvents, commitMemory, stop, preflight, CAP };

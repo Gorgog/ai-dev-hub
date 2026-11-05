@@ -11,7 +11,9 @@
     "memory/.triggers.json"
   ],
   "polygon": [
-    "H40"
+    "H40",
+    "H43",
+    "H44"
   ],
   "replaces": "v1: уроки только в брифе старта (errors-index.md)",
   "review": "2027-02-05"
