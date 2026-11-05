@@ -1,0 +1,207 @@
+// Protection modules of slice 13 (protect.cjs + pretool.d/3x-*.cjs): event in → decision out.
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const P = require('./protect.cjs');
+
+const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+const git = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: clean, stdio: ['ignore', 'pipe', 'pipe'] });
+
+// A repo with a committed migration, an existing .env, a lockfile and their harmless neighbours.
+function repo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'protect-'));
+  const files = {
+    '.env': 'KEY=1\n', '.env.local': 'KEY=2\n', '.env.example': 'KEY=\n', 'package.json': '{}\n', 'package-lock.json': '{}\n',
+    'pnpm-lock.yaml': 'x\n', 'prisma/migrations/20240101_init/migration.sql': 'create table a();\n', 'src/a.ts': 'x\n',
+    'db/migrations/001_init.sql': 'create table b();\n', 'notes.md': 'x\n',
+  };
+  for (const [rel, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), body);
+  }
+  git(dir, 'init', '-q', '-b', 'main');
+  git(dir, '-c', 'user.email=t@example.test', '-c', 'user.name=t', 'add', '--', ...Object.keys(files));
+  git(dir, '-c', 'user.email=t@example.test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init');
+  // a new migration on disk, not yet committed — allowed
+  fs.writeFileSync(path.join(dir, 'db/migrations/002_new.sql'), 'alter table b add c int;\n');
+  return dir;
+}
+const R = repo();
+const edit = (rel, tool = 'Edit', extra = {}) => ({ tool_name: tool, cwd: R, tool_input: { file_path: path.join(R, rel), ...extra }, ...extra.ev });
+const bash = (command, ev = {}) => ({ tool_name: 'Bash', cwd: R, tool_input: { command }, ...ev });
+const deny = (res, re, msg) => {
+  assert.ok(res && res.decision === 'deny', `${msg || ''} ждали deny, вышло ${JSON.stringify(res)}`);
+  if (re) assert.match(res.reason, re);
+};
+const quiet = (res, msg) => assert.strictEqual(res, null, `${msg || ''} ждали тишину, вышло ${JSON.stringify(res)}`);
+
+// --- protect-files -------------------------------------------------------------------------------------------------
+
+test('protect-files: правка существующего .env, .env.local — deny; .env.example и новый .env — можно', () => {
+  deny(P.protectFiles(edit('.env')), /\.env/);
+  deny(P.protectFiles(edit('.env.local', 'Write')), /\.env/);
+  quiet(P.protectFiles(edit('.env.example')));
+  quiet(P.protectFiles(edit('sub/.env', 'Write')), 'нового .env нет на диске:');
+  quiet(P.protectFiles(edit('src/a.ts')));
+});
+
+test('protect-files: локфайлы — deny, package.json — можно', () => {
+  deny(P.protectFiles(edit('package-lock.json')), /лок/i);
+  deny(P.protectFiles(edit('pnpm-lock.yaml', 'MultiEdit')), /лок/i);
+  quiet(P.protectFiles(edit('package.json')));
+});
+
+test('protect-files: миграция из HEAD — deny; новая миграция — можно', () => {
+  deny(P.protectFiles(edit('prisma/migrations/20240101_init/migration.sql')), /миграц/i);
+  deny(P.protectFiles(edit('db/migrations/001_init.sql', 'Write')), /миграц/i);
+  quiet(P.protectFiles(edit('db/migrations/002_new.sql')), 'на диске, но не в HEAD:');
+  quiet(P.protectFiles(edit('db/migrations/003_more.sql', 'Write')), 'ещё нет на диске:');
+});
+
+test('protect-files: Bash — запись в защищённый файл deny, чтение и текст — тишина', () => {
+  deny(P.protectFiles(bash('echo KEY=3 >> .env')), /\.env/);
+  deny(P.protectFiles(bash("sed -i 's/a/b/' package-lock.json")), /лок/i);
+  deny(P.protectFiles(bash('rm db/migrations/001_init.sql')), /миграц/i);
+  deny(P.protectFiles(bash('cp .env.example .env')), /\.env/, 'цель cp существует:');
+  deny(P.protectFiles(bash(`printf 'x' | tee -a ${R}/.env.local >/dev/null`)), /\.env/);
+  deny(P.protectFiles(bash('( cd prisma && echo x > migrations/20240101_init/migration.sql )')), /миграц/i, 'путь от cd:');
+  quiet(P.protectFiles(bash('cat .env && grep KEY .env.local')));
+  quiet(P.protectFiles(bash('git diff package-lock.json && git add package-lock.json')));
+  quiet(P.protectFiles(bash('echo ".env" >> notes.md')));
+  quiet(P.protectFiles(bash('git commit -m "fix > .env handling"')));
+  quiet(P.protectFiles(bash("cat >> notes.md <<'EOF'\necho x > .env\nEOF")), 'текст heredoc:');
+  quiet(P.protectFiles(bash('cp .env.example sub/.env')), 'цели нет:');
+  quiet(P.protectFiles(bash('npm test 2>&1 >/dev/null')));
+});
+
+// --- inline-script --------------------------------------------------------------------------------------------------
+
+test('inline-script: node -e с обратными кавычками — deny с готовой командой', () => {
+  const body = 'const s = `a`; console.log(s)';
+  const res = P.inlineScript(bash(`node -e "${body}" one two`));
+  deny(res, /Write/);
+  const m = res.reason.match(/`(node \S+\.cjs one two)`/);
+  assert.ok(m, `нет готовой команды: ${res.reason}`);
+  assert.ok(m[1].split(' ')[1].startsWith(P.SCRIPTS_DIR + path.sep), m[1]);
+});
+
+test('inline-script: python heredoc с обратным слэшем — deny, команда — python3 <файл>', () => {
+  const res = P.inlineScript(bash("python3 - <<'EOF'\nimport re\nprint(re.sub(r'\\d+', '', 'a1'))\nEOF"));
+  deny(res, /`python3 \S+\.py`/);
+});
+
+test('inline-script: heredoc в интерпретатор с флагами и выводом в файл — путь после флагов', () => {
+  const res = P.inlineScript(bash("node --input-type=module <<'EOF' > out.txt\nconsole.log(`x`)\nEOF"));
+  deny(res, /`node --input-type=module \S+\.mjs > out\.txt`/);
+});
+
+test('inline-script: perl -pi -e с регэкспом — deny, флаг e уходит из связки', () => {
+  deny(P.inlineScript(bash("perl -pi -e 's/\\s+$//' notes.md")), /`perl -pi \S+\.pl notes\.md`/);
+});
+
+test('inline-script: внутри $( ) тоже', () => {
+  deny(P.inlineScript(bash('x=$(node -e "console.log(`a`)") && echo "$x"')));
+  deny(P.inlineScript(bash('node -e "console.log(process.env.${NAME})"')), null, '${…} в двойных кавычках:');
+});
+
+test('inline-script: код в файл через cat > *.py с экранированием — deny, совет Write в этот файл', () => {
+  deny(P.inlineScript(bash("cat > fix.py <<'EOF'\nprint(\"a\\n\")\nEOF")), /Write[^\n]*fix\.py/);
+});
+
+test('inline-script: без экранирования, текст и коммиты — тишина', () => {
+  quiet(P.inlineScript(bash('node -e "console.log(1 + 1)"')));
+  quiet(P.inlineScript(bash("node -e 'console.log(require(\"./package.json\").name)'")));
+  quiet(P.inlineScript(bash("python3 -c \"import json,sys; print(json.load(sys.stdin)['a'])\" < f.json")));
+  quiet(P.inlineScript(bash("git commit -q -m \"$(cat <<'EOF'\nfix: `x` \\ y ${z}\nEOF\n)\"")), 'heredoc сообщения коммита:');
+  quiet(P.inlineScript(bash("cat >> notes.md <<'EOF'\n`code` \\ ${x}\nEOF")), 'текст в .md:');
+  quiet(P.inlineScript(bash("cat > ok.py <<'EOF'\nprint('ok')\nEOF")), 'код без экранирования:');
+  quiet(P.inlineScript(bash('node scripts/fix.cjs --flag "a\\b"')), 'скрипт файлом:');
+  quiet(P.inlineScript(bash("echo 'node -e \"`x`\"'")), 'команда в тексте echo:');
+  quiet(P.inlineScript(bash('grep -rn "node -e" docs/')));
+});
+
+// --- agent-model ----------------------------------------------------------------------------------------------------
+
+const agent = (input, tool = 'Agent') => ({ tool_name: tool, cwd: R, tool_input: { description: 'review', prompt: 'p', ...input } });
+
+test('agent-model: ревьюер с моделью не opus — deny с вызовом без model', () => {
+  deny(P.agentModel(agent({ subagent_type: 'hub:reviewer', model: 'sonnet' })), /без `?model/);
+  deny(P.agentModel(agent({ subagent_type: 'reviewer', model: 'fable' }, 'Task')), /opus/i);
+});
+
+test('agent-model: ревьюер без model или на opus, другие агенты — тишина', () => {
+  quiet(P.agentModel(agent({ subagent_type: 'hub:reviewer' })));
+  quiet(P.agentModel(agent({ subagent_type: 'hub:reviewer', model: 'opus' })));
+  quiet(P.agentModel(agent({ subagent_type: 'general-purpose', model: 'haiku' })));
+  quiet(P.agentModel(bash('echo reviewer')));
+});
+
+// --- agent-roles ----------------------------------------------------------------------------------------------------
+
+const HUB = fs.mkdtempSync(path.join(os.tmpdir(), 'protect-hub-'));
+const ctx = { hub: HUB };
+const as = (agent_type, ev) => ({ ...ev, agent_type });
+
+test('agent-roles: ревьюер и разведчик файлов не пишут', () => {
+  deny(P.agentRoles(as('hub:reviewer', edit('src/a.ts', 'Write')), ctx), /ревьюер/i);
+  deny(P.agentRoles(as('explorer', edit('src/a.ts')), ctx));
+  deny(P.agentRoles(as('hub:reviewer', bash('git diff main..HEAD > review.txt')), ctx), /review\.txt/);
+  deny(P.agentRoles(as('reviewer', bash('git stash push -m x')), ctx), /git stash/);
+  deny(P.agentRoles(as('hub:reviewer', bash('git -C /r commit -m x')), ctx), /git commit/);
+  quiet(P.agentRoles(as('hub:reviewer', bash('git diff main..HEAD > /tmp/x.diff && git log --oneline -3')), ctx));
+  quiet(P.agentRoles(as('hub:reviewer', bash('node --test src/a.test.cjs 2>&1 | tail -5')), ctx));
+  quiet(P.agentRoles(as('hub:explorer', bash('grep -rn foo src 2>/dev/null')), ctx));
+});
+
+test('agent-roles: тестировщик пишет только тесты', () => {
+  quiet(P.agentRoles(as('hub:tester', edit('src/a.test.ts', 'Write')), ctx));
+  quiet(P.agentRoles(as('tester', edit('tests/helpers/db.ts')), ctx));
+  quiet(P.agentRoles(as('hub:tester', edit('app/__tests__/x.tsx', 'Write')), ctx));
+  quiet(P.agentRoles(as('hub:tester', edit('tools/test_parse.py', 'Write')), ctx));
+  deny(P.agentRoles(as('hub:tester', edit('src/a.ts')), ctx), /тест/i);
+  deny(P.agentRoles(as('hub:tester', bash("sed -i 's/a/b/' src/a.ts")), ctx), /src\/a\.ts/);
+  quiet(P.agentRoles(as('hub:tester', bash('npm test > /tmp/out.log 2>&1')), ctx));
+});
+
+test('agent-roles: память агента в рабочем репозитории — deny всем; память хаба — deny ролям', () => {
+  deny(P.agentRoles(edit('.claude/agent-memory/reviewer/MEMORY.md', 'Write'), ctx), /agent-memory/);
+  deny(P.agentRoles(as('general-purpose', bash('echo x >> .claude/agent-memory/r.md')), ctx), /agent-memory/);
+  const mem = { tool_name: 'Write', cwd: R, tool_input: { file_path: path.join(HUB, 'projects', 'demo', 'memory', 'errors.md') } };
+  deny(P.agentRoles(as('hub:tester', mem), ctx), /памят/i);
+  quiet(P.agentRoles(mem, ctx), 'основная сессия пишет память хаба:');
+  quiet(P.agentRoles(edit('src/a.ts', 'Write'), ctx), 'основная сессия пишет код:');
+  quiet(P.agentRoles(as('general-purpose', edit('src/a.ts', 'Write')), ctx));
+});
+
+// --- modules --------------------------------------------------------------------------------------------------------
+
+test('модули pretool.d: id = запись реестра, run отдаёт решение механизма', () => {
+  const mods = {
+    'protect-files': [edit('.env'), 'pretool.d/30-protect-files.cjs'],
+    'inline-script': [bash('node -e "`x`"'), 'pretool.d/31-inline-script.cjs'],
+    'agent-model': [agent({ subagent_type: 'hub:reviewer', model: 'sonnet' }), 'pretool.d/32-agent-model.cjs'],
+    'agent-roles': [as('hub:reviewer', edit('src/a.ts', 'Write')), 'pretool.d/33-agent-roles.cjs'],
+  };
+  for (const [id, [ev, file]] of Object.entries(mods)) {
+    assert.ok(fs.existsSync(path.join(__dirname, file)), `нет модуля ${file}`);
+    const mod = require(path.join(__dirname, file));
+    assert.strictEqual(mod.id, id);
+    deny(mod.run(ev, { hub: HUB }), null, `${id}:`);
+    const rec = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'mechanisms', `${id}.json`), 'utf8'));
+    assert.strictEqual(rec.file, file);
+    assert.strictEqual(rec.handler, 'protect', 'один логический обработчик на срез');
+    assert.strictEqual(rec.onError, 'closed');
+  }
+});
+
+test('hooks.json: PreToolUse видит Agent, Task и NotebookEdit', () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, 'hooks.json'), 'utf8')).hooks.PreToolUse;
+  for (const tool of ['Agent', 'Task', 'NotebookEdit', 'Bash', 'Edit', 'Write', 'MultiEdit']) {
+    assert.ok(hooks.some((g) => new RegExp(`^(?:${g.matcher})$`).test(tool)), tool);
+  }
+});
