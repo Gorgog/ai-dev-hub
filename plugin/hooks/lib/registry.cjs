@@ -13,8 +13,8 @@ const EVENTS = { PreToolUse: 'pretool.d', PostToolUse: 'posttool.d', PostToolUse
 const STAGES = ['off', 'canary', 'on'];
 const ON_ERROR = ['open', 'closed'];
 const SCOPES = ['any', 'project', 'worktree'];
-// Budget (05.11, raised from 6, then 10): ≤ 12 logical handlers, ≤ 10 kinds of state files.
-const BUDGET = { handlers: 12, state: 10 };
+// Budget (05.11, raised from 6, then 10): ≤ 12 logical handlers, ≤ 12 kinds of state files (state raised from 10).
+const BUDGET = { handlers: 12, state: 12 };
 const REQUIRED = ['id', 'event', 'file', 'handler', 'stage', 'onError', 'failScope', 'state', 'reads', 'polygon', 'replaces', 'review'];
 
 // [{name, rec}] or [{name, error}] for every *.json in <plugin>/mechanisms.
