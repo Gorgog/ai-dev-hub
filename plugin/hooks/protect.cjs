@@ -21,9 +21,11 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // parseShell(src, cwd) → simple commands in source order, nested $( ), ( ), `…` and <( ) included:
 //   { words: [{ v, raw, start, end, expand }], redirs: [{ op, target, start, end }],
-//     heredocs: [{ delim, quoted, body, start, end, bodyStart, bodyEnd }], herestrings: [word], cwd }
+//     heredocs: [{ delim, quoted, body, start, end, bodyStart, bodyEnd }], herestrings: [word], cwd, env }
 // v — the value without quotes; raw — as typed inside the quotes (backslashes kept); expand — the shell would expand
-// it ($, `…`, \ in double quotes or bare). cwd follows `cd` within a sequence and is restored after a subshell.
+// it ($, `…`, \ in double quotes or bare). cwd follows `cd` within a sequence and is restored after a subshell; a `cd`
+// to a place we cannot name makes it null (relative paths after it are not judged). Arithmetic $(( )) / (( )) is
+// opaque, `<` `>` inside [[ ]] are comparisons.
 function parseShell(src, cwd = process.cwd()) {
   const s = String(src);
   const out = [];
@@ -61,6 +63,11 @@ function parseShell(src, cwd = process.cwd()) {
     if (s[i] === ')') i++;
   }
 
+  function skipArith() { // i at the first '(' of $(( or ((: past the matching ))
+    let depth = 0;
+    do { if (s[i] === '(') depth++; else if (s[i] === ')') depth--; i++; } while (i < s.length && depth > 0);
+  }
+
   function skipBackticks() { // i at the opening backtick
     i++;
     while (i < s.length && s[i] !== '`') i += s[i] === '\\' ? 2 : 1;
@@ -81,17 +88,18 @@ function parseShell(src, cwd = process.cwd()) {
         const body = s.slice(i + 1, end === -1 ? s.length : end);
         v += body; raw += body; i = end === -1 ? s.length : end + 1; continue;
       }
-      if (c === '$' && s[i + 1] === "'") { // $'…' — ANSI-C quoting, escapes are the shell's
+      if (c === '$' && s[i + 1] === "'") { // $'…' — ANSI-C quoting: backticks and ${ are literal here
         let j = i + 2;
         while (j < s.length && s[j] !== "'") j += s[j] === '\\' ? 2 : 1;
         const body = s.slice(i + 2, j);
-        v += body; raw += body; expand = true; i = j + 1; continue;
+        v += body; raw += body; i = j + 1; continue;
       }
       if (c === '"') {
         i++;
         while (i < s.length && s[i] !== '"') {
           const d = s[i];
           if (d === '\\') { const n = s[i + 1] || ''; v += '$`"\\\n'.includes(n) ? n : d + n; raw += d + n; expand = true; i += 2; continue; }
+          if (d === '$' && s[i + 1] === '(' && s[i + 2] === '(') { const from = i; i++; skipArith(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
           if (d === '$' && s[i + 1] === '(') { const from = i; i += 2; nested(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
           if (d === '`') { const from = i; skipBackticks(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
           if (d === '$') expand = true;
@@ -100,6 +108,7 @@ function parseShell(src, cwd = process.cwd()) {
         i++;
         continue;
       }
+      if (c === '$' && s[i + 1] === '(' && s[i + 2] === '(') { const from = i; i++; skipArith(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
       if (c === '$' && s[i + 1] === '(') { const from = i; i += 2; nested(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
       if (c === '`') { const from = i; skipBackticks(); v += s.slice(from, i); raw += s.slice(from, i); expand = true; continue; }
       if (c === '$') expand = true;
@@ -117,7 +126,8 @@ function parseShell(src, cwd = process.cwd()) {
     const finish = () => {
       if (cmd && cmd.words.length && cmd.words[0].v === 'cd') {
         const to = cmd.words[1] ? expandVars(cmd.words[1].v, cmd.env) : os.homedir();
-        if (to && !to.startsWith('-')) cwds[cwds.length - 1] = path.resolve(cmd.cwd, to);
+        if (to === null || (cmd.cwd === null && !path.isAbsolute(to))) cwds[cwds.length - 1] = null;
+        else if (!to.startsWith('-')) cwds[cwds.length - 1] = path.resolve(cmd.cwd, to);
       }
       // S=/abs; … "$S/x" — a plain assignment (or export) is remembered for the paths of the next commands.
       if (cmd && cmd.words.length && (cmd.words[0].v === 'export' || programAt(cmd.words) < 0)) {
@@ -137,6 +147,10 @@ function parseShell(src, cwd = process.cwd()) {
       if (c === '#' && (!cmd || i === 0 || /\s/.test(s[i - 1]))) { while (i < s.length && s[i] !== '\n') i++; continue; }
       if (c === ')') { if (stop === ')') { finish(); return; } i++; continue; }
       if (c === ';' || c === '|' || (c === '&' && s[i + 1] !== '>')) { finish(); i++; continue; }
+      if (c === '(' && s[i + 1] === '(' && !(cmd && cmd.words.length)) { finish(); skipArith(); continue; } // (( x > y ))
+      if ((c === '<' || c === '>') && cmd && cmd.words.length && cmd.words[0].v === '[[') { // [[ $a > b ]]
+        begin().words.push({ v: c, raw: c, start: i, end: i + 1, expand: false }); i++; continue;
+      }
       if (c === '(') {
         if (cmd && cmd.words.length) { i++; continue; } // f() { … } — a function definition
         finish(); i++; nested(); continue;
@@ -228,12 +242,27 @@ function gitSub(words, k) {
   return j < words.length ? j : -1;
 }
 
-// Files a command writes or removes: [{ path (absolute), via }].
+// A path with * ? [ in its segments → the existing paths it matches (at most 200), else [].
+function globPaths(abs) {
+  let cur = ['/'];
+  for (const seg of abs.split('/').filter(Boolean)) {
+    if (!/[*?[]/.test(seg)) { cur = cur.map((d) => path.join(d, seg)); continue; }
+    const re = new RegExp(`^${seg.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+    cur = cur.flatMap((d) => { try { return fs.readdirSync(d).filter((n) => re.test(n)).map((n) => path.join(d, n)); } catch { return []; } }).slice(0, 200);
+  }
+  return cur.filter((p) => fs.existsSync(p));
+}
+
+// Files a command writes or removes: [{ path (absolute), via }]. Paths with an unknown variable or relative to an
+// unknown cwd are left out; a glob is expanded over the disk.
 function writeTargets(cmd) {
   const res = [];
   const add = (p, via) => {
     const x = p && expandVars(p, cmd.env);
-    if (x && !/[*?]/.test(x)) res.push({ path: path.resolve(cmd.cwd, x), via });
+    if (!x || (cmd.cwd === null && !path.isAbsolute(x))) return;
+    const abs = path.resolve(cmd.cwd || '/', x);
+    if (/[*?[]/.test(x)) globPaths(abs).forEach((g) => res.push({ path: g, via }));
+    else res.push({ path: abs, via });
   };
   for (const r of cmd.redirs) if (/>|<>/.test(r.op)) add(r.target, `${r.op} ${r.target}`);
   const k = programAt(cmd.words);
@@ -251,7 +280,7 @@ function writeTargets(cmd) {
       rest.push(args[j]);
     }
     (scripted ? rest : rest.slice(1)).forEach((a) => add(a.v, 'sed -i'));
-  } else if (name === 'perl' && args.some((a) => /^-[a-zA-Z]*i/.test(a.v))) {
+  } else if (name === 'perl' && args.some((a) => /^-[a-zA-Z]*i/.test(a.v) && !/^-[IMmx]/.test(a.v))) {
     const rest = [];
     let scripted = false;
     for (let j = 0; j < args.length; j++) {
@@ -270,7 +299,8 @@ function writeTargets(cmd) {
   else if (name === 'dd') args.filter((a) => a.v.startsWith('of=')).forEach((a) => add(a.v.slice(3), 'dd'));
   else if (name === 'git') {
     const j = gitSub(cmd.words, k);
-    if (j >= 0 && ['rm', 'mv'].includes(cmd.words[j].v)) nonFlags(cmd.words.slice(j + 1)).forEach((a) => add(a.v, `git ${cmd.words[j].v}`));
+    const gargs = j >= 0 ? cmd.words.slice(j + 1) : [];
+    if (j >= 0 && ['rm', 'mv'].includes(cmd.words[j].v) && !gargs.some((a) => a.v === '--cached')) nonFlags(gargs).forEach((a) => add(a.v, `git ${cmd.words[j].v}`));
   }
   return res;
 }
@@ -287,6 +317,13 @@ function callTargets(ev) {
   return [];
 }
 
+const realp = (p) => {
+  let cur = p;
+  const tail = [];
+  while (!fs.existsSync(cur) && path.dirname(cur) !== cur) { tail.unshift(path.basename(cur)); cur = path.dirname(cur); }
+  try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { return p; }
+};
+
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
 const gitOut = (dir, args) => {
   const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: cleanEnv(), timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -298,19 +335,33 @@ const gitOut = (dir, args) => {
 const LOCKS = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb',
   'Cargo.lock', 'poetry.lock', 'Pipfile.lock', 'uv.lock', 'composer.lock', 'Gemfile.lock', 'go.sum']);
 
+const MIGRATION_DIR = /^(migrations?|migrate)$/i;
+const DOC_EXT = /\.(md|markdown|txt|rst|adoc)$/i;
+
+// A cheap first look by the path alone; a migration candidate is confirmed by appliedMigration().
 function classify(p) {
   const base = path.basename(p);
   if (/^\.env(\.[^/]+)?$/.test(base) && !/\.(example|sample|template|dist|defaults?|schema)$/i.test(base)) return 'env';
   if (LOCKS.has(base)) return 'lock';
-  if (path.dirname(p).split(path.sep).some((seg) => /^migrations?$/i.test(seg))) return 'migration';
+  if (p.split(path.sep).some((seg) => MIGRATION_DIR.test(seg))) return 'migration';
   return null;
 }
 
-// A migration «applied» = already in HEAD of its repository; a file on disk but not committed is a new one.
-function inHead(p) {
-  const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) return false;
-  return gitOut(dir, ['cat-file', '-e', `HEAD:./${path.basename(p)}`]) !== null;
+// A migration «applied» = already in HEAD of its repository; a file on disk but not committed is a new one. The
+// migrations folder is looked for in the path from the repository root (a folder above the root does not count),
+// docs are not migrations; a folder is applied when HEAD has migration files under it.
+function appliedMigration(p) {
+  const isDir = fs.existsSync(p) && fs.statSync(p).isDirectory();
+  let dir = isDir ? p : path.dirname(p);
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  const top = gitOut(dir, ['rev-parse', '--show-toplevel']);
+  if (!top) return false;
+  const rel = path.relative(realp(top), realp(p));
+  if (!rel || rel.startsWith('..')) return false;
+  const segs = rel.split(path.sep);
+  if (!(isDir ? segs : segs.slice(0, -1)).some((seg) => MIGRATION_DIR.test(seg)) || (!isDir && DOC_EXT.test(rel))) return false;
+  const listed = gitOut(top, ['ls-tree', '-r', '--name-only', 'HEAD', '--', rel]);
+  return !!listed && listed.split('\n').some((f) => f && !DOC_EXT.test(f));
 }
 
 const FILE_REASON = {
@@ -323,7 +374,7 @@ function protectFiles(ev) {
   for (const t of callTargets(ev)) {
     const kind = classify(t.path);
     if (!kind) continue;
-    if (kind === 'migration' ? !inHead(t.path) : !fs.existsSync(t.path)) continue;
+    if (kind === 'migration' ? !appliedMigration(t.path) : !fs.existsSync(t.path)) continue;
     return { decision: 'deny', reason: `Хаб (protect-files): ${FILE_REASON[kind](t.path)}` };
   }
   return null;
@@ -331,11 +382,12 @@ function protectFiles(ev) {
 
 // ---- inline-script -------------------------------------------------------------------------------------------------
 
+// eval — the flag that takes the script as an argument (what the ready command uses for a heredoc-fed one).
 const INTERPS = [
-  { re: /^(node|nodejs)$/, ext: '.cjs', flag: (v) => /^(-e|--eval|-p|--print|-pe)$/.test(v) },
-  { re: /^python[\d.]*$/, ext: '.py', flag: (v) => /^-[A-Za-z]*c$/.test(v) },
-  { re: /^perl$/, ext: '.pl', flag: (v) => /^-[A-Za-z]*[eE]$/.test(v) },
-  { re: /^ruby$/, ext: '.rb', flag: (v) => /^-[A-Za-z]*e$/.test(v) },
+  { re: /^(node|nodejs)$/, ext: '.cjs', eval: '-e', flag: (v) => /^(-e|--eval|-p|--print|-pe)$/.test(v) },
+  { re: /^python[\d.]*$/, ext: '.py', eval: '-c', flag: (v) => /^-[A-Za-z]*c$/.test(v) },
+  { re: /^perl$/, ext: '.pl', eval: '-e', flag: (v) => /^-[A-Za-z]*[eE]$/.test(v) },
+  { re: /^ruby$/, ext: '.rb', eval: '-e', flag: (v) => /^-[A-Za-z]*e$/.test(v) },
 ];
 const CODE_EXT = /\.(c?js|mjs|[cm]?ts|py|rb|pl|sh|bash)$/;
 // Escaping the shell itself rewrites — only where it expands (double quotes, a heredoc without quotes): an unescaped
@@ -343,7 +395,7 @@ const CODE_EXT = /\.(c?js|mjs|[cm]?ts|py|rb|pl|sh|bash)$/;
 // substitution). '…' and <<'EOF' reach the interpreter as typed; $VAR in double quotes is mostly meant (a path) — both
 // pass. Measured 05.11 on 56k real Bash calls: the strict «any \, ` or ${» would deny 7 % of them, this ~0.2 %.
 const hazard = (body, expand) => expand && (/(^|[^\\])`/.test(body) || /\\\\/.test(body)
-  || /\$\{(?![A-Za-z_][A-Za-z0-9_]*([:#%/^,@-][^}]*)?\})/.test(body));
+  || /(^|[^\\])\$\{(?![A-Za-z_][A-Za-z0-9_]*([:#%/^,@-][^}]*)?\})/.test(body));
 
 function applyEdits(s, edits) {
   let res = s;
@@ -375,22 +427,22 @@ function inlineScript(ev) {
         if (!v.startsWith('-') || v === '-') { scriptArg = args[j]; break; }
         if (interp.flag(v) && args[j + 1]) { flagAt = j; break; }
       }
-      let body = null, expand = false, edits = [], note = '';
-      let ext = interp.ext;
-      if (name.startsWith('node') && (args.some((a) => a.v === '--input-type=module'))) ext = '.mjs';
+      // The ready command keeps the interpreter, its flags, the cwd (require / import from it) and stdin: only the body
+      // moves to a file and comes back as "$(cat FILE)" — the shell does not rewrite a substitution's result.
+      let body = null, expand = false, file = null;
+      const edits = [];
+      const ext = name.startsWith('node') && args.some((a) => a.v === '--input-type=module') ? '.mjs' : interp.ext;
       if (flagAt >= 0) {
-        const f = args[flagAt], b = args[flagAt + 1];
+        const b = args[flagAt + 1];
         body = b.raw; expand = b.expand;
-        const file = scriptFile(body, ext);
-        const single = /^(-e|--eval|-c|-p|--print|-pe)$/.test(f.v) || (interp.ext !== '.cjs' && f.v.length === 2);
-        edits.push({ start: f.start, end: b.end, text: single ? file : `${f.v.slice(0, -1)} ${file}` });
-        if (name.startsWith('node') && /p/.test(f.v)) note = ' Вывод результата (-p) — console.log в скрипте.';
+        file = scriptFile(body, ext);
+        edits.push({ start: b.start, end: b.end, text: `"$(cat ${file})"` });
       } else if ((cmd.heredocs.length || cmd.herestrings.length) && (!scriptArg || scriptArg.v === '-')) {
         const hd = cmd.heredocs[cmd.heredocs.length - 1];
         const hs = cmd.herestrings[cmd.herestrings.length - 1];
         if (hd) { body = hd.body; expand = !hd.quoted; } else { body = hs.raw; expand = hs.expand; }
-        if (name.startsWith('node') && /^\s*(import|export)\s/m.test(body)) ext = '.mjs';
-        const file = scriptFile(body, ext);
+        file = scriptFile(body, ext);
+        const evalArg = `${interp.eval} "$(cat ${file})"`;
         if (hd) {
           let st = hd.start;
           while (st > 0 && (src[st - 1] === ' ' || src[st - 1] === '\t')) st--;
@@ -401,17 +453,16 @@ function inlineScript(ev) {
           while (st > 0 && (src[st - 1] === ' ' || src[st - 1] === '\t')) st--;
           edits.push({ start: st, end: hs.end, text: '' });
         }
-        if (scriptArg) edits.push({ start: scriptArg.start, end: scriptArg.end, text: file });
+        if (scriptArg) edits.push({ start: scriptArg.start, end: scriptArg.end, text: evalArg });
         else {
           let last = cmd.words[k];
           for (const a of args) { if (a.v.startsWith('-') && a.v !== '-') last = a; else break; }
-          edits.push({ start: last.end, end: last.end, text: ` ${file}` });
+          edits.push({ start: last.end, end: last.end, text: ` ${evalArg}` });
         }
       }
       if (body !== null && hazard(body, expand)) {
-        const file = edits.find((e) => e.text.includes(SCRIPTS_DIR)).text.trim().split(' ').pop();
         const ready = applyEdits(src, edits).trim();
-        return { decision: 'deny', reason: `Хаб (inline-script): ${INLINE_WHY} Запиши тело скрипта инструментом Write в ${file} — как задумано, без экранирования под shell — и выполни Bash: \`${ready}\`.${note} Можно файл в scratchpad сессии — тогда тот же путь и в команде.` };
+        return { decision: 'deny', reason: `Хаб (inline-script): ${INLINE_WHY} Запиши тело скрипта инструментом Write в ${file} — как задумано, без экранирования под shell — и выполни Bash: \`${ready}\`. Можно файл в scratchpad сессии — тогда тот же путь и в команде.` };
       }
       continue;
     }
@@ -434,6 +485,20 @@ const roleOf = (type) => String(type || '').split(':').pop();
 // A model family by name, Latin or Cyrillic, as a person writes it in chat.
 const FAMILIES = { sonnet: /sonnet|сон+ет/i, fable: /fable|ф[еэ]йбл/i, haiku: /haiku|хайку/i };
 const TRANSCRIPT_CAP = 32 * 1024 * 1024;
+const NEGATION = /(^|[^а-яёa-z])(не|без|кроме|not|no|without|except)(\s|$)/i;
+
+// Named = at least one mention whose clause (from the previous , . ; : ! ? — ( or a line break) has no negation:
+// «только не на sonnet — на opus» does not name sonnet.
+function named(text, re) {
+  const g = new RegExp(re.source, 'gi');
+  let m;
+  while ((m = g.exec(text))) {
+    const before = text.slice(0, m.index);
+    const cut = Math.max(...[',', '.', ';', ':', '!', '?', '—', '–', '(', '\n'].map((d) => before.lastIndexOf(d)));
+    if (!NEGATION.test(before.slice(cut + 1))) return true;
+  }
+  return false;
+}
 
 // The text of the person's last message in the session journal, system-reminder blocks cut out; null when the journal
 // is missing or unreadable. «The person» = origin.kind human: tool results, other sessions' messages (peer), task
@@ -471,9 +536,9 @@ function agentModel(ev) {
   const model = String(input.model || '');
   if (roleOf(input.subagent_type) !== 'reviewer' || !model || /opus/i.test(model)) return null;
   const family = Object.keys(FAMILIES).find((f) => model.toLowerCase().includes(f));
-  const named = family ? FAMILIES[family] : new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const re = family ? FAMILIES[family] : new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   const said = lastHumanText(ev.transcript_path);
-  if (said !== null && named.test(said)) return null;
+  if (said !== null && named(said, re)) return null;
   return { decision: 'deny', reason: `Хаб (agent-model): ревьюер — только на Opus (правило 8 хаба), модель задаёт reviewer.md. Повтори вызов ${ev.tool_name} с теми же полями без model (subagent_type: "${input.subagent_type}"), сейчас model: "${input.model}"; другая модель — только если пользователь назовёт её сам${said === null ? ' (журнал сессии не прочитан)' : ''}.` };
 }
 
@@ -483,6 +548,7 @@ const TEST_PATH = /(^|\/)(tests?|__tests__|specs?|e2e|__fixtures__|fixtures|__sn
 const GIT_WRITES = new Set(['add', 'commit', 'reset', 'checkout', 'switch', 'restore', 'stash', 'merge', 'rebase', 'cherry-pick',
   'revert', 'rm', 'mv', 'clean', 'apply', 'am', 'push', 'pull', 'tag', 'branch', 'worktree', 'notes', 'update-ref', 'gc', 'init']);
 const GIT_READ_FORMS = { stash: /^(list|show)$/, worktree: /^list$/, notes: /^(list|show)$/ };
+const TAG_LIST = /^(-l|--list|-n\d*|--contains|--no-contains|--points-at|--merged|--no-merged|--sort|--format|--column)(=|$)/;
 
 // A git command that changes a repository: { what: 'git stash', dir } — dir is where it acts (cwd, -C, the path of
 // init), null when a variable in it is unknown. branch/tag only with arguments that change.
@@ -495,8 +561,10 @@ function gitWrite(cmd) {
   const rest = cmd.words.slice(j + 1).map((w) => w.v);
   if (!GIT_WRITES.has(sub)) return null;
   if (GIT_READ_FORMS[sub] && rest.length && GIT_READ_FORMS[sub].test(rest[0])) return null;
+  if (sub === 'notes' && !rest.length) return null;
   if (sub === 'branch' && !rest.some((a) => /^-[dDmMcCf]$|^--(delete|move|copy|force|set-upstream-to)/.test(a))) return null;
-  if (sub === 'tag' && !rest.some((a) => !a.startsWith('-')) && !rest.some((a) => /^-[dfas]$/.test(a))) return null;
+  if (sub === 'tag' && (rest.some((a) => TAG_LIST.test(a)) || !rest.length)) return null;
+  if (sub === 'apply' && rest.some((a) => /^--(check|stat|numstat|summary)$/.test(a)) && !rest.includes('--apply')) return null;
   let dir = cmd.cwd;
   for (let m = k + 1; m < j && dir; m++) {
     if (cmd.words[m].v === '-C' && cmd.words[m + 1]) { const d = expandVars(cmd.words[m + 1].v, cmd.env); dir = d === null ? null : path.resolve(dir, d); m++; }
@@ -507,12 +575,6 @@ function gitWrite(cmd) {
   return { what: `git ${sub}`, dir };
 }
 
-const realp = (p) => {
-  let cur = p;
-  const tail = [];
-  while (!fs.existsSync(cur) && path.dirname(cur) !== cur) { tail.unshift(path.basename(cur)); cur = path.dirname(cur); }
-  try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { return p; }
-};
 const inside = (p, dir) => p === dir || p.startsWith(dir.endsWith('/') ? dir : dir + '/');
 
 const ROLE_TEXT = {
@@ -524,7 +586,11 @@ const ROLE_TEXT = {
 function agentRoles(ev, ctx = {}) {
   const role = roleOf(ev.agent_type);
   const targets = callTargets(ev).map((t) => ({ ...t, real: realp(t.path) }));
-  const mem = targets.find((t) => /(^|\/)\.claude\/agent-memory(\/|$)/.test(t.real));
+  // Project and local agent memory lives in a repository (<repo>/.claude/agent-memory[-local]); the user scope
+  // (~/.claude/agent-memory) is not a repository, and removing the folder is cleaning up, not writing.
+  const home = realp(path.join(os.homedir(), '.claude'));
+  const mem = targets.find((t) => /(^|\/)\.claude\/agent-memory(-local)?(\/|$)/.test(t.real) && !inside(t.real, home)
+    && !/^(rm|unlink|shred|git rm)$/.test(t.via));
   if (mem) return { decision: 'deny', reason: `Хаб (agent-roles): ${mem.path} — агенты не пишут память в рабочий репозиторий (.claude/agent-memory): урок — строкой «Предлагаю в errors.md» в отчёте.` };
   if (!ROLE_TEXT[role]) return null;
 
@@ -536,11 +602,13 @@ function agentRoles(ev, ctx = {}) {
   const cwd = ev.cwd || process.cwd();
   const command = ev.tool_name === 'Bash' && (ev.tool_input || {}).command;
   const gits = typeof command === 'string' ? parseShell(command, cwd).map(gitWrite).filter((g) => g && g.dir) : [];
+  // gitWrite resolves -C / init paths from cmd.cwd; with an unknown cwd only absolute ones survive (dir non-null).
   if (!targets.length && !gits.length) return null;
   // The working repository is the session's one (its git top, else cwd); the scratchpad, /tmp and a scratch repo
   // there are the agent's own — notes and probes are fine.
   const root = realp(gitOut(cwd, ['rev-parse', '--show-toplevel']) || cwd);
-  const bad = targets.find((t) => inside(t.real, root) && !(role === 'tester' && TEST_PATH.test(t.real)));
+  const isTest = (t) => TEST_PATH.test(path.relative(root, t.real));
+  const bad = targets.find((t) => inside(t.real, root) && !(role === 'tester' && isTest(t)));
   if (bad) return { decision: 'deny', reason: `Хаб (agent-roles): ${why}; запись в ${bad.path} (${bad.via})${role === 'tester' ? ' — не тест' : ''}.` };
   const g = gits.find((x) => inside(realp(x.dir), root));
   if (g) return { decision: 'deny', reason: `Хаб (agent-roles): ${why}; ${g.what} меняет рабочий репозиторий ${root}.` };

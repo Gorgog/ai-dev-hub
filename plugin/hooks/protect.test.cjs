@@ -85,23 +85,23 @@ test('inline-script: node -e "…" с обратными кавычками — 
   const body = 'const s = `a`; console.log(s)';
   const res = P.inlineScript(bash(`node -e "${body}" one two`));
   deny(res, /Write/);
-  const m = res.reason.match(/`(node \S+\.cjs one two)`/);
+  const m = res.reason.match(/`node -e "\$\(cat (\S+\.cjs)\)" one two`/);
   assert.ok(m, `нет готовой команды: ${res.reason}`);
-  assert.ok(m[1].split(' ')[1].startsWith(P.SCRIPTS_DIR + path.sep), m[1]);
+  assert.ok(m[1].startsWith(P.SCRIPTS_DIR + path.sep), m[1]);
 });
 
-test('inline-script: python heredoc без кавычек с `\\` — deny, команда — python3 <файл>', () => {
+test('inline-script: python heredoc без кавычек с `\\` — deny, команда — python3 -c "$(cat <файл>)"', () => {
   const res = P.inlineScript(bash("python3 - <<EOF\nimport re\nprint(re.sub(r'\\\\d+', '', 'a1'))\nEOF"));
-  deny(res, /`python3 \S+\.py`/);
+  deny(res, /`python3 -c "\$\(cat \S+\.py\)"`/);
 });
 
 test('inline-script: heredoc в интерпретатор с флагами и выводом в файл — путь после флагов', () => {
   const res = P.inlineScript(bash('node --input-type=module <<EOF > out.txt\nconsole.log(`x`)\nEOF'));
-  deny(res, /`node --input-type=module \S+\.mjs > out\.txt`/);
+  deny(res, /`node --input-type=module -e "\$\(cat \S+\.mjs\)" > out\.txt`/);
 });
 
-test('inline-script: perl -pi -e в двойных кавычках с `\\` — deny, флаг e уходит из связки', () => {
-  deny(P.inlineScript(bash('perl -pi -e "s/\\\\s+//" notes.md')), /`perl -pi \S+\.pl notes\.md`/);
+test('inline-script: perl -pi -e в двойных кавычках с `\\` — deny, флаги на месте', () => {
+  deny(P.inlineScript(bash('perl -pi -e "s/\\\\s+//" notes.md')), /`perl -pi -e "\$\(cat \S+\.pl\)" notes\.md`/);
 });
 
 test('inline-script: внутри $( ) тоже; ${…} — не параметр shell', () => {
