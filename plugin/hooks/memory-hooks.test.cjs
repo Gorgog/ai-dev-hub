@@ -391,3 +391,9 @@ test('review round 2: the matcher means what the `i` regex meant — mixed class
     assert.strictEqual(got, want, `${src} on ${str}: the i regex says ${want}`);
   }
 });
+
+test('the Bash module filters commands with the same gate as the library', () => {
+  const { GATE } = require('./memory-hooks.cjs');
+  const src = fs.readFileSync(path.join(__dirname, 'pretool.d', '50-memory-bash-write.cjs'), 'utf8');
+  assert.ok(src.includes(`/${GATE.source}/.test(cmd)`), `50-memory-bash-write.cjs must test /${GATE.source}/`);
+});

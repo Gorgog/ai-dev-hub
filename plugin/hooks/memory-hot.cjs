@@ -9,15 +9,18 @@ const path = require('path');
 const CAP = 4000; // characters of a field the triggers see: cmd/body/path from the head, out from the tail
 const WHEN_FIELDS = ['tool', 'cmd', 'path', 'body', 'out'];
 
-// The guard against a `when` that backtracks catastrophically (review 05.11: `(\w|\d)+@` on a sha, `(.|\s)*`,
-// `\s*\s*\s*`): after 10 000 backtracks V8 reruns the regex on its linear engine. The linear engine takes no `i` flag,
-// so the triggers run case-folded by hand: the pattern's literal letters and the field both through toLowerCase. It
-// cannot run backreferences and lookaround either — such a source is judged statically (whenProblem) instead.
+// The guard against a `when` that backtracks catastrophically has two layers (review 05.11, rounds 1–2). First, static:
+// whenProblem refuses the forms that blow up — a repeated group holding a repetition or an alternation (bounded
+// `{1,30}` too), three repeated atoms in a row, and with lookaround or a backreference three unbounded repetitions at
+// all. Second, V8's own: after 10 000 backtracks it reruns a regex on its linear engine — which takes no `i` flag, no
+// lookaround, no backreference and no large bounded repetition, so it only adds to the static check. To give it the
+// most triggers, a source whose meaning survives it runs case-folded by hand (lowerPattern on a lower-cased field);
+// any other runs with `i` as written.
 try {
   const v8 = require('v8');
   v8.setFlagsFromString('--enable-experimental-regexp-engine-on-excessive-backtracks');
   v8.setFlagsFromString('--regexp-backtracks-before-fallback=10000');
-} catch { /* an older node: the static check below still holds */ }
+} catch { /* an older node: the static check still holds */ }
 
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return p; } };
 // A path that may not exist yet (a lesson being written): realpath of its nearest existing folder + the rest.
@@ -79,16 +82,22 @@ function nestedQuantifier(src) {
   return false;
 }
 
-// Why a `when` source is not used by the hot path, or null. Without backreferences and lookaround V8's fallback to the
-// linear engine bounds any backtracking; with them it cannot, so the forms that blow up are refused — a quantified
-// group holding a quantifier or an alternation, three quantified atoms in a row.
+// Why a `when` source is not used by the hot path, or null (see the guard above). Always refused: a repeated group
+// holding a repetition or an alternation (the linear engine takes no large bounded repetition either). For a source the
+// linear engine cannot take (lookaround, a backreference, or one that runs with `i`), also: three repeated atoms in a
+// row, three unbounded repetitions of a wide atom (`.`, `[^…]`, `\S`, `\W`, `\D`, `[\s\S]`) — polynomial backtracking.
 const LINEAR_UNSUPPORTED = /\\[1-9]|\\k<|\(\?<?[=!]/;
 const ADJACENT = /(?:(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\\()[\]|^$])(?:[*+]|\{\d+,\d*\})\??){3,}/;
+const WIDE = /(?:\.|\[\^(?:\\.|[^\]\\])*\]|\\[SWD]|\[\\s\\S\]|\[\\S\\s\])(?:[*+]|\{\d+,\})/g;
 function whenProblem(src) {
   try { new RegExp(src, 'i'); } catch (e) { return `регэксп не компилируется — ${e.message}`; }
-  if (!LINEAR_UNSUPPORTED.test(src)) return null;
-  const risky = nestedQuantifier(src) || /\((?:\?:)?[^()]*\|[^()]*\)(?:[*+]|\{\d+,)/.test(src) || ADJACENT.test(src);
-  return risky ? `«${src.slice(0, 60)}»: обратная ссылка или просмотр вместе с повтором — откат без предела, хук его не берёт` : null;
+  const noLinear = LINEAR_UNSUPPORTED.test(src) || lowerPattern(src) === null;
+  const bad = nestedQuantifier(src) ? 'повтор группы, внутри которой повтор'
+    : /\((?:\?:)?[^()]*\|[^()]*\)(?:[*+]|\{\d+,|\{\d{2,}\})/.test(src) ? 'повтор группы с альтернативой'
+      : noLinear && ADJACENT.test(src) ? 'три повтора подряд при просмотре, обратной ссылке или флаге i'
+        : noLinear && (src.match(WIDE) || []).length >= 3 ? 'три широких неограниченных повтора при просмотре, обратной ссылке или флаге i'
+          : null;
+  return bad ? `«${src.slice(0, 60)}»: ${bad} — откат без предела на длинном вводе, хук его не берёт` : null;
 }
 
 // One `when` item → {rx: {field: RegExp}} or {error}: the check the write hook names (syntax, nested repetition).
@@ -147,19 +156,56 @@ function literalOf(src) {
     if (nx === '?' || nx === '*' || quant(i + 1)) { cur = cur.slice(0, -1); flush(); }
   }
   flush();
-  return best.length >= 2 ? best.toLowerCase() : '';
+  const lit = best.toLowerCase();
+  // A letter whose case folding differs from toLowerCase (ς, µ) could make `includes` miss what `i` matches.
+  return lit.length >= 2 && [...lit].every((ch) => ch.toUpperCase().toLowerCase() === ch) ? lit : '';
 }
 
 // What the hot path knows of a regex source, computed on first use and shared by every item with that source: the
 // literal, whether it is safe (no nested repetition — such a condition never matches) and the compiled regex (only
 // past the literal; a source that does not compile never matches).
-// The source with its literal letters through toLowerCase — escapes as written (\S stays \S), a well-formed \xHH or
-// \uHHHH re-escaped as its lower-case letter. Run without `i` on a lower-cased field it matches what the `i` regex
-// matched, up to the few letters whose case folding differs from toLowerCase (σ/ς, µ/μ).
+// The source with its literal letters through toLowerCase, for a lower-cased field and no `i`; null — lowering would
+// change its meaning, so it runs with `i` as written: an escaped letter that is not a known escape (`\Z` is a plain Z
+// without the u flag), a class range unless both ends are letters of one case (`[A-z]`, `[Z-a]`, `[\x00-\x5A]` cover
+// other characters). Escapes stay as written (\S, \B); a well-formed \xHH or \uHHHH outside a class is re-escaped as
+// its lower-case letter. Left: letters whose case folding differs from toLowerCase (σ/ς, µ/μ) — literalOf drops them.
+const KNOWN_ESC = /[dDwWsSbBnrtfv0-9cxukpP]/;
+const cased = (ch) => ch.toLowerCase() !== ch.toUpperCase();
 function lowerPattern(src) {
-  let out = '';
+  let out = '', inClass = false;
+  const endAt = (i) => { // a class range end at i: [char, next index] or null
+    if (src[i] !== '\\') return src[i] === undefined || src[i] === ']' ? null : [src[i], i + 1];
+    const n = src[i + 1] || '';
+    const hex = n === 'x' ? src.slice(i + 2, i + 4) : n === 'u' ? src.slice(i + 2, i + 6) : '';
+    if (hex && /^[0-9a-fA-F]+$/.test(hex) && hex.length === (n === 'x' ? 2 : 4)) return [String.fromCharCode(parseInt(hex, 16)), i + 2 + hex.length];
+    return /[A-Za-z0-9]/.test(n) ? null : [n, i + 2];
+  };
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
+    if (inClass) {
+      if (c === ']') { inClass = false; out += c; continue; }
+      const lo = endAt(i);
+      if (lo && src[lo[1]] === '-' && src[lo[1] + 1] !== ']' && src[lo[1] + 1] !== undefined) {
+        const hi = endAt(lo[1] + 1);
+        if (!hi) return null;
+        const [a, b] = [lo[0], hi[0]];
+        const sameCase = cased(a) && cased(b) && (a === a.toLowerCase()) === (b === b.toLowerCase());
+        if (!sameCase) {
+          for (let cp = a.charCodeAt(0); cp <= b.charCodeAt(0); cp++) if (cased(String.fromCharCode(cp))) return null;
+        }
+        out += src.slice(i, hi[1]).toLowerCase() === src.slice(i, hi[1]) || !sameCase ? src.slice(i, hi[1]) : `${a.toLowerCase()}-${b.toLowerCase()}`;
+        i = hi[1] - 1;
+        continue;
+      }
+      if (c === '\\') {
+        const n = src[i + 1] || '';
+        if (/[A-Za-z]/.test(n) && !KNOWN_ESC.test(n)) return null;
+        out += c + n; i++; continue;
+      }
+      out += c.toLowerCase();
+      continue;
+    }
+    if (c === '[') { inClass = true; out += c; if (src[i + 1] === '^') { out += '^'; i++; } continue; }
     if (c !== '\\') { out += c.toLowerCase(); continue; }
     const n = src[i + 1] || '';
     const hex = n === 'x' ? src.slice(i + 2, i + 4) : n === 'u' ? src.slice(i + 2, i + 6) : '';
@@ -167,7 +213,8 @@ function lowerPattern(src) {
       const ch = String.fromCharCode(parseInt(hex, 16)).toLowerCase();
       out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
       i += 1 + hex.length;
-    } else { out += c + n; i++; }
+    } else if (/[A-Za-z]/.test(n) && !KNOWN_ESC.test(n)) return null;
+    else { out += c + n; i++; }
   }
   return out;
 }
@@ -175,13 +222,13 @@ function lowerPattern(src) {
 const srcCache = new Map();
 function condOf(src) {
   let c = srcCache.get(src);
-  if (!c) { const pat = lowerPattern(src); c = { pat, lit: literalOf(pat), re: undefined }; srcCache.set(src, c); }
+  if (!c) { const pat = lowerPattern(src); c = { pat, lit: literalOf(pat === null ? src : pat), re: undefined }; srcCache.set(src, c); }
   return c;
 }
 function rxOf(src, c = condOf(src)) {
   if (c.re === undefined) {
     c.re = null;
-    if (!whenProblem(src)) { try { c.re = new RegExp(c.pat); } catch { c.re = null; } }
+    if (!whenProblem(src)) { try { c.re = c.pat === null ? new RegExp(src, 'i') : new RegExp(c.pat); } catch { c.re = null; } }
   }
   return c.re;
 }
@@ -241,7 +288,7 @@ function match(triggers, f) {
     const c = condOf(src);
     if (c.lit && !lower(k).includes(c.lit)) return false;
     const re = rxOf(src, c);
-    return Boolean(re) && re.test(lower(k));
+    return Boolean(re) && re.test(c.pat === null ? f[k] : lower(k));
   };
   // An item fires when every field it names holds; `tool` is tried first (few sources, most items stop there).
   const fires = (w) => {

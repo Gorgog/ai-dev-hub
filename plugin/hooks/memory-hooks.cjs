@@ -46,6 +46,8 @@ function checkWrite(ev, ctx) {
 
 // ---------- Bash into the memory ----------
 
+// Commands worth reading: they name the memory, or remove / move something (a folder that holds the memory).
+const GATE = /lessons|decisions|memory|\b(?:rm|rmdir|shred|mv|find)\b/;
 const DESTROY = new Set(['rm', 'unlink', 'shred', 'rmdir']);
 const WRITE_ALL = new Set(['tee', 'touch', 'truncate']);
 const WRITE_TARGET = new Set(['cp', 'install', 'ln', 'rsync']);
@@ -133,7 +135,7 @@ function codeWrites(code) {
 // tar -x -C, git commands that write the work tree, inline code of an interpreter. Globs in the first segment under
 // the memory are matched against lessons/ and decisions/. Reads pass.
 function bashWritesMemory(cmd, cwd, mem) {
-  if (typeof cmd !== 'string' || !/lessons|decisions|memory/.test(cmd)) return null;
+  if (typeof cmd !== 'string' || !GATE.test(cmd)) return null;
   const { executions } = require('../skills/dispatch/scripts/shell.cjs');
   let execs = [];
   try { execs = executions(cmd, { cwd: cwd || '/' }).execs || []; } catch { execs = []; }
@@ -185,31 +187,48 @@ function bashWritesMemory(cmd, cwd, mem) {
     let t = null;
     if (DESTROY.has(n)) t = plain.map((x) => hit(x, 'destroy')).find(Boolean);
     else if (WRITE_ALL.has(n)) t = plain.map((x) => hit(x)).find(Boolean);
-    else if (n === 'mv') t = plain.slice(0, -1).map((x) => hit(x, 'destroy')).find(Boolean) || hit(plain[plain.length - 1], 'into');
+    else if (n === 'mv') {
+      const target = plain[plain.length - 1], sources = plain.slice(0, -1);
+      t = sources.map((x) => hit(x, 'destroy')).find(Boolean) || hit(target)
+        || (sources.some((x) => /^(lessons|decisions)$/.test(path.basename(expand(x).replace(/\/+$/, '')))) ? hit(target, 'into') : null);
+    }
     else if (WRITE_TARGET.has(n)) {
       const target = opt(args, ['-t', '--target-directory']) ?? plain[plain.length - 1];
       const sources = opt(args, ['-t', '--target-directory']) != null ? plain.filter((x) => x !== target) : plain.slice(0, -1);
       t = hit(target) || (sources.some((x) => /^(lessons|decisions)$/.test(path.basename(expand(x).replace(/\/+$/, '')))) ? hit(target, 'into') : null);
     } else if (n === 'find') {
-      if (args.some((x) => x === '-delete' || /^-(exec|execdir|ok|okdir)$/.test(x))) {
+      // -delete, or -exec of a program that writes (rm, mv, sed -i …); -exec grep / wc reads.
+      const ex = args.findIndex((x) => /^-(exec|execdir|ok|okdir)$/.test(x));
+      const prog = ex >= 0 ? path.basename(String(args[ex + 1] || '')) : '';
+      const progArgs = ex >= 0 ? args.slice(ex + 2) : [];
+      const writes = args.includes('-delete') || DESTROY.has(prog) || WRITE_ALL.has(prog) || prog === 'mv' || WRITE_TARGET.has(prog)
+        || ((prog === 'sed' || prog === 'perl') && progArgs.some(IN_PLACE)) || INTERP.has(prog);
+      if (writes) {
         const starts = [];
         for (const x of args) { if (x.startsWith('-') || x === '(' || x === '!') break; starts.push(x); }
-        t = starts.map((x) => hit(x, 'destroy')).find(Boolean);
+        t = starts.map((x) => hit(x, args.includes('-delete') || DESTROY.has(prog) ? 'destroy' : 'write')).find(Boolean);
       }
     } else if ((n === 'sed' || n === 'perl') && args.some(IN_PLACE)) t = plain.map((x) => hit(x)).find(Boolean);
     else if ((n === 'awk' || n === 'gawk') && (args.some((x, i) => x === '-i' && args[i + 1] === 'inplace') || args.includes('--inplace'))) t = plain.map((x) => hit(x)).find(Boolean);
     else if (n === 'patch') t = hit(opt(args, ['-o', '--output'])) || hit(plain[0]);
     else if (n === 'dd') t = args.filter((x) => x.startsWith('of=')).map((x) => hit(x.slice(3))).find(Boolean);
     else if (n === 'curl') t = hit(opt(args, ['-o', '--output']));
-    else if (n === 'wget') t = hit(opt(args, ['-O', '--output-document'])) || hit(opt(args, ['-P', '--directory-prefix']), 'into');
-    else if (n === 'tar' && (args.some((x) => /^-?[a-zA-Z]*x[a-zA-Z]*$/.test(x) && !x.startsWith('--')) || args.includes('--extract'))) t = hit(opt(args, ['-C', '--directory']), 'into');
+    else if (n === 'wget') t = hit(opt(args, ['-O', '--output-document'])) || hit(opt(args, ['-P', '--directory-prefix']));
+    else if (n === 'tar' && ((args[0] && /^[a-zA-Z]*x[a-zA-Z]*$/.test(args[0])) || args.some((x) => /^-[a-zA-Z]*x[a-zA-Z]*$/.test(x)) || args.includes('--extract'))) {
+      t = hit(opt(args, ['-C', '--directory']), 'into');
+    }
     else if (n === 'git') {
       let i = 0, dir = base0;
       while (i < args.length && args[i].startsWith('-')) {
         if (args[i] === '-C' && args[i + 1]) { dir = path.resolve(dir, expand(args[i + 1])); i += 2; } else if (args[i] === '-c') i += 2; else i++;
       }
-      if (GIT_WRITES.has(args[i])) {
-        const paths = args.slice(i + 1).filter((x) => !x.startsWith('-'));
+      const sub = args[i], rest = args.slice(i + 1);
+      // Forms that leave the work tree as it is: stash list/show, reset --soft / --mixed without paths, rm --cached.
+      const reads = (sub === 'stash' && ['list', 'show'].includes(rest[0]))
+        || (sub === 'reset' && !rest.some((x) => /^--(hard|merge|keep)$/.test(x)))
+        || (sub === 'rm' && rest.includes('--cached'));
+      if (GIT_WRITES.has(sub) && !reads) {
+        const paths = rest.filter((x) => !x.startsWith('-'));
         t = paths.map((x) => hit(x, 'write', [dir])).find(Boolean) || null;
         const inside = path.relative(memReal, realish(dir));
         if (!t && !inside.startsWith('..') && !path.isAbsolute(inside)) t = `git -C ${path.relative(base0, dir) || '.'} ${args[i]}`;
@@ -323,4 +342,4 @@ function preflight(ev, ctx) {
     + `Исправь файлы (Edit/Write), проверка всей памяти — recall check:\n${shown.join('\n')}`, priority: 'reminder', key: 'memory-check', source: 'memory' }] };
 }
 
-module.exports = { ...hot, checkWrite, bashWritesMemory, bashWrite, mirrorEvents, commitMemory, stop, preflight };
+module.exports = { ...hot, GATE, checkWrite, bashWritesMemory, bashWrite, mirrorEvents, commitMemory, stop, preflight };
