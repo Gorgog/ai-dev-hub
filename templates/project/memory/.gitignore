@@ -3,3 +3,5 @@
 .triggers.json*
 # Временные файлы атомарной записи (имя.tmp-<pid>-<hex>, .<урок>.md.tmp-…)
 *.tmp-*
+# Замок записи событий памяти (node:sqlite, срез 26)
+.events.lock.db*

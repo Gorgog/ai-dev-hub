@@ -33,23 +33,65 @@ function eventLine(ev) {
   return { line, month: /^\d{4}-\d\d/.test(o.at) ? o.at.slice(0, 7) : new Date().toISOString().slice(0, 7) };
 }
 
-// One write. A torn tail left by a killed writer (no final newline) is closed first, inside the same write, so the
-// new line never glues onto the fragment.
+// H22 (slice 26, probe in ~/hub-data/probes/26): a SIGKILL tears a write only between 4 KB pages (the kernel checks a
+// fatal signal between page-sized chunks), and «read the last byte, then write» raced: a killed writer's fragment
+// landed in between and a neighbour's whole event glued onto it. So the write goes under a kernel lock — node:sqlite
+// BEGIN EXCLUSIVE on memory/.events.lock.db (an fcntl lock: dropped by the kernel when its holder dies) — and inside
+// it: close a torn tail, pad with bare \n up to the page boundary when the line would cross it, one write. A line
+// (≤ MAX_LINE ≤ PAGE) then lies in one page and a kill cannot tear it. Without node:sqlite: a \n frame, no tail read —
+// no glue, a torn fragment stays its own (skipped) line. Local file systems only: NFS/FUSE keep neither guarantee.
+const PAGE = 4096;
+const WAIT_MS = 250; // the lock is held for tens of µs; longer — the holder is stuck
+const LOCK = '.events.lock.db'; // outside events/: readers and the memory commit never see it
+if (MAX_LINE > PAGE) throw new Error('MAX_LINE больше страницы: строка события не помещается в одну страницу');
+let Db;
+function dbClass() {
+  if (Db !== undefined) return Db;
+  if (process.env.HUB_MEMORY_ENGINE === 'js') return (Db = null);
+  const orig = process.emitWarning; // node 22: «SQLite is an experimental feature» — a hook's stderr stays clean
+  process.emitWarning = function (w, ...a) {
+    const type = typeof a[0] === 'string' ? a[0] : a[0] && a[0].type;
+    if (type === 'ExperimentalWarning' || (w && w.name === 'ExperimentalWarning')) return undefined;
+    return orig.call(process, w, ...a);
+  };
+  try { Db = require('node:sqlite').DatabaseSync; } catch { Db = null; } finally { process.emitWarning = orig; }
+  return Db;
+}
+
 function appendEvent(memDir, ev) {
   const { line, month } = eventLine(ev);
   const dir = path.join(memDir, 'events');
   fs.mkdirSync(dir, { recursive: true });
-  const fd = fs.openSync(path.join(dir, `${month}.jsonl`), 'a+');
+  const file = path.join(dir, `${month}.jsonl`);
+  const D = dbClass();
+  // A holder that is stuck (stopped, hung) must not hold a hook: past WAIT_MS — the \n frame, as without node:sqlite.
+  const frame = () => { fs.appendFileSync(file, `\n${line}`); return line; };
+  if (!D) return frame();
+  let db;
   try {
-    let buf = Buffer.from(line);
-    const size = fs.fstatSync(fd).size;
-    if (size > 0) {
-      const last = Buffer.alloc(1);
-      fs.readSync(fd, last, 0, 1, size - 1);
-      if (last[0] !== 0x0a) buf = Buffer.concat([Buffer.from('\n'), buf]);
-    }
-    fs.writeSync(fd, buf);
-  } finally { fs.closeSync(fd); }
+    db = new D(path.join(memDir, LOCK), { timeout: WAIT_MS });
+    db.exec('BEGIN EXCLUSIVE');
+  } catch {
+    try { if (db) db.close(); } catch { /* closed */ }
+    return frame();
+  }
+  try {
+    const fd = fs.openSync(file, 'a+');
+    try {
+      const size = fs.fstatSync(fd).size;
+      let head = '';
+      if (size > 0) {
+        const last = Buffer.alloc(1);
+        fs.readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 0x0a) head = '\n';
+      }
+      const at = size + head.length;
+      const room = PAGE - (at % PAGE);
+      if (Buffer.byteLength(line) > room) head += '\n'.repeat(room);
+      fs.writeSync(fd, head + line);
+    } finally { fs.closeSync(fd); }
+    db.exec('COMMIT');
+  } finally { db.close(); }
   return line;
 }
 
@@ -87,4 +129,4 @@ function foldEvents(events) {
   return out;
 }
 
-module.exports = { appendEvent, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };
+module.exports = { LOCK, appendEvent, readEvents, foldEvents, eventFiles, MAX_LINE, COUNTED };
