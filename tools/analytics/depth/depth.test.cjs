@@ -118,7 +118,12 @@ test('shell-rules: возможность и нарушение — по раз�
     // A heredoc inside "$( … )", with a lone quote in its body; prefixes timeout, env, xargs, find -exec.
     ['git commit -m "$(cat <<\'EOF\'\nfix "quoted\ngit add .\nEOF\n)"', { 'no-verify': 0 }],
     ['timeout 600 git commit -m x', { 'no-verify': 0 }], ['env GIT_EDITOR=true git -C /r add -A', { 'git-add-all': 1 }],
-    ["ls *.md | xargs -I {} sed -i 's/a/b/' {}", { 'sed-in-place': 1 }], ["find . -name '*.md' -exec sed -i 's/a/b/' {} \\;", { 'sed-in-place': 1 }],
+    ["ls *.md | xargs -I {} sed -i 's/a/b/' {}", { 'sed-in-place': 1 }], ['ls | xargs -i git commit -n -m x', { 'no-verify': 1 }],
+    ['ls | xargs -l git add -A', { 'git-add-all': 1 }],
+    // Here-strings and shifts are no heredoc; redirections are no paths of git add.
+    ['x="$(tr a b <<<abc)"\ngit add -A\ngit commit -n -m y', { 'git-add-all': 1, 'no-verify': 1 }],
+    ['tr a b <<<abc\ngit add -A\nabc', { 'git-add-all': 1 }], ['echo "$((a<<b))"\ngit add -A\nb', { 'git-add-all': 1 }],
+    ['git add -A 2>&1 | tail -3', { 'git-add-all': 1 }], ['git add -A >/dev/null', { 'git-add-all': 1 }], ['git add -A > log', { 'git-add-all': 1 }], ["find . -name '*.md' -exec sed -i 's/a/b/' {} \\;", { 'sed-in-place': 1 }],
   ];
   const r = spawnSync('node', [path.join(DIR, 'shell-rules.cjs')], { input: JSON.stringify(cases.map((c) => c[0])), encoding: 'utf8', timeout: 10000 });
   assert.strictEqual(r.status, 0, r.error ? String(r.error) : r.stderr);
@@ -134,6 +139,7 @@ test('shell-rules: возможность и нарушение — по раз�
   assert.deepStrictEqual(flags('git commit -F - <<EOF\nmsg\nEOF\nnode /h/checks.cjs --full').events, ['commit', 'checks']);
   assert.deepStrictEqual(flags('node /h/checks.cjs --full; git commit -m x').events, ['checks', 'commit']);
   assert.deepStrictEqual(flags('node /h/checks.cjs 2>&1 --full | tail; timeout 60 git commit -m x').events, ['checks', 'commit']);
+  assert.deepStrictEqual(flags('find . -exec git commit -n \\; ; node /h/checks.cjs --full').events, ['commit', 'checks']);
 });
 
 test('шаг 0 на синтетике: глубина эпохи, правила, доклады, компакция, повторы', (t) => {
@@ -243,4 +249,27 @@ test('статистика §4: наклон значим, но поздний �
   assert.ok(s.p <= 0.1, `p=${s.p}`);
   assert.strictEqual(s.ratio, 1.2);
   assert.strictEqual(s.verdict, 'распада нет');
+});
+
+// step0.py's own functions on hand-made inputs.
+function py(code, input) {
+  const r = spawnSync('python3', ['-c', 'import json,sys; sys.path.insert(0, sys.argv[1]); import step0; ' + code, DIR],
+    { input: JSON.stringify(input), encoding: 'utf8', env: ENV, timeout: 60000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+test('доклад: sha — из строки доклада; повтор того же sha после прогона — тот же доклад, первый', () => {
+  assert.strictEqual(py('print(json.dumps(step0.sha_of(json.load(sys.stdin))))',
+    'см. https://1c04aac3.example/x и 20261104100000\nГотово к пушу: T-1 e83422e04'), 'e83422e04');
+  assert.strictEqual(py('print(json.dumps(step0.sha_of(json.load(sys.stdin))))', 'Готово к пушу: T-1, sha потом'), '');
+  // A commit (t 1), the report without checks (t 2), checks (t 3), the same report again (t 4): one opportunity, violated.
+  const code = 'd=json.load(sys.stdin); j=step0.Journals({}, []); j.reports=[tuple(r) for r in d["reports"]]; ' +
+    'rules,_=step0.opportunities(d["rows"], d["flags"], j, 0); ' +
+    'print(json.dumps([(o["rule"], o["depth"], o["v"]) for o in rules if o["rule"]=="checks-full"]))';
+  const rows = [{ id: 'k', t: 1, session: 's', agent: '', epoch: 0, n: 1, tool: 'Bash', cmd: 'git commit -m x' },
+    { id: 'c', t: 3, session: 's', agent: '', epoch: 0, n: 2, tool: 'Bash', cmd: 'node checks.cjs --full' }];
+  const flags = { k: { rules: { 'no-verify': 0 }, events: ['commit'] }, c: { rules: {}, events: ['checks'] } };
+  const reports = [['s', 0, 1, 2, 1.5, 'abc1234'], ['s', 0, 2, 4, 2.5, 'abc1234'], ['s', 0, 2, 5, 2.5, '']];
+  assert.deepStrictEqual(py(code, { rows, flags, reports }), [['checks-full', 1, 1], ['checks-full', 2, 0]]);
 });
