@@ -288,7 +288,7 @@ test('the memory modules are one handler, in canary, and their regexes are bound
 });
 
 test('the literal before a trigger regex is one every match contains: the prefilter never drops a match', () => {
-  const { literalOf, prepareItem, match } = require('./memory-hooks.cjs');
+  const { literalOf, match } = require('./memory-hooks.cjs');
   const CASES = [
     ['^Bash$', ['Bash', 'bash']], ['prettier[^|;&]*--write', ['npx prettier --write a.ts', 'PRETTIER -l --WRITE']],
     ["<<\\s*'?EOF", ["cat <<'EOF'", 'x << EOF']], ['\\bgit\\s+push\\b', ['git  push origin']], ['(Edit|Write)', ['Write']],
@@ -300,7 +300,7 @@ test('the literal before a trigger regex is one every match contains: the prefil
   for (const [src, hits] of CASES) {
     const lit = literalOf(src);
     const re = new RegExp(src, 'i');
-    const t = [{ id: 'x', first: '', core: false, items: [prepareItem({ cmd: src })].filter(Boolean) }];
+    const t = [{ id: 'x', first: '', core: false, when: [{ cmd: src }] }];
     for (const s of hits) {
       assert.ok(re.test(s), `fixture: ${src} on ${s}`);
       assert.ok(!lit || s.toLowerCase().includes(lit), `literal «${lit}» of ${src} is not in a match «${s}»`);
