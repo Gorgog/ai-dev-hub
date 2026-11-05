@@ -39,4 +39,8 @@ function bareCd(cmd) {
   return false;
 }
 
-module.exports = { bareCd };
+// Which programs a command runs — one reading for the lock (slice 15) and the polygon, not a copy. It lives in the
+// plugin: the polygon's mini-hub carries only plugin/, and the lock runs from there.
+const { executions } = require('../../plugin/skills/dispatch/scripts/shell.cjs');
+
+module.exports = { bareCd, executions };

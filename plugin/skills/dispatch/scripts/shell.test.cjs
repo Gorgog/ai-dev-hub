@@ -25,7 +25,7 @@ test('executions: списки, конвейеры, подоболочки, по
     has(cmd, want);
   has('cat <(npx jest) >(wc -l)', 'bin:jest');
   has('if true; then npx jest; elif false; then :; else echo; fi', 'bin:jest');
-  has('while read f; do npx jest "$f"; done < list', 'npx jest');
+  has('while read f; do npx jest; done < list', 'bin:jest');
   has('{ npx jest; } 2>&1', 'bin:jest');
   has('f() { npx jest; }; f', 'bin:jest');
   has('time npx jest', 'bin:jest');
@@ -60,6 +60,11 @@ test('executions: обёртки — env, timeout, nice, nohup, sudo, xargs, fin
   has('npx cross-env NODE_ENV=test jest a', 'bin:jest a');
   has('bash ~/hub/plugin/skills/dispatch/scripts/hub-run.sh T-1-jest -MemoryMax 4G -- npx jest', 'bin:jest');
   has('command -p npx jest', 'bin:jest');
+  has('docker exec -it -e PGUSER=x pg_container psql -U admin -c "select 1"', 'psql -U admin -c select 1');
+  has("docker exec pg sh -c 'psql -l'", 'psql -l');
+  has('docker run --rm -v a:/b -w /b img php artisan test', 'php artisan test');
+  has('docker compose -f d.yml exec -T api npx prisma migrate deploy', 'bin:prisma migrate deploy');
+  runsNo('docker ps --format "{{.Names}} psql"', 'psql');
   has('exec npx jest', 'bin:jest');
   // env передаёт присваивания программе
   const e = executions('env ANTHROPIC_BASE_URL=http://127.0.0.1:9 claude -p hi').execs.find((x) => x.argv[0] === 'claude');
@@ -69,6 +74,7 @@ test('executions: обёртки — env, timeout, nice, nohup, sudo, xargs, fin
 test('executions: пакетные раннеры — npx с ключами, pnpm/yarn/bun, npm exec, node по пути в node_modules', () => {
   has('npx --yes jest src/a.spec.ts', 'bin:jest src/a.spec.ts');
   has('npx -y -p jest@29 jest a', 'bin:jest a');
+  has('npx --prefix apps/backend dotenv -e apps/backend/.env -- node probe.cjs', 'bin:node probe.cjs');
   has('npx jest@29.7.0 a', 'bin:jest a');
   has('pnpm exec playwright test', 'bin:playwright test');
   has('pnpm dlx prisma migrate dev', 'bin:prisma migrate dev');
@@ -101,6 +107,9 @@ test('executions: переменные — известные подставля
   // присваивание перед командой — окружение этой команды
   const e = executions('ANTHROPIC_BASE_URL=http://localhost:1 claude -p x').execs.find((x) => x.argv[0] === 'claude');
   assert.strictEqual(e.env.ANTHROPIC_BASE_URL, 'http://localhost:1');
+  const two = executions("A=1 B='x y' LABEL=after timeout 500 node probe.cjs").execs;
+  assert.deepStrictEqual(two[0].argv, ['timeout', '500', 'node', 'probe.cjs']);
+  assert.deepStrictEqual(two[0].env, { A: '1', B: 'x y', LABEL: 'after' });
   const ex = executions('export ANTHROPIC_BASE_URL=http://127.0.0.1:2; claude --print x').execs.find((x) => x.argv[0] === 'claude');
   assert.strictEqual(ex.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:2');
   // программа неизвестна до запуска — честно «не знаю»
@@ -129,6 +138,7 @@ test('executions: скрипт читается и разбирается — ba
   // скрипт — тоже программа (правила называют скрипты по имени)
   has('bash scripts/batch.sh', 'scripts/batch.sh', o);
   runsNo('cat scripts/batch.sh; sed -n 1p scripts/batch.sh', 'npx', o);
+  runsNo('bash -n scripts/batch.sh && echo ok', 'npx', o);
   runsNo('./scripts/node-cli', 'console.log(1)', o);
   // нет файла — сам вызов остаётся программой, без содержимого
   has('bash scripts/missing.sh', 'scripts/missing.sh', o);

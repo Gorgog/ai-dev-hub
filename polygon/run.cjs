@@ -22,17 +22,32 @@ const { runClaude, summarize } = require('./lib/claude.cjs');
 const { aggregate, group, summaryLines, compareRuns } = require('./lib/report.cjs');
 const { hubDataDir, realCorporaStatus } = require('./lib/corpus.cjs');
 
+const USAGE = `usage: node polygon/run.cjs [--hub <dir>] [--ref <git-ref>] [--only <regex>] [--level hook|model] [--repeats 3] [-j 1]
+                           [--model <m>] [--work <dir>] [--out <file.json>] [--quiet] [--strict] [--keep]
+       node polygon/run.cjs compare <a.json> <b.json> [--all]
+       node polygon/run.cjs regrade <results.json>
+без --level hook гоняет и модельные сценарии (тяжёлое).`;
+
+// A flag the runner does not know (--help included) must not fall through to «run everything»: without --level that
+// is the model scenarios, heavy. Anything off — usage, exit 2, before any work.
+function usage(why) {
+  process.stderr.write(`run.cjs: ${why}\n${USAGE}\n`);
+  process.exit(2);
+}
+
 function parseArgs(argv) {
   const a = { hub: path.resolve(__dirname, '..'), ref: null, only: null, level: null, repeats: 3, j: 1,
     model: null, work: path.join(os.tmpdir(), 'hub-polygon'), out: null, quiet: false, strict: false, all: false, keep: false, _: [] };
+  const count = (k, x) => (/^[1-9]\d*$/.test(x) ? Number(x) : usage(`${k} ждёт целое > 0, а не «${x}»`));
   for (let i = 0; i < argv.length; i++) {
-    const k = argv[i], v = () => argv[++i];
+    const k = argv[i];
+    const v = () => (i + 1 < argv.length ? argv[++i] : usage(`${k} без значения`));
     if (k === '--hub') a.hub = path.resolve(v());
     else if (k === '--ref') a.ref = v();
-    else if (k === '--only') a.only = new RegExp(v());
-    else if (k === '--level') a.level = v();
-    else if (k === '--repeats') a.repeats = Number(v());
-    else if (k === '-j') a.j = Number(v());
+    else if (k === '--only') { const x = v(); try { a.only = new RegExp(x); } catch (e) { usage(`--only: ${e.message}`); } }
+    else if (k === '--level') { a.level = v(); if (!['hook', 'model'].includes(a.level)) usage(`--level ${a.level} — ожидается hook | model`); }
+    else if (k === '--repeats') a.repeats = count(k, v());
+    else if (k === '-j') a.j = count(k, v());
     else if (k === '--model') a.model = v();
     else if (k === '--work') a.work = path.resolve(v());
     else if (k === '--out') a.out = path.resolve(v());
@@ -40,8 +55,13 @@ function parseArgs(argv) {
     else if (k === '--strict') a.strict = true;
     else if (k === '--all') a.all = true;
     else if (k === '--keep') a.keep = true;
+    else if (k.startsWith('-')) usage(`незнакомый флаг ${k}`);
     else a._.push(k);
   }
+  const [cmd, ...rest] = a._;
+  if (cmd === 'compare' && rest.length !== 2) usage('compare ждёт два файла');
+  if (cmd === 'regrade' && rest.length !== 1) usage('regrade ждёт один файл');
+  if (cmd && !['compare', 'regrade'].includes(cmd)) usage(`лишнее слово «${cmd}» (сценарии выбирает --only)`);
   return a;
 }
 
