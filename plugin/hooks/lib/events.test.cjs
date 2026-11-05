@@ -71,3 +71,14 @@ test('events: the «prevented» counter — per lesson and in total, without a d
   assert.deepStrictEqual(s.total, { shown: 6, measured: 4, prevented: 2, repeat: 1, expired: 1, rate: 2 / 3 });
   assert.strictEqual(s.rules['rules-guard'].shown, 1);
 });
+
+test('events: a tail without a newline (a torn write) is closed before the next line', () => {
+  const dir = mkdtemp();
+  fs.mkdirSync(path.join(dir, 'events'));
+  const f = path.join(dir, 'events', '2026-11.jsonl');
+  fs.writeFileSync(f, '{"kind":"shown","les');
+  events.append([{ at: '2026-11-05T10:00:00.000Z', kind: 'shown', lesson: 'L1', ...ADDR }], dir);
+  const r = events.read(f);
+  assert.deepStrictEqual(r.events.map((e) => e.lesson), ['L1']);
+  assert.strictEqual(r.torn, 1);
+});

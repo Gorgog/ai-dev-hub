@@ -5,7 +5,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { step, LIMITS, FRAME } = require('./deliver.cjs');
+const { step, closeWindows, LIMITS, FRAME } = require('./deliver.cjs');
 const { freshAgent } = require('./session.cjs');
 
 const lesson = (id, extra = {}) => ({ text: `урок ${id}`, priority: 'lesson', key: id, lesson: id, ...extra });
@@ -43,16 +43,19 @@ test('deliver: on overflow of a call the lowest priority goes; a block is never 
   assert.deepStrictEqual(dropped, ['r2:call', 'r3:call', 'r4:call', 'p2:phase']);
 });
 
-test('deliver: on overflow of the epoch a lesson wins over a reminder, a block passes always', () => {
+test('deliver: lessons and reminders have their own epoch budgets — reminders never eat the lessons\' share; a block passes always', () => {
   const a = freshAgent(1);
-  a.count = LIMITS.epoch - 1;
-  const r = call(a, 't1', [reminder('r1'), lesson('L1'), { text: 'БЛОК', priority: 'block', key: 'b' }]);
-  assert.match(r.text, /урок L1/);
-  assert.doesNotMatch(r.text, /напоминание r1/);
+  const BLOCK = { text: 'БЛОК', priority: 'block', key: 'b' };
+  for (let i = 0; i < LIMITS.epoch.reminder; i++) assert.match(call(a, `r${i}`, [reminder('rules-guard', { text: `правило ${i}` })]).text, /правило/);
+  const r = call(a, 'tL', [reminder('rules-guard', { text: 'правило лишнее' }), lesson('L1'), BLOCK]);
+  assert.match(r.text, /урок L1/, 'the reminders used up only their own share');
+  assert.doesNotMatch(r.text, /правило лишнее/);
   assert.match(r.text, /БЛОК/);
-  assert.deepStrictEqual(r.events.filter((e) => e.kind === 'dropped').map((e) => `${e.key}:${e.reason}`), ['r1:epoch']);
-  const again = call(a, 't2', [{ text: 'БЛОК', priority: 'block', key: 'b' }, reminder('r2')]);
-  assert.strictEqual(again.text, 'БЛОК', 'a block repeats, the epoch is full for the rest');
+  assert.deepStrictEqual(r.events.filter((e) => e.kind === 'dropped').map((e) => `${e.key}:${e.reason}`), ['rules-guard:epoch']);
+  a.counts.lesson = LIMITS.epoch.lesson;
+  const again = call(a, 't2', [BLOCK, lesson('L2')]);
+  assert.strictEqual(again.text, 'БЛОК', 'a block repeats, the lessons are full for the epoch');
+  assert.deepStrictEqual(again.events.filter((e) => e.kind === 'dropped').map((e) => `${e.key}:${e.reason}`), ['L2:epoch']);
 });
 
 test('deliver: one item per key inside a call (the contract of 08), info is not counted in the limits', () => {
@@ -61,7 +64,7 @@ test('deliver: one item per key inside a call (the contract of 08), info is not 
     { text: 'бриф', priority: 'info', key: 'brief' }, lesson('L1'), lesson('L2'), lesson('L3')]);
   assert.doesNotMatch(r.text, /второе/);
   assert.match(r.text, /бриф/);
-  assert.strictEqual(a.count, 3, 'the info item is not counted');
+  assert.deepStrictEqual(a.counts, { lesson: 3, reminder: 0 }, 'the info item is not counted');
 });
 
 test('deliver: everything from memory is framed as data, not instructions', () => {
@@ -122,4 +125,16 @@ test('deliver: «prevented» on a synthetic sequence — the answer is known', (
   assert.deepStrictEqual(out, ['repeat:L1:2:true', 'prevented:L2:3', 'repeat:L2:4:false', 'repeat:L5:1:true']);
   assert.deepStrictEqual(a.pending.map((p) => p.lesson), ['L4'], 'L4 is still open: 1 call of 3');
   assert.strictEqual(LIMITS.window, 3);
+});
+
+test('deliver: closing the windows of an agent — a full window (K calls seen) is prevented, a shorter one expired', () => {
+  const a = freshAgent(1);
+  call(a, 't1', [lesson('L1', { detector: 'D1' })]);
+  call(a, 't2'); call(a, 't3'); call(a, 't4'); // the 3 calls after L1: its window is full, no 4th call comes
+  const b = freshAgent(1);
+  call(b, 'u1', [lesson('L2', { detector: 'D2' })]);
+  call(b, 'u2');
+  assert.deepStrictEqual(closeWindows(a).map((e) => `${e.kind}:${e.lesson}:${e.calls}`), ['prevented:L1:3']);
+  assert.deepStrictEqual(closeWindows(b).map((e) => `${e.kind}:${e.lesson}:${e.calls}`), ['expired:L2:1']);
+  assert.deepStrictEqual(b.pending, []);
 });

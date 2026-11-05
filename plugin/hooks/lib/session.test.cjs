@@ -34,6 +34,8 @@ test('session: epochs follow P16 — startup, compact and clear open one, resume
   start(dir, 'resume');
   assert.strictEqual(epochOf(dir), 3);
   assert.strictEqual(session.read('s1', dir).model, 'claude-test', 'a start without a model keeps the known one');
+  session.startEpoch({ hook_event_name: 'SubagentStart', session_id: 's1', agent_id: 'a1' }, dir);
+  assert.strictEqual(epochOf(dir, 'a1'), 1, 'a continued subagent keeps its context, so its epoch');
 });
 
 test('session: a resume of an unknown session opens epoch 1; a new epoch resets the marks and expires open windows', () => {
@@ -49,7 +51,7 @@ test('session: a resume of an unknown session opens epoch 1; a new epoch resets 
   const { expired } = start(dir, 'compact');
   assert.deepStrictEqual(expired.map((e) => [e.kind, e.lesson, e.calls, e.epoch]), [['expired', 'L1', 1, 1]]);
   const a = session.read('s1', dir).agents.main;
-  assert.deepStrictEqual([a.epoch, a.shown, a.pending, a.count], [2, {}, [], 0]);
+  assert.deepStrictEqual([a.epoch, a.shown, a.pending, a.counts], [2, {}, [], { lesson: 0, reminder: 0 }]);
 });
 
 test('session: a broken state file is read as a fresh one and rewritten', () => {
@@ -87,4 +89,30 @@ test('session: old state files are swept at a session start', () => {
   session.sweep(dir);
   assert.ok(!fs.existsSync(old));
   assert.ok(fs.existsSync(session.file('s1', dir)));
+});
+
+test('session: a lock left by a hook killed a moment ago is waited out, not a reason to lose the update', () => {
+  const dir = mkdtemp();
+  start(dir, 'startup');
+  const lock = `${session.file('s1', dir)}.lock`;
+  fs.writeFileSync(lock, 'dead');
+  const t = (Date.now() - 1400) / 1000;
+  fs.utimesSync(lock, t, t);
+  start(dir, 'compact');
+  assert.strictEqual(epochOf(dir), 2);
+});
+
+test('session: a state of another schema version reads as a fresh one', () => {
+  const dir = mkdtemp();
+  fs.mkdirSync(path.join(dir, 'sessions'), { recursive: true });
+  fs.writeFileSync(session.file('s1', dir), JSON.stringify({ v: 2, agents: { main: { epoch: 7 } } }));
+  assert.deepStrictEqual(session.read('s1', dir).agents, {});
+});
+
+test('session: the owner removes only its own lock', () => {
+  const dir = mkdtemp();
+  start(dir, 'startup');
+  const lock = `${session.file('s1', dir)}.lock`;
+  session.update('s1', () => fs.writeFileSync(lock, 'someone-else'), dir);
+  assert.strictEqual(fs.readFileSync(lock, 'utf8'), 'someone-else', 'a lock taken over by another is not ours to remove');
 });

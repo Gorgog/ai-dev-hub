@@ -36,21 +36,24 @@ const MODULES = {
   'sessionstart.d/10-brief.cjs': `module.exports = { id: 'brief', run() { return { items: [{ text: 'Бриф', priority: 'info', key: 'brief' }] }; } };\n`,
 };
 
-function setup({ stage = null, canary = true } = {}) {
+// stage — of the record «delivery» and the other delivery records, or { id: stage }; extra — fields merged into the
+// records of the synthetic modules ({ id: {...} }).
+function setup({ stage = null, canary = true, extra = {} } = {}) {
   const hub = mkdtemp('delivery-');
   const plugin = path.join(hub, 'plugin');
   fs.cpSync(path.join(HOOKS, 'run.cjs'), path.join(plugin, 'hooks', 'run.cjs'));
   fs.cpSync(path.join(HOOKS, 'lib'), path.join(plugin, 'hooks', 'lib'), { recursive: true });
-  for (const f of ['sessionstart.d/00-delivery.cjs', 'subagentstart.d/00-delivery.cjs']) fs.cpSync(path.join(HOOKS, f), path.join(plugin, 'hooks', f));
-  for (const id of ['delivery', 'delivery-subagent']) {
+  for (const id of fs.readdirSync(path.join(PLUGIN, 'mechanisms')).filter((f) => /^delivery/.test(f)).map((f) => f.replace(/\.json$/, ''))) {
     const rec = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'mechanisms', `${id}.json`), 'utf8'));
-    write(path.join(plugin, 'mechanisms', `${id}.json`), JSON.stringify(stage ? { ...rec, stage } : rec));
+    fs.cpSync(path.join(HOOKS, rec.file), path.join(plugin, 'hooks', rec.file));
+    const st = typeof stage === 'string' ? stage : stage && stage[id];
+    write(path.join(plugin, 'mechanisms', `${id}.json`), JSON.stringify(st ? { ...rec, stage: st } : rec));
   }
   for (const [file, src] of Object.entries(MODULES)) {
     write(path.join(plugin, 'hooks', file), src);
     const id = /module.exports = \{ id: '([^']+)'/.exec(src)[1];
     write(path.join(plugin, 'mechanisms', `${id}.json`), JSON.stringify({ id, event: file.startsWith('pretool') ? 'PreToolUse' : 'SessionStart',
-      file, handler: id, stage: 'on', onError: 'open', failScope: 'any', state: [], reads: [], polygon: ['H14'], replaces: '—', review: '2099-01-01' }));
+      file, handler: id, stage: 'on', onError: 'open', failScope: 'any', state: [], reads: [], polygon: ['H14'], replaces: '—', review: '2099-01-01', ...extra[id] }));
   }
   const proj = path.join(hub, 'projects', 'demo');
   const wt = path.join(proj, 'worktrees', 'K-1');
@@ -179,4 +182,42 @@ test('delivery: 7 sessions at once through the runner — every event line whole
   assert.strictEqual(ev.filter((e) => e.kind === 'shown').length, 7 * 12);
   for (let p = 0; p < 7; p++) assert.deepStrictEqual(ev.filter((e) => e.session_id === `p${p}` && e.kind === 'shown').map((e) => e.lesson).sort(),
     Array.from({ length: 12 }, (_, i) => `L${i}`).sort());
+});
+
+test('delivery: the windows of a session close at its end — a full one prevented, a short one (a subagent) expired', () => {
+  const s = setup();
+  run(s, 'SessionStart', { source: 'startup' });
+  pre(s, 't1', 'echo BAD-L1');
+  for (const t of ['t2', 't3', 't4']) pre(s, t, 'echo ok');
+  run(s, 'SubagentStart', { agent_id: 'a1' });
+  pre(s, 'u1', 'echo BAD-L2', { agent_id: 'a1' });
+  pre(s, 'u2', 'echo ok', { agent_id: 'a1' });
+  assert.strictEqual(run(s, 'SessionEnd', { reason: 'exit' }).code, 0);
+  const out = journal(s).filter((e) => e.kind === 'prevented' || e.kind === 'expired').map((e) => `${e.kind}:${e.lesson}:${e.agent_id}:${e.calls}`).sort();
+  assert.deepStrictEqual(out, ['expired:L2:a1:1', 'prevented:L1:main:3']);
+});
+
+test('delivery: an epoch module that failed does not keep the old marks — the compaction still shows everything again', () => {
+  const s = setup();
+  run(s, 'SessionStart', { source: 'startup' });
+  assert.match(pre(s, 't1', 'echo BAD').ctx, /урок L1/);
+  fs.writeFileSync(path.join(s.plugin, 'hooks', 'sessionstart.d', '00-delivery.cjs'), "throw new Error('epoch module is broken');\n");
+  assert.match(run(s, 'SessionStart', { source: 'compact' }).out, /Бриф/, 'the brief after compaction');
+  assert.match(pre(s, 't2', 'echo BAD').ctx, /урок L1/, 'the lesson after compaction');
+  assert.ok(!run(s, 'SessionStart', { source: 'resume' }).out.includes('Бриф'), 'and resume still keeps that epoch');
+});
+
+test('delivery: stage off of «delivery» silences its subagent and end modules too — no state anywhere', () => {
+  const s = setup({ stage: { delivery: 'off' } });
+  run(s, 'SessionStart', { source: 'startup' });
+  run(s, 'SubagentStart', { agent_id: 'a1' });
+  run(s, 'SessionEnd', { reason: 'exit' });
+  assert.ok(!fs.existsSync(path.join(s.logs, 'sessions')));
+  assert.ok(!fs.existsSync(path.join(s.logs, 'events')));
+});
+
+test('delivery: a record with source «memory» frames every item of its module as data', () => {
+  const s = setup({ extra: { brief: { source: 'memory' } } });
+  const out = run(s, 'SessionStart', { source: 'startup' }).out;
+  assert.match(out, /данные из памяти[^\n]*\nБриф\n\[\//i, out);
 });
