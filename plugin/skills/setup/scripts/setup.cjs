@@ -42,11 +42,17 @@ function readSettings(file) {
 }
 
 // Change a settings file through fn(settings): unchanged — nothing written; changed — backup, then temp + rename on
-// the real path (a symlinked settings.json from dotfiles stays a link). Changed by someone else meanwhile (Claude Code
-// itself, another session) — refused, run again: a lost write would come back as «missing» anyway.
+// the real path (a symlinked settings.json from dotfiles stays a link, a dangling one gets its target), the file mode
+// kept on the new file and the backup (keys in env). Changed by someone else meanwhile (Claude Code itself, another
+// session) — refused, run again: a lost write would come back as «missing» anyway.
+function realTarget(link) {
+  try { return fs.realpathSync.native(link); } catch { /* dangling or absent */ }
+  try { return path.resolve(path.dirname(link), fs.readlinkSync(link)); } catch { return link; }
+}
 function editSettings(link, fn) {
-  let file = link;
-  try { file = fs.realpathSync.native(link); } catch { /* not there yet */ }
+  const file = realTarget(link);
+  let mode = null;
+  try { mode = fs.statSync(file).mode & 0o777; } catch { /* new file */ }
   const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
   const s = readSettings(file);
   const before = JSON.stringify(s);
@@ -54,9 +60,10 @@ function editSettings(link, fn) {
   if (JSON.stringify(s) === before) return null;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let bak = null;
-  if (raw !== null) { bak = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`; fs.writeFileSync(bak, raw); }
+  if (raw !== null) { bak = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`; fs.writeFileSync(bak, raw, { mode: mode ?? 0o600 }); fs.chmodSync(bak, mode ?? 0o600); }
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n');
+  fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n', { mode: mode ?? 0o600 });
+  if (mode !== null) fs.chmodSync(tmp, mode);
   if ((fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null) !== raw) {
     fs.rmSync(tmp, { force: true });
     throw new Refused(`${file} изменился, пока его правили — повтори apply`);
@@ -103,8 +110,9 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
   const line = path.join(hub, 'plugin', 'skills', 'setup', 'scripts', 'statusline.cjs');
   const wantLine = `node "${line}"`;
   const sl = s.statusLine && typeof s.statusLine === 'object' ? s.statusLine : null;
-  // Ours — any command that runs statusline.cjs of the hub (a symlinked hub path is still ours); another one — the user's.
-  const own = sl && !/setup[\\/]+scripts[\\/]+statusline\.cjs/.test(String(sl.command || ''));
+  // Ours — exactly `node "<…>/setup/scripts/statusline.cjs"` (an old hub path is ours to update); anything else, a
+  // wrapper around our script included, — the user's.
+  const own = sl && !/^node\s+"?[^"\s]*[\\/]setup[\\/]scripts[\\/]statusline\.cjs"?\s*$/.test(String(sl.command || ''));
   machine('status-line', 'строка состояния хаба', !!sl && (own || sl.command === wantLine),
     sl ? `${String(sl.command || sl.type)}${own ? ' (своя — не трогаю)' : ''}` : 'нет', wantLine,
     (x) => { if (!own) x.statusLine = { type: 'command', command: wantLine, padding: 0 }; });
@@ -138,7 +146,7 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
     const copy = text !== null && text === read(path.join(tmpl, from));
     add({ id, title, scope: 'project', ok: !board ? null : text !== null && !copy,
       have: text === null ? 'нет' : copy ? 'копия образца — не дописан' : name,
-      want: board ? `${name} под проект (образец — templates/project/${from})` : 'не нужен: у проекта нет доски диспетчера',
+      want: board ? `${name} под проект (образец — templates/project/${from})` : 'у проекта нет доски диспетчера',
       apply: () => { throw new ByHand(`${id}: пишется руками с пользователем — образец ${path.join(tmpl, from)} → ${dest}, поправить под стек проекта`); } });
   };
   byHand('dispatch-profile', 'профиль диспетчера проекта', 'dispatch-profile.md', 'dispatch-profile.md');
@@ -154,7 +162,7 @@ function settingsList({ cwd = process.cwd(), hub = hubRoot() } = {}) {
     try { cur = readSettings(local).autoMemoryDirectory; } catch (e) { bad = e.message; }
     const ok = bad ? null : cur === auto ? true : worktree ? null : false;
     add({ id: 'auto-memory', title: 'автопамять Claude Code — в память проекта', scope: 'project', ok,
-      have: bad || (cur ? cur : worktree ? 'worktree: по умолчанию — ставит wt-new.sh или apply здесь' : 'по умолчанию (~/.claude/projects/…)'),
+      have: bad || (cur ? cur : worktree ? 'worktree: по умолчанию (~/.claude/projects/…) — не считается: создание worktree это не ставит, apply здесь — можно' : 'по умолчанию (~/.claude/projects/…)'),
       want: auto, apply: () => {
         excludeLocally(root, '.claude/settings.local.json');
         const done = editSettings(local, (x) => { x.autoMemoryDirectory = auto; });
