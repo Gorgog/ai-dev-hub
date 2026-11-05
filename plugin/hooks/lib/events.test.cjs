@@ -82,3 +82,38 @@ test('events: a tail without a newline (a torn write) is closed before the next 
   assert.deepStrictEqual(r.events.map((e) => e.lesson), ['L1']);
   assert.strictEqual(r.torn, 1);
 });
+
+// Slice 32 (the race of H22 in the delivery log): a killed writer's fragment lands after the tail check and before
+// this write. With «read the last byte → write» the whole next event glued onto the fragment and was lost with it.
+test('events: a fragment landing between the tail check and the write does not swallow the next event (slice 32)', () => {
+  const dir = mkdtemp();
+  events.append([{ at: '2026-11-05T10:00:00.000Z', kind: 'shown', lesson: 'L0', ...ADDR }], dir);
+  const f = path.join(dir, 'events', '2026-11.jsonl');
+  const real = fs.writeSync;
+  let injected = false;
+  fs.writeSync = function (fd, ...rest) {
+    if (!injected) { injected = true; fs.appendFileSync(f, '{"at":"2026-11-05T10:00:00.500Z","kind":"sho'); } // the killed writer
+    return real.call(this, fd, ...rest);
+  };
+  try {
+    events.append([{ at: '2026-11-05T10:00:01.000Z', kind: 'shown', lesson: 'L1', ...ADDR },
+      { at: '2026-11-05T10:00:01.000Z', kind: 'shown', lesson: 'L2', ...ADDR }], dir);
+  } finally { fs.writeSync = real; }
+  assert.ok(injected, 'the race was staged');
+  const r = events.read(f);
+  assert.deepStrictEqual(r.events.map((e) => e.lesson), ['L0', 'L1', 'L2']);
+  assert.strictEqual(r.torn, 1, 'only the killed writer\'s own fragment is lost');
+});
+
+test('events: empty lines (a leading newline of every write) are not torn — read, stats CLI', () => {
+  const dir = mkdtemp();
+  fs.mkdirSync(path.join(dir, 'events'));
+  const f = path.join(dir, 'events', '2026-11.jsonl');
+  fs.writeFileSync(f, `\n\n${JSON.stringify({ kind: 'shown', lesson: 'L1', ...ADDR })}\n\n\n${JSON.stringify({ kind: 'prevented', lesson: 'L1', ...ADDR })}\n`);
+  assert.deepStrictEqual(events.read(f), { events: events.read(f).events, torn: 0 });
+  assert.strictEqual(events.read(f).events.length, 2);
+  const { execFileSync } = require('child_process');
+  const out = JSON.parse(execFileSync(process.execPath, [require.resolve('./events.cjs'), 'stats', '2026-11'], { env: { ...process.env, HUB_LOG_DIR: dir }, encoding: 'utf8' }));
+  assert.strictEqual(out.torn, 0);
+  assert.strictEqual(out.total.prevented, 1);
+});

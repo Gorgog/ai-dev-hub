@@ -209,3 +209,26 @@ test('append: 8 processes at once, the lock is busy but nobody is stuck — ever
   assert.deepStrictEqual(p.bad.slice(0, 5), [], `строк через страницу: ${p.bad.length}`);
   assert.strictEqual(readEvents(d).events.length, 3200);
 });
+
+// Slice 32: a read-only lock file (another user's, chmod) is opened read-only by SQLite, and BEGIN EXCLUSIVE then
+// excludes nobody (two connections both «hold» it) — the protection of the page was silently gone. Now the write is
+// framed, as without the lock, and the hooks' journal gets an error line once per process.
+test('lock file read-only: the event is still written, and an error goes to the hooks journal (slice 32)', { skip: (!require('./sqlite.cjs')() && 'no node:sqlite') || (process.getuid && process.getuid() === 0 && 'root writes anyway') }, () => {
+  const d = mem();
+  const logs = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-ev-logs-'));
+  const lib = path.join(__dirname, 'events.cjs');
+  // In a child: this process may be inside the 5 s «framed» spell of an earlier test (a stuck holder) and not open the lock.
+  execFileSync(process.execPath, ['-e', `require(${JSON.stringify(lib)}).appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'a-0',at:'2026-11-05T10:00:00.000Z'})`]);
+  const lock = path.join(d, '.events.lock.db');
+  fs.chmodSync(lock, 0o444);
+  const code = `const {appendEvent}=require(${JSON.stringify(lib)});`
+    + `for(let i=1;i<=3;i++)appendEvent(${JSON.stringify(d)},{kind:'shown',lesson:'a-'+i,at:'2026-11-05T10:00:0'+i+'.000Z'});`;
+  const out = execFileSync(process.execPath, ['-e', code], { env: { ...process.env, HUB_LOG_DIR: logs }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.strictEqual(out, '');
+  assert.deepStrictEqual(readEvents(d).events.map((e) => e.lesson), ['a-0', 'a-1', 'a-2', 'a-3']);
+  const j = fs.readFileSync(path.join(logs, 'hooks.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const errs = j.filter((e) => e.type === 'error' && e.module === 'lib/memory/events.cjs');
+  assert.strictEqual(errs.length, 1, 'one error line per process, not one per event');
+  assert.match(errs[0].error, /только для чтения|read-only/);
+  assert.match(errs[0].error, /\.events\.lock\.db/);
+});
