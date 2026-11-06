@@ -1,7 +1,7 @@
 // Уроки после вызовов MCP и Agent (срез 35, решение 06.11 — вариант А): матчер PostToolUse из hooks.json пускает
 // Agent/Task и MCP браузера, трекера и GitLab — урок с `when` на такой вызов приходит сразу после него, в том числе по
-// выводу (блоки text результата MCP, отчёт агента — handbackReport у сдавшего через SubagentHandback). Тишина: служебные MCP приложения (ccd_*) и PostToolUseFailure хук
-// не видит — как раньше; урок второй раз в эпохе не подаётся. Вызовы идут через матчер, как их пускает Claude Code.
+// выводу (блоки text результата MCP, отчёт агента — handbackReport у сдавшего через SubagentHandback). Тишина: служебные MCP приложения (ccd_*) хук
+// не видит; упавший вызов тех же инструментов виден и учит по тексту ошибки (срез 37, H63); урок второй раз в эпохе не подаётся. Вызовы идут через матчер, как их пускает Claude Code.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -9,7 +9,8 @@ const { makeHub } = require('../lib/hub.cjs');
 const { runEvent } = require('../lib/hooks.cjs');
 
 const SRC = 'решение 06.11 по 35 (вариант А): «матчер PostToolUse — Agent|Task|браузер|трекер|GitLab; out — блоки content у MCP/Agent»';
-const QUIET = 'решение 06.11 по 35: «PostToolUseFailure не трогать»; служебные MCP — только цена, уроков на них нет (замер 35)';
+const QUIET = 'решение 06.11 по 35: служебные MCP — только цена, уроков на них нет (замер 35)';
+const FAIL37 = 'решение 06.11 о срезе 37: модуль уроков на PostToolUseFailure, матчер — как у PostToolUse (подробно — H63)';
 const lesson = (id, when, first) => ['---', `id: ${id}`, 'kind: rule', 'when:', ...when, 'keys: []', 'status: active', 'supersedes: []',
   'source: модель', 'created: 2026-10-01', '---', first, 'Вторая строка урока.', ''].join('\n');
 const MEMORY = {
@@ -45,8 +46,13 @@ module.exports = {
     const tracker = post('mcp__plugin_studio-skills_tracker__tracker_issue', { key: 'K-1' }, blocks('{"summary":"x"}'));
     const gitlab = post('mcp__plugin_studio-skills_gitlab__gitlab_mr_create', { title: 't' }, blocks('created'));
     const service = post('mcp__ccd_turn__update_plan', { items: [] }, blocks('SERVICE_MARKER'));
-    const failure = post('mcp__claude-in-chrome__computer', { action: 'left_click' }, blocks('SERVICE_MARKER timeout'), 'PostToolUseFailure');
-    const failBash = post('Bash', { command: 'false' }, 'SERVICE_MARKER', 'PostToolUseFailure');
+    // A failed call carries its text in `error`, not in tool_response (probe P37, slice 37).
+    const fail = (tool_name, tool_input, error) => {
+      const res = ev('PostToolUseFailure', { tool_name, tool_use_id: `t${++n}`, tool_input, error, is_interrupt: false });
+      return { ran: res.length > 0, ctx: said(res) };
+    };
+    const failure = fail('mcp__claude-in-chrome__computer', { action: 'left_click' }, 'SERVICE_MARKER timeout');
+    const failBash = fail('Bash', { command: 'false' }, 'Exit code 1\nSERVICE_MARKER');
 
     // Claude Code tests a matcher with anything but names and `|` as a regex WITHOUT anchors (probe P35, 2.1.317):
     // the matcher must not let in a tool whose name holds one of its names.
@@ -63,8 +69,10 @@ module.exports = {
       { id: 'service-mcp-unseen', kind: 'quiet', source: QUIET, pass: !service.ran, detail: `ccd_turn: ${service.ran ? `хук вызван: ${service.ctx.slice(0, 80)}` : 'не вызван'}` },
       { id: 'matcher-unanchored-tight', kind: 'quiet', source: QUIET, pass: !leak.length && ['Agent', 'Bash', 'mcp__claude-in-chrome__computer'].every(asCC),
         detail: `матчер как его проверяет Claude Code (регэксп без якорей): лишние ${leak.join(', ') || 'нет'}` },
-      { id: 'failure-unchanged', kind: 'quiet', source: QUIET, pass: !failure.ran && failBash.ran && !/Урок памяти/.test(failBash.ctx),
-        detail: `PostToolUseFailure: MCP ${failure.ran ? 'вызван' : 'не вызван'}, Bash ${failBash.ran ? 'вызван' : 'не вызван'}${failBash.ctx ? `: ${failBash.ctx.slice(0, 80)}` : ''}` },
+      // Slice 37 (decision 06.11) changed what this check held: a failed MCP call now reaches the lesson module (H63 owns
+      // the details); here — only that the failure path of the same tools is seen and teaches by the error text.
+      { id: 'failure-now-seen', source: FAIL37, pass: failure.ran && failBash.ran && /Урок памяти \(any-reset\)/.test(failure.ctx + failBash.ctx),
+        detail: `PostToolUseFailure: MCP ${failure.ran ? 'вызван' : 'не вызван'}, Bash ${failBash.ran ? 'вызван' : 'не вызван'}; ${(failure.ctx + failBash.ctx).slice(0, 80) || 'урока нет'}` },
     ];
   },
 };
