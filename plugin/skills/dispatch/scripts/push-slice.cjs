@@ -34,13 +34,51 @@ const POINTS = ['checks', 'review', 'evidence'];
 const KINDS = ['sha', 'file', 'output', 'shot', 'review', 'last-full'];
 const MAX_ITEMS = 7;
 
-// Risk categories of a diff: by path, by added lines. Network is not looked for in docs and tests.
+// Network is judged by what runs, not by the word: a line of a comment or a name in data is not a call. Docs and tests —
+// never. Every kind of file: a network API, curl/wget/nc at the place of a command. Shell (scripts, CI steps,
+// Dockerfile, Makefile, a file without extension) and any other file (json, conf): also a string that starts with the
+// command and its arguments ('curl -fsSL …' of a YAML step, sh "curl …") and the exec form ["curl", "-…", a URL or
+// $VAR] (a healthcheck ["CMD", "curl", …] too); a Makefile recipe «@curl», «-wget» is a command;
+// shell — # comment lines skipped. Code: also the command string of an exec/spawn/subprocess call on the line; comment
+// lines skipped, code after a closed /* … */ is read. A bare name (`- curl` of a package list, "curl" in a lock file) is data, not a call.
+const NET = {
+  skip: /\.(md|txt|rst|adoc)$|(^|\/)(tests?|__tests__|fixtures?)\/|\.(test|spec)\.[^/]+$/,
+  shell: /\.(sh|bash|zsh|ksh|fish|mk|ya?ml)$|(^|\/)(Makefile|GNUmakefile|Dockerfile[^/]*|[^/]*\.Dockerfile|Jenkinsfile|Procfile)$|(^|\/)[^/.]+$/,
+  code: /\.([cm]?[jt]sx?|py|pyw|rb|go|rs|java|kts?|php|pl|pm|lua|swift|cs|scala|exs?|groovy)$/,
+  hash: /\.(py|pyw|rb|pl|pm|exs?|php)$/,
+  slash: /\.([cm]?[jt]sx?|go|rs|java|kts?|php|swift|cs|scala|groovy)$/,
+  api: /\bfetch\s*\(|\baxios\b|\brequire\(\s*['"](node:)?(https?|http2|net|tls|dgram)['"]\s*\)|\bfrom\s+['"](node:)?(https?|http2|net|tls|dgram)['"]|\bnew\s+WebSocket\b|\brequests\.(get|post|put|patch|delete)\b|\burllib\b/,
+  cmd: /(^|[\s;|&(`/!{])(curl|wget|nc|ncat)\s|^\s*[@-]+(curl|wget|nc|ncat)\s/,
+  str: /['"`]([^'"`\s]*\/)?(curl|wget|nc|ncat)(['"`]|\s)/,
+  strArgs: /['"`]([^'"`\s]*\/)?(curl|wget|nc|ncat)\s/,
+  execForm: /\[\s*(['"]CMD['"]\s*,\s*)?['"]([^'"\s]*\/)?(curl|wget|nc|ncat)['"]\s*,\s*['"](-|https?:|\$)/,
+  exec: /\b(exec|execSync|execFile|execFileSync|execa|execaSync|spawn|spawnSync|system|popen|Popen|run|call|check_call|check_output|getoutput|getstatusoutput)\s*\(/,
+};
+// A line of code without its leading closed comments, or null when the rest is a comment: //, an open /*, a JSDoc
+// line « * …» (not a generator method: «*items()», «* items(…) {», «* [Symbol.iterator]() {», «* #f<T>(): T {»); a line
+// opening with «*/» is read after it.
+function codeLine(file, s) {
+  if (NET.hash.test(file) && /^\s*#/.test(s)) return null;
+  if (!NET.slash.test(file)) return s;
+  let t = s.replace(/^\s*\*\//, '');
+  for (let m; (m = /^\s*\/\*.*?\*\//.exec(t));) t = t.slice(m[0].length);
+  const jsdoc = /^\s*\*(\s|$)/.test(t) && !/^\s*\*\s*(#?[\w$]+|\[[^\]]*\])\s*(<[^>]*>)?\s*\(.*\)\s*(:[^{]*)?\{/.test(t);
+  return /^\s*(\/\/|\/\*)/.test(t) || jsdoc ? null : t;
+}
+function netCall(file, s) {
+  if (NET.skip.test(file)) return false;
+  const any = (t) => NET.api.test(t) || NET.cmd.test(t);
+  if (NET.shell.test(file)) return !/^\s*#/.test(s) && (any(s) || NET.strArgs.test(s) || NET.execForm.test(s));
+  if (NET.code.test(file)) { const t = codeLine(file, s); return t !== null && (any(t) || (NET.exec.test(t) && NET.str.test(t))); }
+  return any(s) || NET.strArgs.test(s) || NET.execForm.test(s);
+}
+
+// Risk categories of a diff: by path, by added lines (line — a regexp, added — a function of the file and the line).
 const RISK = {
   ci: { ru: 'ci', path: /(^|\/)\.gitlab-ci\.ya?ml$|^\.gitlab\/ci\/|^\.github\/workflows\/|^\.circleci\/|(^|\/)Jenkinsfile$|(^|\/)\.drone\.ya?ml$/ },
   deploy: { ru: 'деплой', path: /(^|\/)(Dockerfile[^/]*|[^/]*\.Dockerfile|docker-compose[^/]*\.ya?ml|compose\.ya?ml|Procfile|nginx[^/]*\.conf)$|(^|\/)(deploy|k8s|kubernetes|helm|charts|ansible|terraform)\/|\.tf$/ },
   deps: { ru: 'зависимости', path: /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|requirements[^/]*\.txt|Pipfile(\.lock)?|pyproject\.toml|poetry\.lock|uv\.lock|go\.(mod|sum)|Cargo\.(toml|lock)|Gemfile(\.lock)?|composer\.(json|lock)|[^/]+\.csproj)$/ },
-  net: { ru: 'сеть', skip: /\.(md|txt|rst|adoc)$|(^|\/)(tests?|__tests__|fixtures?)\/|\.(test|spec)\.[^/]+$/,
-    line: /\bfetch\s*\(|\baxios\b|\brequire\(\s*['"](node:)?(https?|http2|net|tls|dgram)['"]\s*\)|\bfrom\s+['"](node:)?(https?|http2|net|tls|dgram)['"]|\bnew\s+WebSocket\b|\brequests\.(get|post|put|patch|delete)\b|\burllib\b|(^|[\s;|&(])(curl|wget|nc|ncat)\s/ },
+  net: { ru: 'сеть', added: netCall },
   secrets: { ru: 'секреты', path: /(^|\/)\.env(?!\.(example|sample|template|dist)$)(\.[^/]*)?$|\.(pem|p12|pfx|key)$|(^|\/)id_(rsa|ecdsa|ed25519)$/,
     line: /-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bglpat-[A-Za-z0-9_-]{20}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bsk_(live|test)_[A-Za-z0-9]{10,}|(api[_-]?key|secret|token|passw(or)?d)['"]?\s*[:=]\s*['"][^'"\s]{8,}['"]/i },
 };
@@ -134,9 +172,20 @@ function confirm(repo, c, sha, dir) {
     if (!sha.startsWith(String(c.head).toLowerCase()) || String(c.head).length < 7) return `output: ${val} снят на HEAD ${short(c.head)}, а квитанция на ${short(sha)} — прогон не на итоговом HEAD`;
     if (!text.includes(String(c.head).slice(0, 7))) return `output: в ${val} нет HEAD ${short(c.head)}`;
     // Red: FAIL/FAILED, TAP «not ok», ✖, «N failed/failing/error(s)», pytest ERROR and «Interrupted»; a line of a
-    // passed test (✔, ✓, TAP «ok») is not a summary, whatever its name says.
-    const red = text.split('\n').find((l) => !/^\s*(✔|✓|ok\b)/.test(l) &&
-      /(^|[\s·|=])FAIL(ED)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(failed|failing|errors?)\b|^ERROR\b|\bInterrupted:/.test(l));
+    // passed test (✔, ✓, TAP «ok») is not a summary, whatever its name says. A counter is judged by its number: a zero
+    // one («FAIL: 0», «failures=0», «fail 0 ·», «pass 6 fail 0», «Errors: 0,») is dropped before the check. A zero after
+    // a space, or after «:»/«=» with a number in front of the word, must end the counter (end of line or · | ; ) ] ,):
+    // «1 failed 0 passed», «2 errors: 0 warnings», «FAIL 0 of 2», «FAIL 0 x.test.js», «FAIL 0,5» stay. A non-zero one is
+    // red: «ℹ fail 2», «# fail 1», «Errors: 1», «Failures: 1.», «3 failures», « 1 fail»; «N fail» followed by a number
+    // of its own («pass 6 fail 0 skip 1») is the neighbour's number, not a count. Known trade-off: «3 errors 0» at the
+    // end reads as «3 · errors 0» (green), the same shape as «warnings 2 errors 0».
+    const red = text.split('\n').find((raw) => {
+      if (/^\s*(✔|✓|ok\b)/.test(raw)) return false;
+      const l = raw.replace(/(\d\s*)?\b(fail(ed|ures?|ing)?|errors?)\b(\s*[:=]\s*|\s+)0+(?![\w.\-/]|,\d)/gi, (m, num, _w, _x, sep, off, str) =>
+        (num || !/[:=]/.test(sep)) && !/^\s*($|[·|;)\]]|,(?!\d))/.test(str.slice(off + m.length)) ? m : (num || ''));
+      return /(^|[\s·|=])FAIL(ED|URES)?\b|^not ok\b|^\s*✖|(^|[^\d])[1-9]\d*\s+(failed|failing|errors?)\b|(^|[^\d])[1-9]\d*\s+fail(ures?)?\b(?!\s*[:=]?\s*\d)|^ERROR\b|\bInterrupted:/.test(l) ||
+        /\bfail(ed|ures?|ing)?\b\s*[:=]?\s*[1-9]\d*(?!\w|\.\d)/i.test(l) || /\berrors?\b\s*[:=]\s*[1-9]/i.test(l);
+    });
     return red ? `output: в ${val} прогон не зелёный — «${red.trim().slice(0, 80)}»` : null;
   }
   if (kind === 'review') {
@@ -310,7 +359,8 @@ function historyGate(a, repo, branch, sha, to, receipts) {
       if (inDiff && /^(index |--- |\+\+\+ |@@ |new file|deleted file|old mode|new mode|similarity|rename |Binary files)/.test(l)) continue;
       if (inDiff && l.startsWith('-')) continue;
       if (pats.length && pats.some((p) => p.test(l))) names.push(`${short(c)} «${subject}»: ${l.trim().slice(0, 100)}`);
-      if (inDiff && l.startsWith('+') && file) for (const [k, r] of Object.entries(RISK)) if (r.line && !(r.skip && r.skip.test(file)) && r.line.test(l)) addRisk(k, file);
+      // The line without its «+»: a command from column 0 starts the line.
+      if (inDiff && l.startsWith('+') && file) for (const [k, r] of Object.entries(RISK)) if (r.added ? r.added(file, l.slice(1)) : r.line && r.line.test(l.slice(1))) addRisk(k, file);
     }
   }
   if (foreign.length && !a.foreignOk) fail(`история: чужие коммиты (автор не ${me}) — назвать пользователю и спросить, затем --foreign-ok:\n  ${foreign.join('\n  ')}`);

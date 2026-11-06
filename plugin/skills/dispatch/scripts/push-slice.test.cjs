@@ -490,3 +490,152 @@ test('push-slice verify: pytest collection errors are red; a passing test named 
     assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
   }
 });
+
+// HUBV2-33: network risk by meaning — a call that runs (a shell command, an exec of one, a network API), not the word
+// in a comment or in data; zero counters of a checks log are not red.
+test('push-slice: a network call is a risk — shell from column 0, file without extension, CI step, exec/spawn/subprocess of curl/wget', (t) => {
+  for (const [file, body] of [
+    ['scripts/install.sh', 'curl -fsSL https://get.example.test | sh\n'],
+    ['tools/get', 'wget -O /tmp/x https://example.test/x\n'],
+    ['config/steps.yml', 'steps:\n  - run: curl -fsSL https://example.test/x\n'],
+    ['src/get.cjs', "require('child_process').execSync('curl -o out.bin https://example.test/x');\n"],
+    ['src/get2.js', "spawnSync('wget', ['https://example.test/x']);\n"],
+    ['src/get3.js', 'execSync(`cd /tmp && curl -s ${u}`);\n'],
+    ['tool.py', "subprocess.run(['curl', 'https://example.test'])\n"],
+    ['src/net.js', "module.exports = () => fetch('https://api.example.test/v1');\n"],
+    ['config/hooks.json', '{"command": "curl -s https://example.test/hook"}\n'],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+});
+
+test('push-slice: the words curl -o / wget -O in a comment or in data are not a network risk', (t) => {
+  const r = stand(t, { files: {
+    'src/detector.cjs': "// writes: dd of=, curl -o / wget -O, tar -x -C\nmodule.exports = 1;\n",
+    'src/doc.js': '/**\n * Downloads with wget -O or curl -o; uses fetch(url) and require(\'https\').\n */\nmodule.exports = 2;\n',
+    'scripts/x.sh': '#!/bin/sh\n# no curl here, wget neither\necho ok\n',
+    'tool.py': '# requests.get is not used here\nprint(1)\n',
+    'src/names.cjs': "const NET_TOOLS = ['curl', 'wget'];\nmodule.exports = NET_TOOLS;\n",
+    'config/packages.yml': 'packages:\n  - curl\n  - git\n',
+    'data/lock.json': '{"require": ["curl", "wget"]}\n',
+  } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+  assert.doesNotMatch(out(res), /риск:/);
+});
+
+test('push-slice verify: zero counters (FAIL: 0, fail 0, FAILED: 0) are green; a non-zero one (fail 2, # fail 1) is red', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['FAIL: 0', false], ['checks · тесты 120 · FAIL: 0 · 40 с', false], ['FAILED: 0', false],
+    ['ℹ fail 0', false], ['failures=0 errors=0', false], ['# fail 0', false],
+    ['ℹ fail 2', true], ['# fail 1', true], ['FAIL: 3', true], ['FAIL plugin/x.test.cjs', true], ['failures=1', true]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+// Review round 1 of HUBV2-33: every former alternative in every kind of file; a zero counter only without its own
+// number in front; non-zero errors are red too.
+test('push-slice: network — the API in shell-kind files, code after a closed comment, quoted CI commands, exec form', (t) => {
+  for (const [file, body] of [
+    ['bin/cli', "const https = require('https');\n"],
+    ['bin/www', "await fetch('https://api.example.test/v1');\n"],
+    ['scripts/build.sh', 'node -e "fetch(\'https://example.test\')"\n'],
+    ['scripts/py.sh', "python3 -c 'import urllib.request; urllib.request.urlopen(u)'\n"],
+    ['config/app.yml', "steps:\n  - run: node -e \"require('https').get(u)\"\n"],
+    ['config/ci.yml', "job:\n  script:\n    - 'curl -fsSL https://example.test | sh'\n"],
+    ['config/ci2.yml', 'job:\n  script:\n    - "wget --quiet https://example.test"\n'],
+    ['Dockerfile', 'RUN ["curl", "-fsSL", "https://example.test"]\n'],
+    ['Rakefile', 'sh "curl -s https://example.test"\n'],
+    ['src/gen.js', 'class A {\n  *items() { yield fetch(url); }\n}\n'],
+    ['src/lint.js', '/* eslint-disable */ fetch(url);\n'],
+    ['src/execa.js', "await execa('curl', ['https://example.test']);\n"],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run', '--risk-ok', 'deploy');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+});
+
+test('push-slice verify: a zero counter does not eat a non-zero one in front; non-zero errors are red; «0 of 2» is not a counter', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['1 failed 0 passed', true], ['2 errors 0 warnings', true], ['Found 2 errors 0 warnings', true],
+    ['3 failed  0 skipped', true], ['FAIL 0 of 2 assertions passed', true], ['FAILED 0 tests/test_a.py::test_x', true],
+    ['FAIL 0 x.test.js', true], ['FAIL 0,5', true], ['Tests run: 5, Failures: 0, Errors: 1, Skipped: 0', true],
+    ['failures=0 errors=1', true], ['1 fail', true],
+    ['Tests run: 5, Failures: 0, Errors: 0, Skipped: 0', false], ['failures=0, errors=0', false], ['tests 6 · pass 6 · fail 0 · 0 failed', false]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+// Review round 2 of HUBV2-33: a number of the neighbouring counter does not turn «fail 0» red; a generator method
+// with a space after «*» is code; Makefile recipe prefixes, a compose healthcheck, PHPUnit summaries.
+test('push-slice verify: a one-line summary without separators — «pass 6 fail 0» is green; PHPUnit Failures: 1. and FAILURES! are red', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['A: pass 15 fail 0 · 15 db=wt_a · too many clients: 0', false], ['pass=6 fail=0', false],
+    ['tests 6 failures 0', false], ['duration_ms 12 fail 0', false], ['pass 6 fail 0 skip 1', false],
+    ['1 failed 0 passed', true], ['Tests: 5, Assertions: 10, Failures: 1.', true], ['FAILURES!', true], [' 1 fail', true]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+test('push-slice: network — «  * items()» generator, Makefile @curl / -wget, compose ["CMD", "curl", …], RUN ["curl", "$URL"]', (t) => {
+  for (const [file, body] of [
+    ['src/gen2.js', 'class A {\n  * items() { yield fetch(url); }\n}\n'],
+    ['Makefile', 'get:\n\t@curl -s https://example.test/x\n'],
+    ['build.mk', 'get:\n\t-wget -q https://example.test/x\n'],
+    ['config/compose.yml', 'healthcheck:\n  test: ["CMD", "curl", "-f", "http://localhost"]\n'],
+    ['Dockerfile', 'RUN ["curl", "$URL"]\n'],
+  ]) {
+    const r = stand(t, { files: { [file]: body } });
+    const res = r.push('--solo', '--dry-run', '--risk-ok', 'deploy');
+    assert.strictEqual(res.status, 1, `${file}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), file);
+  }
+  const r = stand(t, { files: { 'src/doc2.js': '/**\n * fetch(url) returns the body; see {@link https://example.test}.\n * @param {string} url\n */\nmodule.exports = 1;\n' } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+});
+
+// Review round 3 of HUBV2-33 (fixed without a review round, rule 8): «N failures» anywhere in the line is red unless
+// a number of its own follows; a number in front of «word: 0» keeps the counter unless the zero ends it; one-line
+// generators in every shape are code.
+test('push-slice verify: «3 failures» mid-line is red, «2 errors: 0 warnings» stays red, «pass=6 fail=0» stays green', (t) => {
+  const r = stand(t);
+  for (const [line, red] of [['10 examples, 3 failures', true], ['1 example, 1 failure', true],
+    ['10 runs, 20 assertions, 3 failures, 0 errors, 0 skips', true], ['Summary: 4 passed, 2 failures', true], ['pass 5 · 1 fail', true],
+    ['5 pass 1 fail', true], ['2 errors: 0 warnings', true], ['Found 2 errors: 0 fixable', true], ['1 failed: 0 passed', true],
+    ['1 failed=0 skipped', true], ['10 runs, 20 assertions, 0 failures, 0 errors, 0 skips', false], ['pass=6 fail=0', false],
+    ['pass 6 fail 0 skip 1', false], ['A: pass 15 fail 0 · 15 db=wt_a · too many clients: 0', false], ['tests 6 failures 0', false]]) {
+    r.writeReceipt();
+    fs.appendFileSync(path.join(r.mem, 'checks-full.log'), line + '\n');
+    const res = r.run('verify', r.repo, 'S-1', '--receipt', r.receipt);
+    assert.strictEqual(res.status, red ? 1 : 0, `${line}: ${out(res)}`);
+  }
+});
+
+test('push-slice: network — one-line generators with a space after «*» in every shape are code, a JSDoc line is not', (t) => {
+  for (const [i, line] of ['  * items(): Generator<Promise<Response>> { yield fetch(url); }', '  * items(a = f()) { yield fetch(url); }',
+    '  * [Symbol.iterator]() { yield fetch(url); }', '  * #items() { yield fetch(url); }', '  * items<T>() { yield fetch(url); }'].entries()) {
+    const file = `src/g${i}.ts`;
+    const r = stand(t, { files: { [file]: `class A {\n${line}\n}\n` } });
+    const res = r.push('--solo', '--dry-run');
+    assert.strictEqual(res.status, 1, `${line}: ${out(res)}`);
+    assert.match(out(res), new RegExp(`риск: сеть — src/g${i}\\.ts`), line);
+  }
+  const r = stand(t, { files: { 'src/doc3.ts': '/**\n * fetch(url) returns the body; see {@link https://example.test}.\n * Example: await fetch(url)\n */\nexport const a = 1;\n' } });
+  const res = r.push('--solo', '--dry-run');
+  assert.strictEqual(res.status, 0, out(res));
+});

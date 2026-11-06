@@ -68,12 +68,17 @@ module.exports = {
 | `replaces`, `review` | что заменяет; дата пересмотра ГГГГ-ММ-ДД |
 
 `.githooks/pre-commit.d/30-mechanisms.sh` проверяет индекс (то, что коммитится): модуль без записи, запись без
-модуля или без сценария, неизвестные стадия/событие — отказ; логических обработчиков > 12 или видов состояния > 12 —
-отказ с перечнем; каталог `*.d`, не принадлежащий событию (опечатка `pretools.d/`), и две записи на один модуль —
-отказ; истёкший пересмотр — предупреждение. Вручную: `node plugin/hooks/lib/registry.cjs check .`.
+модуля или без сценария, неизвестные стадия/событие — отказ; логических обработчиков или видов состояния больше
+потолка — отказ с перечнем; каталог `*.d`, не принадлежащий событию (опечатка `pretools.d/`), и две записи на один
+модуль — отказ; истёкший пересмотр — предупреждение. Вручную: `node plugin/hooks/lib/registry.cjs check .`.
 
-Потолок обработчиков — 12 (решение владельца хаба 05.11: было 6, затем 10). После волны 3: 9 из 12 (`lock`, `rules-guard`,
-`memory-brief`, `done-gate`, `delivery`, `protect`, `setup`, `push`, `estimate`).
+Потолки — `BUDGET` в `plugin/hooks/lib/registry.cjs`, единственный источник цифр (подъёмы потолка обработчиков —
+решения владельца хаба: 6 → 10 → нынешний, 05.11). Занятое в тексте не держим — оно меняется с каждой волной; текущий счёт по
+реестру печатает (из корня хаба):
+
+```bash
+node -e "const r=require('./plugin/hooks/lib/registry.cjs'),l=r.readRecords('plugin/mechanisms'),h=new Set(l.map(x=>x.rec&&x.rec.handler).filter(Boolean).map(String)),s=new Set(l.flatMap(x=>Array.isArray(x.rec&&x.rec.state)?x.rec.state.map(String):[]));console.log('обработчиков '+h.size+' из '+r.BUDGET.handlers+' ('+[...h].sort().join(', ')+'), видов состояния '+s.size+' из '+r.BUDGET.state)"
+```
 
 ## Стадии и канарейки
 
