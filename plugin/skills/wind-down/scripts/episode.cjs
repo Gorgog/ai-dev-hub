@@ -4,7 +4,9 @@
 //   episode.cjs repeat <id> --note <что было> [--model <id>]            the same thing again: event + v1 line
 // --model — the session's model id: written into the event, memory-gc sees a model change by it.
 // Rule 7 of the hub: an episode always, a rule by repeat. A first episode is `kind: knowledge`; `kind: rule` right
-// away only with --user-said; class «once» (`kind: once`) at once. A draft close to a lesson already there is not
+// away only with --user-said; class «once» (`kind: once`) at once — its layer set here, not by the draft (decision (г)
+// 06.11): a trigger the lesson hook really sees → active (the hook delivers it at the moment of the mistake), none →
+// the core (the brief's 15 lines are for what no hook delivers). A draft close to a lesson already there is not
 // written — it is a repeat (or --new after reading both). Double write: while the project keeps its v1 errors.md, each
 // episode is also one line there — for a new lesson the line `recall export-v1` gives it. The draft is written by the
 // agent with Write (never heredoc: quotes, backticks and ${} break in Bash); this script writes the memory.
@@ -68,9 +70,20 @@ function v1Line(mem, id) {
   return line;
 }
 
+// Class «once»: {text, note} with the status the trigger earns; other kinds — as drafted.
+function placeOnce(text, meta, file) {
+  if (meta.kind !== 'once') return { text, note: '' };
+  let t;
+  try { t = S.workingTrigger(meta, S.lessonHookTools()); } catch (e) { t = { ok: false, reason: e.message }; }
+  const status = t.ok ? 'active' : 'core';
+  const note = t.ok ? `слой active: триггер видит хук (${t.reason}) — подаст в момент ошибки; ядро брифа — для того, что хук не подаст`
+    : `слой core (ядро): ${t.reason} — хук его не подаст, держит бриф`;
+  return { text: meta.status === status ? text : S.withField(file, text, 'status', status), note };
+}
+
 function add(mem, file, a) {
-  const text = fs.readFileSync(file, 'utf8');
-  const { meta, body } = parseLesson(text);
+  const { meta, body } = parseLesson(fs.readFileSync(file, 'utf8'));
+  const { text, note: placed } = placeOnce(fs.readFileSync(file, 'utf8'), meta, file);
   const id = String(meta.id || '');
   if (meta.kind === 'rule' && !a.userSaid) {
     throw refuse(`${id}: правило — по повтору (правило 7). Первый эпизод — kind: knowledge; сразу правило — класс «одного раза» `
@@ -100,6 +113,7 @@ function add(mem, file, a) {
       + `recall.cjs merge ${r.id} <старый> и episode.cjs repeat <старый> --note '<что было>':`, ...nearest.map(line));
   }
   if (meta.kind === 'once') {
+    out.push(placed);
     out.push('класс «одного раза»: это механизм, в отставку не уходит — в заметку «Кандидат в механизм»: триггер `when` урока, '
       + 'правило rules.json или модуль хука, который не даст повторить');
   }

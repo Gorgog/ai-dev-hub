@@ -1,6 +1,6 @@
 // The storage interface of memory v2 — the one door for hooks (21), skills (22), migration (23) and `recall`:
 //   add (addLesson), repeat, shown, find, export (exportAll, exportV1), import (importAll);
-//   status operations retire / merge / supersede, why, check, retirementCandidates.
+//   status operations retire / merge / supersede, why, check, retirementCandidates; the core — coreCandidates, toActive.
 // Source of truth — files: lessons/*.md, decisions/*.md, events/*.jsonl. Derived, rebuilt by signature (name, size,
 // mtime of every source file) on every search, so a lesson another session wrote is seen without a restart:
 //   .index.db       FTS5 (unicode61) in node:sqlite + the fold (entries and event counters); P2: query p95 2.6 ms,
@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { parseLesson, validateLesson, layer, STATUSES, KINDS } = require('./format.cjs');
+const { parseLesson, validateLesson, compileWhen, layer, STATUSES, KINDS } = require('./format.cjs');
 const { appendEvent, readEvents, foldEvents, eventFiles } = require('./events.cjs');
 
 const INDEX = '.index.db';
@@ -509,11 +509,93 @@ function retirementCandidates(memDir, { days = 30, now = new Date() } = {}) {
     .map((d) => d.id).sort();
 }
 
-// Tail 34 (decision г): the core and the lesson hook — stubs, implemented after the red tests.
-function lessonHookTools() { return { event: '', tools: [] }; }
-function workingTrigger() { return { ok: false, reason: '' }; }
-function coreCandidates() { return []; }
-function toActive() { return null; }
+// ---------- the core and the lesson hook (tail 34, decision (г) 06.11) ----------
+
+// The core of the brief is for what no hook can deliver: a lesson whose trigger the lesson hook really sees goes to
+// active (delivered at the moment of the mistake); class «once» without a trigger and a trigger only on calls the
+// hook does not listen to (MCP, Agent today) stay in the core. «Listens» is read from the plugin, never hard-coded:
+// the event of mechanisms/memory-lessons.json and the matchers of that event in hooks/hooks.json.
+const PLUGIN = path.join(__dirname, '..', '..');
+function lessonHookTools(plugin = PLUGIN) {
+  let event, groups;
+  try { event = JSON.parse(fs.readFileSync(path.join(plugin, 'mechanisms', 'memory-lessons.json'), 'utf8')).event; } catch (e) {
+    throw new Error(`хук уроков: не прочитан mechanisms/memory-lessons.json (${e.code || e.message})`);
+  }
+  try { groups = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks[event]; } catch (e) {
+    throw new Error(`хук уроков: не прочитан hooks/hooks.json (${e.code || e.message})`);
+  }
+  if (typeof event !== 'string' || !Array.isArray(groups)) throw new Error(`хук уроков: в hooks/hooks.json нет события ${event}`);
+  // A group without a matcher (or «*») listens to every tool.
+  return { event, tools: groups.flatMap((g) => (typeof g.matcher === 'string' && g.matcher !== '' ? g.matcher.split('|') : ['*'])) };
+}
+
+// Tool names to try a lesson's `tool` regex on: each matcher alternative as a name (`mcp__x__.*` → `mcp__x__x`), and
+// the lesson's own literal names (`^(Edit|Write)$`) that a matcher alternative takes whole. No guessing past that: a
+// trigger that cannot be shown to fire stays in the core (a false «stays» costs a line, a false «goes» — a lesson).
+const LITERAL = /^[\w-]+$/;
+const sampleOf = (alt) => (LITERAL.test(alt) ? alt : alt.replace(/\\\./g, '.').replace(/\.[*+]/g, 'x').replace(/^\^|\$$/g, ''));
+function literalNames(src) {
+  const core = String(src).replace(/^\^/, '').replace(/\$$/, '').replace(/^\((?:\?:)?([^()]*)\)$/, '$1');
+  const parts = core.split('|');
+  return parts.every((p) => LITERAL.test(p)) ? parts : [];
+}
+const whole = (alt) => { try { return new RegExp(`^(?:${alt === '*' ? '.*' : alt})$`); } catch { return null; } };
+function namesFor(src, tools) {
+  const alts = tools.map((t) => ({ t, rx: whole(t) })).filter((x) => x.rx);
+  const names = new Set(alts.filter((x) => x.t !== '*').map((x) => sampleOf(x.t)).filter((n) => alts.some((x) => x.rx.test(n))));
+  for (const n of literalNames(src)) if (alts.some((x) => x.rx.test(n))) names.add(n);
+  return [...names];
+}
+// The fields a call of the tool can fill (memory-hot fieldsOf): cmd — Bash's command; body and path — the input of
+// any other tool; out — every tool's response.
+const fieldOk = (k, name) => (k === 'cmd' ? name === 'Bash' : k === 'body' || k === 'path' ? name !== 'Bash' : true);
+
+// {ok, reason}: does some item of `when` compile and fire on a tool the hook listens to?
+function workingTrigger(meta, { tools = [], event = '' } = {}) {
+  const when = Array.isArray(meta && meta.when) ? meta.when : [];
+  if (!when.length) return { ok: false, reason: 'без триггера when' };
+  const { problems } = compileWhen(when);
+  const on = event ? `хук уроков (${event})` : 'хук уроков';
+  const all = tools.includes('*');
+  for (let i = 0; i < when.length; i++) {
+    const w = when[i];
+    if (!w || typeof w !== 'object' || problems.some((p) => p.startsWith(`when[${i}]`))) continue;
+    const fields = Object.keys(w).filter((k) => k !== 'tool');
+    let names;
+    if ('tool' in w) {
+      let rx;
+      try { rx = new RegExp(w.tool, 'i'); } catch { continue; }
+      names = all ? [...literalNames(w.tool), 'Bash'].filter((n) => rx.test(n)) : namesFor(w.tool, tools).filter((n) => rx.test(n));
+    } else names = all ? ['Bash', 'Edit'] : tools.map(sampleOf).filter((n) => tools.some((t) => (whole(t) || /$^/).test(n)));
+    const hit = names.find((n) => fields.every((k) => fieldOk(k, n)));
+    if (hit) return { ok: true, reason: `when[${i}] ${'tool' in w ? `tool ${w.tool}` : '(без tool)'} — ${on} слушает ${hit}` };
+  }
+  return { ok: false, reason: `триггер только на вызовах, которых ${on} не слушает` };
+}
+
+// Proposals (decision г): core lessons, not class «once», the validator accepts, with a working trigger — [{id, kind,
+// reason}] by id. No hook config to read — nothing (the caller names the error by lessonHookTools).
+function coreCandidates(memDir, { plugin = PLUGIN } = {}) {
+  let hook;
+  try { hook = lessonHookTools(plugin); } catch { return []; }
+  return loadDocs(memDir)
+    .filter((d) => d.dir === 'lessons' && d.status === 'core' && d.kind !== 'once')
+    .filter((d) => !validateLesson(d.raw, { file: `${path.basename(memDir)}/${d.rel}` }).length)
+    .map((d) => ({ d, t: workingTrigger(d.meta, hook) }))
+    .filter((x) => x.t.ok)
+    .map(({ d, t }) => ({ id: d.id, kind: d.kind, reason: t.reason }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+// core → active: the status line only, then the triggers file and an event `to-active`.
+function toActive(memDir, id, a) {
+  const f = lessonFile(memDir, id);
+  const text = fs.readFileSync(f, 'utf8');
+  if (path.basename(path.dirname(f)) !== 'lessons' || parseLesson(text).meta.status !== 'core') throw new Error(`урок ${id} не в ядре (status не core)`);
+  writeAtomic(f, withField(f, text, 'status', 'active'));
+  refreshTriggers(memDir);
+  return appendEvent(memDir, { ...addr(a), kind: 'to-active', lesson: id });
+}
 
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
@@ -527,5 +609,5 @@ function memoryDir(cwd, hub) {
 module.exports = {
   addLesson, repeat, shown, find, similar, exportAll, importAll, exportV1,
   retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive,
-  ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
+  withField, ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
 };
