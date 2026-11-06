@@ -509,6 +509,12 @@ function retirementCandidates(memDir, { days = 30, now = new Date() } = {}) {
     .map((d) => d.id).sort();
 }
 
+// Tail 34 (decision г): the core and the lesson hook — stubs, implemented after the red tests.
+function lessonHookTools() { return { event: '', tools: [] }; }
+function workingTrigger() { return { ok: false, reason: '' }; }
+function coreCandidates() { return []; }
+function toActive() { return null; }
+
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
   const { findProject } = require('../../hooks/lib/hub.cjs');
@@ -520,6 +526,6 @@ function memoryDir(cwd, hub) {
 
 module.exports = {
   addLesson, repeat, shown, find, similar, exportAll, importAll, exportV1,
-  retire, merge, supersede, why, check, retirementCandidates,
+  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive,
   ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
 };

@@ -156,3 +156,36 @@ test('repeat: the hint names the episode number — 2nd, then 3rd — while the 
   assert.match(r, /3-й эпизод/);
   assert.doesNotMatch(r, /2-й эпизод/);
 });
+
+// Tail 34, decision (г): the core is for what no hook can deliver. A «once» whose trigger the lesson hook really sees
+// goes to active (delivered at the moment of the mistake); without one — the core. The draft's status is not trusted.
+test('class «once» with a working trigger goes to active; without one (or on a call the hook does not see) — the core', () => {
+  const { mem, draft } = sandbox();
+  const statusOf = (id) => parseLesson(fs.readFileSync(path.join(mem, 'lessons', `${id}.md`), 'utf8')).meta.status;
+  const a = draft('sudo-ask-first', ['Команды с sudo — только после вопроса пользователю.', 'Сессия запустила sudo без спроса.'],
+    { kind: 'once', status: 'core', keys: ['sudo'], when: [{ tool: '^Bash$', cmd: '(^|;|&&)\\s*sudo\\s' }] });
+  const ra = run(['--memory', mem, 'add', a]);
+  assert.strictEqual(ra.code, 0, ra.err);
+  assert.strictEqual(statusOf('sudo-ask-first'), 'active');
+  assert.match(ra.out, /active/);
+  assert.match(ra.out, /PostToolUse/);
+
+  const b = draft('prod-modal-no-submit', ['На проде форму клиента только открывать, не отправлять.', 'Отправка — запись в боевую базу.'],
+    { kind: 'once', status: 'active', keys: ['прод', 'форма'] });
+  const rb = run(['--memory', mem, 'add', b]);
+  assert.strictEqual(rb.code, 0, rb.err);
+  assert.strictEqual(statusOf('prod-modal-no-submit'), 'core', 'no trigger — the core, whatever the draft said');
+  assert.match(rb.out, /ядр/);
+
+  const c = draft('no-such-tool-once', ['Вызов инструмента, которого хук не видит, — только после вопроса.', 'Было однажды.'],
+    { kind: 'once', status: 'active', keys: ['инструмент'], when: [{ tool: '^NoSuchTool$' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', c]).code, 0);
+  assert.strictEqual(statusOf('no-such-tool-once'), 'core');
+
+  const k = draft('knowledge-keeps-status', ['Знание с триггером остаётся в своём слое.', 'Скрипт статус знания не трогает.'],
+    { kind: 'knowledge', status: 'active', keys: ['знание'], when: [{ tool: '^Bash$', cmd: 'make' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', k]).code, 0);
+  assert.strictEqual(statusOf('knowledge-keeps-status'), 'active');
+  // The v1 line follows the layer the lesson got.
+  assert.strictEqual(v1Lines(mem).length, 4);
+});
