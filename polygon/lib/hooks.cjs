@@ -13,12 +13,20 @@ function loadHooks(pluginDir) {
 
 // What the event's matcher is tested against: the tool for tool events, the source for SessionStart.
 const subject = (event, ev) => (/ToolUse/.test(event) ? ev.tool_name : ev.source || '');
+// The matcher as Claude Code applies it (probes P35, P37 on 2.1.317): empty or `*` — every subject; only names and `|`
+// — an exact list; anything else — a regex tested WITHOUT anchors (`Task|mcp__x__.*` takes TaskList too). So an
+// unanchored matcher in hooks.json lets the same extra tools in here as in a live session.
+function matches(matcher, s) {
+  if (!matcher || matcher === '*') return true;
+  if (/^[A-Za-z0-9_|]+$/.test(matcher)) return matcher.split('|').includes(s);
+  return new RegExp(matcher).test(s);
+}
 
 function runEvent(pluginDir, event, ev, env = {}) {
   const groups = loadHooks(pluginDir)[event] || [];
   const out = [];
   for (const g of groups) {
-    if (g.matcher && !new RegExp(`^(?:${g.matcher})$`).test(subject(event, ev) || '')) continue;
+    if (!matches(g.matcher, subject(event, ev) || '')) continue;
     for (const h of g.hooks || []) {
       if (h.type !== 'command') continue;
       const sub = (s) => String(s).replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, pluginDir);

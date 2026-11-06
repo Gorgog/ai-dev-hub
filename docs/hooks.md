@@ -17,9 +17,9 @@ hooks.json ─► node hooks/run.cjs <Событие>      (событие JSON 
 
 | Событие | Каталог | Матчер | Что умеет вернуть |
 |---|---|---|---|
-| PreToolUse | `pretool.d/` | `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Agent\|Task\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*` | `block` (код 2, причина в stderr), `deny`/`ask` (JSON), подача — `additionalContext` |
+| PreToolUse | `pretool.d/` | `^(?:Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Agent\|Task\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*)$` (37) | `block` (код 2, причина в stderr), `deny`/`ask` (JSON), подача — `additionalContext` |
 | PostToolUse | `posttool.d/` | `^(?:Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Agent\|Task\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*\|mcp__.*tracker_.*\|mcp__.*gitlab_.*)$` (35) | `block` (причина Claude), подача — `additionalContext` |
-| PostToolUseFailure | `posttoolfailure.d/` | `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit` | подача — `additionalContext` (по тексту ошибки инструмента); `block` раннер отдаёт как у PostToolUse, но для упавшего инструмента Claude Code его действие не проверено |
+| PostToolUseFailure | `posttoolfailure.d/` | тот же, что у PostToolUse (37) | подача — `additionalContext` (по тексту ошибки инструмента); `block` раннер отдаёт как у PostToolUse, но для упавшего инструмента Claude Code его действие не проверено |
 | Stop | `stop.d/` | — | `block` (Claude продолжает с причиной) |
 | SessionStart | `sessionstart.d/` | `startup\|resume\|clear\|compact` | подача — простым текстом (как v1) |
 | SessionEnd | `sessionend.d/` | — | ничего (только побочные действия) |
@@ -33,8 +33,24 @@ hooks.json ─► node hooks/run.cjs <Событие>      (событие JSON 
 в `memory-hot.cjs`). У прежних инструментов `out` прежний побайтно. Матчер записан с якорями `^(?:…)$`: Claude Code
 сравнивает список имён точно, только пока в матчере нет других символов, а с `.*` проверяет регэксп без якорей:
 `Task` пустил бы TaskList (проба P35 на 2.1.317), `Write` — TodoWrite, `Bash` — BashOutput. Остальные модули PostToolUse на новых инструментах молчат (вывод тестов — только Bash, проверка записи урока —
-только Write/Edit/MultiEdit; сценарий H60). PostToolUseFailure — прежний матчер, модуля уроков там нет: уроки на
-упавших вызовах (таймауты браузера) хук не видит. Новый инструмент с уроками — дописать в матчер и в H59.
+только Write/Edit/MultiEdit; сценарий H60). Новый инструмент с уроками — дописать в матчер PostToolUse и PostToolUseFailure и в H59.
+
+Уроки на упавших вызовах (срез 37, решение 06.11): упавший вызов — событие PostToolUseFailure, у него нет
+`tool_response`, текст, который получает модель, — в поле `error` (проба P37 на 2.1.317, CLI и Desktop: Bash —
+`Exit code N\n<stdout>\n<stderr>`; MCP — текст ответа с `isError`, сообщение ошибки JSON-RPC или
+`MCP server "…" tool "…" timed out after Ns`; Agent — «Agent type '…' not found…»). Модуль
+`posttoolfailure.d/21-memory-lessons-failure.cjs` (обработчик `memory`, канарейка как у `memory-lessons`) зовёт тот же
+`lessonsAfter`; `fieldsOf` берёт `error` как `out`, остальные поля — как после удачного вызова. Урок подаётся раз в
+эпоху на оба события вместе. Ошибки проверки ввода (`<tool_use_error>…`: Edit без найденной строки, Write без чтения,
+TaskStop без задачи) не вызывают ни PreToolUse, ни PostToolUseFailure — уроки по ним хук не видит. Матчер
+PostToolUseFailure — тот же, что у PostToolUse.
+
+Матчер PreToolUse тоже записан с якорями (срез 37): без них `Task` пускал TaskList, TaskCreate, TaskStop, `Write` —
+TodoWrite, `Bash` — BashOutput (P37: прежний матчер пускает TaskList, заякоренный — нет). Модули pretool.d сравнивают
+`tool_name` точно (`=== 'Bash'`, множества имён), кроме правил с регэкспом по инструменту или без него (rules-guard,
+замок, `when` уроков у memory-repeat): на отрезанных инструментах они больше не срабатывают — их там и не ждали.
+Полигон (`polygon/lib/hooks.cjs`) применяет матчер так же, как Claude Code: пустой или `*` — всё; только имена и `|` —
+точный список; иначе — регэксп без якорей. Незаякоренный матчер полигон теперь ловит (H64).
 
 `UserPromptSubmit` не заведён (решение 05.11). Проверено живым `claude -p --plugin-dir <worktree>/plugin` против
 мок-API (Claude Code 2.1.317, 05.11): события доходят до раннера, `CLAUDE_PLUGIN_DATA` задан, при `HUB_OFF=1` ни один модуль не вызван, ошибок хуков 0.
