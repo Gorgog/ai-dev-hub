@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const HOOKS = __dirname;
 const PLUGIN = path.dirname(HOOKS);
@@ -99,4 +99,29 @@ test('shown: finish holds the mark back, confirm sets it in the epoch of the cal
     const a = session.read('c2').agents.main;
     assert.deepStrictEqual([a.epoch, a.shown], [2, {}]);
   } finally { if (before === undefined) delete process.env.HUB_LOG_DIR; else process.env.HUB_LOG_DIR = before; }
+});
+
+// N hooks of one agent at once (parallel tool calls of one message): the lesson is shown by exactly one of them, as
+// before slice 36 — the mark held back until the output must still be seen by the neighbours.
+function runAsync(s, id) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(s.plugin, 'hooks', 'run.cjs'), 'PreToolUse'], {
+      env: { ...baseEnv(), AI_DEV_HUB: s.hub, HUB_LOG_DIR: s.logs, CLAUDE_PLUGIN_ROOT: s.plugin } });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('close', () => resolve(out));
+    p.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's1', permission_mode: 'default', cwd: s.wt,
+      tool_name: 'Bash', tool_use_id: id, tool_input: { command: 'echo BAD' } }));
+  });
+}
+
+test('shown: parallel calls of one agent show the lesson once', async () => {
+  const counts = [];
+  for (let trial = 0; trial < 6; trial++) {
+    const s = setup();
+    run(s, 'SessionStart', { source: 'startup' });
+    const outs = await Promise.all([1, 2, 3, 4].map((i) => runAsync(s, `p${i}`)));
+    counts.push(outs.filter((o) => /урок L1/.test(o)).length);
+  }
+  assert.deepStrictEqual(counts, [1, 1, 1, 1, 1, 1], 'how many of 4 parallel calls showed the lesson, per trial');
 });
