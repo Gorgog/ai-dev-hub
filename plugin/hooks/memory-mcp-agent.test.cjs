@@ -21,13 +21,18 @@ test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: 
 const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
 
 const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, 'hooks.json'), 'utf8')).hooks;
-const lets = (event, tool) => hooks[event].some((g) => new RegExp(`^(?:${g.matcher})$`).test(tool));
+// As Claude Code (2.1.317, review 06.11) applies a matcher: only names and `|` — an exact list; anything else — a
+// regex tested WITHOUT anchors (`Write` would let TodoWrite in, `Task` — TaskStop).
+const lets = (event, tool) => hooks[event].some((g) => (/^[A-Za-z0-9_|]+$/.test(g.matcher) ? g.matcher.split('|').includes(tool) : new RegExp(g.matcher).test(tool)));
 const OLD = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const NEW = ['Agent', 'Task', 'mcp__claude-in-chrome__computer', 'mcp__claude-in-chrome__get_page_text', 'mcp__Claude_Browser__browser_batch',
   'mcp__Claude_Browser__javascript_tool', 'mcp__plugin_studio-skills_tracker__tracker_issue', 'mcp__plugin_studio-skills_gitlab__gitlab_mr_create',
   'mcp__plugin_studio-skills_gitlab__gitlab_note'];
 const NOT = ['Read', 'Grep', 'Glob', 'WebFetch', 'SendMessage', 'mcp__ccd_turn__update_plan', 'mcp__ccd_session__start_session', 'mcp__figma-local__get_screenshot',
-  'mcp__visualize__show_widget', 'mcp__terminal__read_terminal'];
+  'mcp__visualize__show_widget', 'mcp__terminal__read_terminal',
+  // a name of before or a new one inside another name: unanchored, the matcher would let these in
+  'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskOutput', 'TaskStop', 'BashOutput', 'KillBash', 'ListAgents',
+  'mcp__x__EditFile', 'mcp__x__run_Bash', 'mcp__x__AgentTask', 'xmcp__claude-in-chrome__computer'];
 
 test('PostToolUse: the matcher lets in Agent/Task and the browser, tracker and GitLab MCP — as well as the tools of before', () => {
   for (const t of [...OLD, ...NEW]) assert.ok(lets('PostToolUse', t), t);
@@ -60,6 +65,14 @@ test('fieldsOf: out of an Agent call — the text of its report; an async launch
   assert.strictEqual(outOf('Agent', done), 'Отчёт: ERR_CONNECTION_RESET на стенде');
   assert.strictEqual(outOf('Task', done), 'Отчёт: ERR_CONNECTION_RESET на стенде');
   assert.strictEqual(outOf('Agent', { isAsync: true, status: 'async_launched', agentId: 'a1', prompt: 'x' }), '');
+});
+
+test('fieldsOf: an agent that handed its report back (SubagentHandback) — out is the report, not the stub in content', () => {
+  const handback = { status: 'completed', handback: 'send', handbackReport: { text: 'Отчёт: стенд отдал ERR_CONNECTION_RESET' },
+    content: [{ type: 'text', text: 'This agent\'s report was delivered to you as a message from "a1" (its SubagentHandback call).' }] };
+  assert.strictEqual(outOf('Agent', handback), 'Отчёт: стенд отдал ERR_CONNECTION_RESET');
+  assert.strictEqual(outOf('Agent', { ...handback, handbackReport: { text: 5 } }), handback.content[0].text, 'no text in the report — content');
+  assert.strictEqual(outOf('Agent', { ...handback, handbackReport: null }), handback.content[0].text);
 });
 
 test('fieldsOf: out keeps the tail of CAP characters for the new tools too', () => {
