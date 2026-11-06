@@ -1,6 +1,7 @@
-// Memory v2 in the hooks (slice 21), the hot path: what every PreToolUse / PostToolUse of a memory-v2 project runs —
-// where the memory is, the triggers of memory/.triggers.json, the matcher, and the two lesson modules (memory-lessons
-// after a call, memory-repeat before a repeat). Kept apart from memory-hooks.cjs (the write check, Bash into the
+// Memory v2 in the hooks (slice 21), the hot path: what every PreToolUse / PostToolUse / PostToolUseFailure of a
+// memory-v2 project runs — where the memory is, the triggers of memory/.triggers.json, the matcher, and the lesson
+// modules (memory-lessons after a finished call, memory-lessons-failure after a failed one — slice 37, memory-repeat
+// before a repeat). Kept apart from memory-hooks.cjs (the write check, Bash into the
 // memory, Stop, SessionStart) because a hook call is a cold process: loading the whole library cost ≈ 4 ms per call.
 'use strict';
 const fs = require('fs');

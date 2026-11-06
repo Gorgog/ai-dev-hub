@@ -102,7 +102,7 @@ test('registry: the failure module is under the handler memory with the state of
 const lesson = (id, when, first) => ['---', `id: ${id}`, 'kind: rule', 'when:', ...when.flatMap((w) => Object.entries(w).map(([k, v], j) => `${j ? '    ' : '  - '}${k}: ${v}`)),
   'keys: []', 'status: active', 'supersedes: []', 'source: модель', 'created: 2026-10-01', '---', first, 'Вторая строка урока.', ''].join('\n');
 
-function setup({ canary = true } = {}) {
+function setup({ canary = ['delivery', 'memory'] } = {}) {
   const hub = mkdtemp('memory-failure-');
   fs.cpSync(PLUGIN, path.join(hub, 'plugin'), { recursive: true, filter: (src) => !/\.test\.cjs$/.test(src) });
   const proj = path.join(hub, 'projects', 'demo');
@@ -110,7 +110,7 @@ function setup({ canary = true } = {}) {
   const wt = path.join(proj, 'worktrees', 'K-1');
   fs.mkdirSync(wt, { recursive: true });
   write(path.join(mem, 'errors-index.md'), '# Индекс\n');
-  if (canary) write(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['delivery', 'memory'] }));
+  write(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: canary }));
   write(path.join(mem, 'lessons', 'tab-timeout.md'), lesson('tab-timeout', [{ tool: '^mcp__(claude-in-chrome|Claude_Browser)__', out: 'timed out' }],
     'Таймаут браузера на фоновой вкладке — выведи вкладку вперёд, не повторяй вызов вслепую.'));
   write(path.join(mem, 'lessons', 'exit-127.md'), lesson('exit-127', [{ tool: '^Bash$', out: 'command not found' }], 'Команды нет в PATH — проверь окружение раннера.'));
@@ -152,10 +152,20 @@ test('runner: a lesson is delivered once per epoch across PostToolUse and PostTo
   assert.doesNotMatch(fail(s, 'mcp__claude-in-chrome__computer', 'tool "computer" timed out after 30s').ctx, /Урок памяти \(tab-timeout\)/);
 });
 
-test('runner: without the canary the failure module is quiet', () => {
-  const s = setup({ canary: false });
+test('runner: the delivery on, the memory handler off by the canary — the failure module is quiet', () => {
+  // review 1 (06.11): without canary.json the delivery itself is off and any module would be quiet; here the delivery
+  // runs (a reminder could reach Claude), only `memory` is not in the canary — the stage of this module decides.
+  const s = setup({ canary: ['delivery'] });
   run(s, 'SessionStart', { source: 'startup' });
   const r = fail(s, 'mcp__claude-in-chrome__computer', 'tool "computer" timed out after 30s');
   assert.strictEqual(r.code, 0);
   assert.doesNotMatch(r.ctx, /Урок памяти/);
+});
+
+test('runner: once per epoch the other way round — a lesson delivered on a failed call keeps quiet after a finished one', () => {
+  const s = setup();
+  run(s, 'SessionStart', { source: 'startup' });
+  assert.match(fail(s, 'mcp__claude-in-chrome__computer', 'tool "computer" timed out after 30s').ctx, /Урок памяти \(tab-timeout\)/);
+  const after = run(s, 'PostToolUse', { tool_name: 'mcp__claude-in-chrome__get_page_text', tool_input: {}, tool_response: [{ type: 'text', text: 'navigation timed out' }] });
+  assert.doesNotMatch(after.ctx, /Урок памяти \(tab-timeout\)/);
 });
