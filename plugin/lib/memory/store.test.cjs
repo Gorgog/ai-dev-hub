@@ -440,7 +440,8 @@ test('lessonHookTools by default: the event of mechanisms/memory-lessons.json an
   const groups = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'hooks.json'), 'utf8')).hooks[event];
   const t = S.lessonHookTools();
   assert.strictEqual(t.event, event);
-  assert.deepStrictEqual(t.tools, groups.flatMap((g) => g.matcher.split('|')));
+  // Plain names — the list; a regex matcher (slice 35 writes `^(?:…)$`) — one unit.
+  assert.deepStrictEqual(t.tools, groups.flatMap((g) => (/^[\w|-]+$/.test(g.matcher) ? g.matcher.split('|') : [g.matcher])));
 });
 
 test('keepInCore: the decision «stays in the core» is an event with the lesson sha; not proposed until the lesson is edited', () => {

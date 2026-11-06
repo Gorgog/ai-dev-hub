@@ -529,8 +529,10 @@ function lessonHookTools(plugin = PLUGIN, { project = null } = {}) {
     throw new Error(`хук уроков: не прочитан hooks/hooks.json (${e.code || e.message})`);
   }
   if (!Array.isArray(groups)) throw new Error(`хук уроков: в hooks/hooks.json нет события ${event}`);
-  // A group without a matcher (or «*») listens to every tool.
-  const tools = groups.flatMap((g) => (typeof g.matcher === 'string' && g.matcher !== '' ? g.matcher.split('|') : ['*']));
+  // A group without a matcher (or «*») listens to every tool. A matcher of plain names (`Bash|Edit`) is a list of
+  // exact names; any other is one regex, read whole (`^(?:Bash|…|mcp__.*)$` split by `|` would lose Bash, merge with 35).
+  const tools = groups.flatMap((g) => (typeof g.matcher !== 'string' || g.matcher === '' || g.matcher === '*' ? ['*']
+    : /^[\w|-]+$/.test(g.matcher) ? g.matcher.split('|') : [g.matcher]));
   const listed = project ? ((readJson(path.join(project, 'canary.json')) || {}).mechanisms || []) : [];
   const runs = (r, def) => {
     const st = r && ['off', 'canary', 'on'].includes(r.stage) ? r.stage : def;
@@ -554,9 +556,16 @@ function literalNames(src) {
   return parts.every((p) => LITERAL.test(p)) ? parts : [];
 }
 const whole = (alt) => { try { return new RegExp(`^(?:${alt === '*' ? '.*' : alt})$`); } catch { return null; } };
+// Names a matcher unit may stand for: itself, or for a regex unit its top-level alternatives (`^(?:a|b.*)$` → a, bx)
+// and the known tools — each kept only when the unit takes it whole.
+function unitNames(unit) {
+  if (LITERAL.test(unit)) return [unit];
+  const inner = unit.replace(/^\^/, '').replace(/\$$/, '').replace(/^\((?:\?:)?([\s\S]*)\)$/, '$1');
+  return [...inner.split('|').map(sampleOf), ...Object.keys(CALLS)];
+}
 function namesFor(src, tools) {
   const alts = tools.map((t) => ({ t, rx: whole(t) })).filter((x) => x.rx);
-  const names = new Set(alts.filter((x) => x.t !== '*').map((x) => sampleOf(x.t)).filter((n) => alts.some((x) => x.rx.test(n))));
+  const names = new Set(alts.filter((x) => x.t !== '*').flatMap((x) => unitNames(x.t)).filter((n) => alts.some((x) => x.rx.test(n))));
   for (const n of literalNames(src)) if (alts.some((x) => x.rx.test(n))) names.add(n);
   return [...names];
 }
@@ -603,7 +612,7 @@ function workingTrigger(meta, { tools = [], event = '' } = {}) {
       try { rx = new RegExp(w.tool, 'i'); } catch { continue; }
       names = all ? [...new Set([...literalNames(w.tool).map(canonical), ...Object.keys(CALLS)])].filter((n) => rx.test(n))
         : namesFor(w.tool, tools).filter((n) => rx.test(n));
-    } else names = all ? Object.keys(CALLS) : tools.map(sampleOf).filter((n) => tools.some((t) => (whole(t) || /$^/).test(n)));
+    } else names = all ? Object.keys(CALLS) : [...new Set(tools.flatMap(unitNames))].filter((n) => tools.some((t) => (whole(t) || /$^/).test(n)));
     const hit = names.find((n) => fields.every((k) => has(n, k)));
     if (hit) return { ok: true, reason: `when[${i}] ${'tool' in w ? `tool ${w.tool}` : '(без tool)'} — ${on} слушает ${hit}` };
   }
