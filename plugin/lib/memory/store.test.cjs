@@ -472,7 +472,14 @@ test('workingTrigger: a field the hook leaves empty for the tool does not work (
   assert.strictEqual(t({ tool: '^Agent$', body: 'ревью' }, ['Agent']), true);
   assert.strictEqual(t({ tool: '^bash$', path: 'x' }, ['*']), false);
   assert.strictEqual(t({ tool: '^bash$', cmd: 'x' }, ['*']), true);
-  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', out: 'x' }, ['mcp__claude-in-chrome__.*']), false);
+  // The out of an MCP call is whatever the hook's fieldsOf makes of its answer (slice 35 fills it from the content
+  // blocks): the expectation is that same fieldsOf on an MCP call, not a constant — true or false by the hook in place.
+  const { fieldsOf } = require('../../hooks/memory-hot.cjs');
+  const mcpOut = fieldsOf({ tool_name: 'mcp__claude-in-chrome__navigate', tool_input: { url: 'x' },
+    tool_response: [{ type: 'text', text: 'x' }] }, { withOut: true }).out.trim() !== '';
+  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', out: 'x' }, ['mcp__claude-in-chrome__.*']), mcpOut);
+  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', path: 'x' }, ['mcp__claude-in-chrome__.*']), false,
+    'path of an MCP call — never filled for a tool the hook does not know');
   assert.strictEqual(t({ out: 'x' }, ['Write', 'Edit']), false, 'no tool, only Write/Edit listened — out never filled');
 });
 
