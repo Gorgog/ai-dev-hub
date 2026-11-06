@@ -349,3 +349,25 @@ test('core: the hook config cannot be read — said so, nothing proposed, code 1
   assert.strictEqual(r.code, 1);
   assert.match(r.err, /hooks\.json|memory-lessons/);
 });
+
+test('core --keep <id>: a candidate the user keeps in the core is not proposed again; the event survives fold; keep+apply — usage', () => {
+  const mem = coreMemory();
+  const p = plugin();
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-once-bash']).code, 1, 'not a candidate');
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-bash-rule', '--apply']).code, 2);
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep']).code, 2, '--keep without ids');
+  const r = run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-bash-rule', '--note', 'стенд через MCP']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /core-bash-rule/);
+  assert.strictEqual(statusOf(mem, 'core-bash-rule'), 'core');
+  assert.match(run(['--memory', mem, '--plugin', p, 'core']).out, /кандидатов нет/i);
+  // Months later the event month is folded: the decision stays.
+  const ev = readEvents(mem).events.find((e) => e.kind === 'kept-core');
+  const month = path.join(mem, 'events', fs.readdirSync(path.join(mem, 'events')).find((f) => f.endsWith('.jsonl')));
+  fs.writeFileSync(month, `${JSON.stringify({ ...ev, at: '2026-01-10T00:00:00.000Z' })}\n`);
+  fs.renameSync(month, path.join(mem, 'events', '2026-01.jsonl'));
+  const f = run(['--memory', mem, 'fold', '--months', '3', '--now', '2026-11-06', '--apply']);
+  assert.strictEqual(f.code, 0, f.err);
+  assert.ok(readEvents(mem).events.some((e) => e.kind === 'kept-core' && e.lesson === 'core-bash-rule'));
+  assert.match(run(['--memory', mem, '--plugin', p, 'core']).out, /кандидатов нет/i);
+});

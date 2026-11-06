@@ -597,6 +597,9 @@ function toActive(memDir, id, a) {
   return appendEvent(memDir, { ...addr(a), kind: 'to-active', lesson: id });
 }
 
+// Stub (tail 34, keep): implemented after the red tests.
+function keepInCore() { return null; }
+
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
   const { findProject } = require('../../hooks/lib/hub.cjs');
@@ -608,6 +611,6 @@ function memoryDir(cwd, hub) {
 
 module.exports = {
   addLesson, repeat, shown, find, similar, exportAll, importAll, exportV1,
-  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive,
+  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive, keepInCore,
   withField, ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
 };

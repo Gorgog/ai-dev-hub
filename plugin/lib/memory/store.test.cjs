@@ -439,3 +439,19 @@ test('lessonHookTools by default: the event of mechanisms/memory-lessons.json an
   assert.strictEqual(t.event, event);
   assert.deepStrictEqual(t.tools, groups.flatMap((g) => g.matcher.split('|')));
 });
+
+test('keepInCore: the decision «stays in the core» is an event with the lesson sha; not proposed until the lesson is edited', () => {
+  const d = memory(CORE20);
+  const opts = { plugin: pluginWith(TODAY) };
+  S.keepInCore(d, 'c-rule-bash', { note: 'стенд через MCP' });
+  const ev = readEvents(d).events.filter((e) => e.lesson === 'c-rule-bash');
+  assert.deepStrictEqual(ev.map((e) => [e.kind, e.note]), [['kept-core', 'стенд через MCP']]);
+  assert.match(ev[0].sha, /^[0-9a-f]{12}$/);
+  assert.deepStrictEqual(S.coreCandidates(d, opts).map((c) => c.id), WORKING.filter((id) => id !== 'c-rule-bash'));
+  // The lesson was edited — the old decision is about another text: proposed again.
+  const f = path.join(d, 'lessons', 'c-rule-bash.md');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('Вторая строка урока.', 'Вторая строка урока, правленая.'));
+  assert.deepStrictEqual(S.coreCandidates(d, opts).map((c) => c.id), WORKING);
+  assert.throws(() => S.keepInCore(d, 'a-rule-bash'), /не в ядре/);
+  assert.strictEqual(S.check(d).problems.filter((p) => /events/.test(p)).length, 0);
+});
