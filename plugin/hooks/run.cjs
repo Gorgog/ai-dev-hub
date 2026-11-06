@@ -136,24 +136,32 @@ async function main(event) {
     if (event === 'PostToolUse' || event === 'PostToolUseFailure') return !f || f.decision === 'ask';
     return event === 'SessionStart' || event === 'SubagentStart';
   };
-  let text;
-  if (dl) ({ text, final } = dl.finish({ items, final, fired, reaches }));
+  let text, confirm = null;
+  if (dl) ({ text, final, confirm } = dl.finish({ items, final, fired, reaches }));
   else text = deliver(items);
   // Every write is awaited: the runner exits right after main(), and a write still queued in a pipe (more than its
   // capacity — 64 KB, 4 KB when pipe pages run short) would be cut, a cut JSON deny is no decision at all.
-  const emit = (stream, s) => new Promise((resolve) => stream.write(s, () => resolve()));
+  // A failed write (EPIPE: Claude closed the pipe) confirms nothing: its 'error' ends the process first, or the
+  // callback resolves false.
+  const emit = (stream, s) => new Promise((resolve) => stream.write(s, (err) => resolve(!err)));
   const out = (o) => emit(process.stdout, JSON.stringify(o));
-  if (event === 'PreToolUse') {
-    if (final && final.decision === 'block') { process.exitCode = 2; return emit(process.stderr, final.reason); }
-    if (final) return out({ hookSpecificOutput: { hookEventName: event, permissionDecision: final.decision, permissionDecisionReason: final.reason } });
-    if (text) return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
-  } else if (event === 'Stop' || event === 'PostToolUse' || event === 'PostToolUseFailure') {
-    if (final && final.decision !== 'ask') return out({ decision: 'block', reason: final.reason });
-    if (text && event !== 'Stop') return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
-  } else if (event === 'SessionStart') {
-    if (text) return emit(process.stdout, text + '\n');
-  } else if (event === 'SubagentStart') {
-    if (text) return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
+  // «Already shown» is saved only after the write's callback: a hook killed before it shows the text again.
+  if ((await send()) !== false && confirm) confirm();
+
+  function send() {
+    if (event === 'PreToolUse') {
+      if (final && final.decision === 'block') { process.exitCode = 2; return emit(process.stderr, final.reason); }
+      if (final) return out({ hookSpecificOutput: { hookEventName: event, permissionDecision: final.decision, permissionDecisionReason: final.reason } });
+      if (text) return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
+    } else if (event === 'Stop' || event === 'PostToolUse' || event === 'PostToolUseFailure') {
+      if (final && final.decision !== 'ask') return out({ decision: 'block', reason: final.reason });
+      if (text && event !== 'Stop') return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
+    } else if (event === 'SessionStart') {
+      if (text) return emit(process.stdout, text + '\n');
+    } else if (event === 'SubagentStart') {
+      if (text) return out({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
+    }
+    return null;
   }
 }
 
