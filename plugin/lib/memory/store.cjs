@@ -517,9 +517,9 @@ function retirementCandidates(memDir, { days = 30, now = new Date() } = {}) {
 // the event of mechanisms/memory-lessons.json and the matchers of that event in hooks/hooks.json.
 const PLUGIN = path.join(__dirname, '..', '..');
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
-// {event, tools, on, why}: on — the lesson module runs in the project, as the spine decides (run.cjs): its stage (none
-// or unknown — on), the delivery's stage (no delivery record — the module is silent), a canary — by the project's
-// canary.json listing the id or the handler. Throws when the event or its matchers cannot be read.
+// {event, tools, on, why}: on — the lesson module runs in the project, as the spine decides (run.cjs): the module's
+// stage (none or unknown — on, as any module), the delivery's stage (only an explicit on or a listed canary: no record,
+// no stage — the delivery is off and the module silent), a canary — by the project's canary.json listing id or handler. Throws when the event or its matchers cannot be read.
 function lessonHookTools(plugin = PLUGIN, { project = null } = {}) {
   const rec = readJson(path.join(plugin, 'mechanisms', 'memory-lessons.json'));
   if (!rec || typeof rec.event !== 'string') throw new Error('хук уроков: не прочитан mechanisms/memory-lessons.json');
@@ -539,7 +539,7 @@ function lessonHookTools(plugin = PLUGIN, { project = null } = {}) {
   const dl = readJson(path.join(plugin, 'mechanisms', 'delivery.json'));
   const why = !runs(rec, 'on') ? `модуль memory-lessons не запущен в проекте (стадия ${rec.stage || 'on'})`
     : !dl ? 'нет записи доставки (mechanisms/delivery.json) — модуль уроков молчит'
-      : !runs(dl, 'on') ? `доставка не запущена в проекте (стадия ${dl.stage}) — модуль уроков молчит` : '';
+      : !runs(dl, 'off') ? `доставка не запущена в проекте (стадия ${dl.stage || 'нет'}) — модуль уроков молчит` : '';
   return { event, tools, on: !why, why };
 }
 

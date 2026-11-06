@@ -18,12 +18,12 @@ const S = require('../../../lib/memory/store.cjs');
 const { parseLesson } = require('../../../lib/memory/format.cjs');
 const { overlap, wordsOf, MIN_OVERLAP } = require('../../memory-gc/scripts/gc.cjs');
 
-const USAGE = 'команды: add <черновик.md> [--new] [--user-said] · repeat <id> --note <что было> [--model <id>]';
+const USAGE = 'команды: add <черновик.md> [--new] [--user-said] [--plugin <папка плагина>] · repeat <id> --note <что было> [--model <id>]';
 const V1_WAY = 'памяти нового формата нет: в проекте нет memory/lessons/ — эпизод пиши по-старому, записью в memory/errors.md '
   + '(формат — в шапке файла; Edit или Write, не heredoc)';
 
 function parse(argv) {
-  const a = { _: [], memory: null, note: undefined, model: undefined, fresh: false, userSaid: false };
+  const a = { _: [], memory: null, note: undefined, model: undefined, fresh: false, userSaid: false, plugin: undefined };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--memory') a.memory = argv[++i];
@@ -31,6 +31,7 @@ function parse(argv) {
     else if (k === '--model') a.model = argv[++i] || undefined;
     else if (k === '--new') a.fresh = true;
     else if (k === '--user-said') a.userSaid = true;
+    else if (k === '--plugin') a.plugin = path.resolve(argv[++i] || '.');
     else a._.push(k);
   }
   return a;
@@ -71,11 +72,12 @@ function v1Line(mem, id) {
 }
 
 // Class «once»: {text, note} with the status the trigger earns; other kinds — as drafted.
-function placeOnce(mem, text, meta, file) {
+// --plugin — whose lesson hook decides (tests); by default this plugin.
+function placeOnce(mem, text, meta, file, plugin) {
   if (meta.kind !== 'once') return { text, note: '' };
   let t;
   try {
-    const hook = S.lessonHookTools(undefined, { project: path.dirname(path.resolve(mem)) });
+    const hook = S.lessonHookTools(plugin, { project: path.dirname(path.resolve(mem)) });
     t = hook.on ? S.workingTrigger(meta, hook) : { ok: false, reason: `хук уроков в проекте не запущен — ${hook.why}` };
   } catch (e) { t = { ok: false, reason: e.message }; }
   const status = t.ok ? 'active' : 'core';
@@ -86,7 +88,7 @@ function placeOnce(mem, text, meta, file) {
 
 function add(mem, file, a) {
   const { meta, body } = parseLesson(fs.readFileSync(file, 'utf8'));
-  const { text, note: placed } = placeOnce(mem, fs.readFileSync(file, 'utf8'), meta, file);
+  const { text, note: placed } = placeOnce(mem, fs.readFileSync(file, 'utf8'), meta, file, a.plugin);
   const id = String(meta.id || '');
   if (meta.kind === 'rule' && !a.userSaid) {
     throw refuse(`${id}: правило — по повтору (правило 7). Первый эпизод — kind: knowledge; сразу правило — класс «одного раза» `

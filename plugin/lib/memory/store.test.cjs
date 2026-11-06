@@ -484,6 +484,14 @@ test('core candidates only where the lesson module runs: stage off, canary not l
   assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { stage: 'off' })), []);
   assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: null })), []);
   assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: 'off' })), []);
+  // A delivery record without a stage: the spine turns the delivery on only by an explicit on/canary (review round 2).
+  const nostage = pluginWith(TODAY, 'PostToolUse', { delivery: 'x' });
+  fs.writeFileSync(path.join(nostage, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', handler: 'delivery' }));
+  assert.deepStrictEqual(ids(nostage), []);
+  // The module itself without a stage — on, as any module of the spine.
+  const modnostage = pluginWith(TODAY);
+  fs.writeFileSync(path.join(modnostage, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event: 'PostToolUse' }));
+  assert.deepStrictEqual(ids(modnostage), WORKING);
   const canary = pluginWith(TODAY, 'PostToolUse', { stage: 'canary', delivery: 'canary' });
   assert.deepStrictEqual(ids(canary), [], 'canary, project not listed');
   fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['memory'] }));
