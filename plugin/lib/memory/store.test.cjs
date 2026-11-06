@@ -520,3 +520,16 @@ test('keptInCore: only decisions about the text as it is and lessons still in th
   S.toActive(d, 'c-rule-bash');
   assert.deepStrictEqual(S.keptInCore(d), []);
 });
+
+// Merge with slice 35: a matcher written as one regex (`^(?:Bash|…|mcp__.*tracker_.*)$`) is one unit, not split by
+// `|` into pieces that do not compile — Bash must stay heard.
+test('a regex matcher (anchored group) is read whole: Bash, Edit and the MCP alternatives inside it all count', () => {
+  const d = memory(CORE20);
+  const rx = pluginWith('^(?:Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__claude-in-chrome__.*)$');
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: rx }).map((c) => c.id), [...WORKING, 'c-rule-chrome'].sort());
+  const tools = S.lessonHookTools(rx).tools;
+  const t = (w) => S.workingTrigger({ when: [w] }, { tools }).ok;
+  assert.strictEqual(t({ tool: '^Bash$', cmd: 'x' }), true);
+  assert.strictEqual(t({ tool: '^Agent$', body: 'x' }), false, 'Agent is not in this matcher');
+  assert.strictEqual(t({ tool: '^Bash$', cmd: 'x' }), S.workingTrigger({ when: [{ tool: '^Bash$', cmd: 'x' }] }, { tools: TODAY.split('|') }).ok);
+});
