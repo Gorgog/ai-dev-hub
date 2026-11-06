@@ -397,7 +397,8 @@ test('core candidates follow the matcher of hooks.json (read, not hard-coded): a
     ['c-knowledge-bash', 'c-rule-agent', 'c-rule-bash', 'c-rule-cmd-only', 'c-rule-mixed', 'c-rule-out']);
   // The event comes from the mechanism record: the hook moved to another event — that event's matcher counts.
   const moved = pluginWith('Edit', 'PostToolUseFailure');
-  assert.deepStrictEqual(S.coreCandidates(d, { plugin: moved }).map((c) => c.id), ['c-rule-edit', 'c-rule-out']);
+  // `out` alone does not work there: an Edit answers without stdout (review round 1).
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: moved }).map((c) => c.id), ['c-rule-edit']);
 });
 
 test('core candidates: no hook config to read — nothing is proposed (a lesson stays in the core when in doubt)', () => {

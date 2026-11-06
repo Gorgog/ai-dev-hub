@@ -71,10 +71,13 @@ function v1Line(mem, id) {
 }
 
 // Class «once»: {text, note} with the status the trigger earns; other kinds — as drafted.
-function placeOnce(text, meta, file) {
+function placeOnce(mem, text, meta, file) {
   if (meta.kind !== 'once') return { text, note: '' };
   let t;
-  try { t = S.workingTrigger(meta, S.lessonHookTools()); } catch (e) { t = { ok: false, reason: e.message }; }
+  try {
+    const hook = S.lessonHookTools(undefined, { project: path.dirname(path.resolve(mem)) });
+    t = hook.on ? S.workingTrigger(meta, hook) : { ok: false, reason: `хук уроков в проекте не запущен — ${hook.why}` };
+  } catch (e) { t = { ok: false, reason: e.message }; }
   const status = t.ok ? 'active' : 'core';
   const note = t.ok ? `слой active: триггер видит хук (${t.reason}) — подаст в момент ошибки; ядро брифа — для того, что хук не подаст`
     : `слой core (ядро): ${t.reason} — хук его не подаст, держит бриф`;
@@ -83,7 +86,7 @@ function placeOnce(text, meta, file) {
 
 function add(mem, file, a) {
   const { meta, body } = parseLesson(fs.readFileSync(file, 'utf8'));
-  const { text, note: placed } = placeOnce(fs.readFileSync(file, 'utf8'), meta, file);
+  const { text, note: placed } = placeOnce(mem, fs.readFileSync(file, 'utf8'), meta, file);
   const id = String(meta.id || '');
   if (meta.kind === 'rule' && !a.userSaid) {
     throw refuse(`${id}: правило — по повтору (правило 7). Первый эпизод — kind: knowledge; сразу правило — класс «одного раза» `

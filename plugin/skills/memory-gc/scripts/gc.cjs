@@ -106,7 +106,7 @@ function retire(mem, a) {
 function core(mem, a, named) {
   const ids = [...new Set(named)];
   let hook;
-  try { hook = S.lessonHookTools(a.plugin); } catch (e) { throw Object.assign(e, { code: 1 }); }
+  try { hook = S.lessonHookTools(a.plugin, { project: path.dirname(path.resolve(mem)) }); } catch (e) { throw Object.assign(e, { code: 1 }); }
   const opts = a.plugin ? { plugin: a.plugin } : {};
   const cands = S.coreCandidates(mem, opts);
   const on = `хук уроков слушает ${hook.event}: ${hook.tools.join('|')}`;
@@ -114,6 +114,7 @@ function core(mem, a, named) {
   if (a.apply || a.keep) {
     const flag = a.apply ? '--apply' : '--keep';
     if (!ids.length) throw Object.assign(new Error(`core ${flag}: назови id кандидатов\n${USAGE}`), { code: 2 });
+    if (a.keep && !(a.note || '').trim()) throw Object.assign(new Error(`core --keep: нужна --note "<почему остаётся в ядре>"\n${USAGE}`), { code: 2 });
     const known = new Set(cands.map((c) => c.id));
     const bad = ids.filter((id) => !known.has(id));
     if (bad.length) {
@@ -129,7 +130,8 @@ function core(mem, a, named) {
     return [`Из ядра в active (${on}):`, ...ids.map((id) => `- ${id}`)].join('\n');
   }
   const inCore = S.fold(mem).entries.filter((e) => e.dir === 'lessons' && e.status === 'core').length;
-  const kept = new Set(readEvents(mem).events.filter((e) => e.kind === 'kept-core').map((e) => e.lesson)).size;
+  const kept = S.keptInCore(mem).length;
+  if (!hook.on) return `кандидатов нет: в ядре ${inCore}, хук уроков в проекте не запущен — ${hook.why}`;
   if (!cands.length) {
     return `кандидатов нет: в ядре ${inCore}, у уроков ядра нет триггера, который видит хук (${on})`
       + `${kept ? `; оставлены в ядре решением (kept-core): ${kept}` : ''}`;
