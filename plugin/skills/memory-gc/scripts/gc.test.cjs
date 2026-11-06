@@ -299,7 +299,8 @@ function plugin(matcher = 'Bash|Edit|Write|MultiEdit|NotebookEdit') {
   const root = tmp('gc-plugin-');
   fs.mkdirSync(path.join(root, 'hooks'));
   fs.mkdirSync(path.join(root, 'mechanisms'));
-  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event: 'PostToolUse' }));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event: 'PostToolUse', stage: 'on' }));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', stage: 'on' }));
   fs.writeFileSync(path.join(root, 'hooks', 'hooks.json'), JSON.stringify({ hooks: { PostToolUse: [{ matcher, hooks: [] }] } }));
   return root;
 }
@@ -353,7 +354,8 @@ test('core: the hook config cannot be read — said so, nothing proposed, code 1
 test('core --keep <id>: a candidate the user keeps in the core is not proposed again; the event survives fold; keep+apply — usage', () => {
   const mem = coreMemory();
   const p = plugin();
-  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-once-bash']).code, 1, 'not a candidate');
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-once-bash', '--note', 'x']).code, 1, 'not a candidate');
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-bash-rule']).code, 2, '--keep without --note: the why');
   assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-bash-rule', '--apply']).code, 2);
   assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--keep']).code, 2, '--keep without ids');
   const r = run(['--memory', mem, '--plugin', p, 'core', '--keep', 'core-bash-rule', '--note', 'стенд через MCP']);
@@ -370,4 +372,14 @@ test('core --keep <id>: a candidate the user keeps in the core is not proposed a
   assert.strictEqual(f.code, 0, f.err);
   assert.ok(readEvents(mem).events.some((e) => e.kind === 'kept-core' && e.lesson === 'core-bash-rule'));
   assert.match(run(['--memory', mem, '--plugin', p, 'core']).out, /кандидатов нет/i);
+});
+
+test('core: the lesson module is off in the project — said so, nothing proposed (review round 1)', () => {
+  const mem = coreMemory();
+  const p = plugin();
+  fs.writeFileSync(path.join(p, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event: 'PostToolUse', stage: 'off' }));
+  const r = run(['--memory', mem, '--plugin', p, 'core']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /кандидатов нет[^\n]*не запущен/);
+  assert.strictEqual(run(['--memory', mem, '--plugin', p, 'core', '--apply', 'core-bash-rule']).code, 1);
 });

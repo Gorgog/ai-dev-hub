@@ -610,6 +610,9 @@ function keepInCore(memDir, id, a) {
   return appendEvent(memDir, { ...addr(a), kind: 'kept-core', lesson: id, sha });
 }
 
+// Stub (review round 1): implemented after the red tests.
+function keptInCore() { return []; }
+
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
   const { findProject } = require('../../hooks/lib/hub.cjs');
@@ -621,6 +624,6 @@ function memoryDir(cwd, hub) {
 
 module.exports = {
   addLesson, repeat, shown, find, similar, exportAll, importAll, exportV1,
-  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive, keepInCore,
+  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive, keepInCore, keptInCore,
   withField, ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
 };

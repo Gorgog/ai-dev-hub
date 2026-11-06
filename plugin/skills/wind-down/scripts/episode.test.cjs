@@ -160,7 +160,9 @@ test('repeat: the hint names the episode number — 2nd, then 3rd — while the 
 // Tail 34, decision (г): the core is for what no hook can deliver. A «once» whose trigger the lesson hook really sees
 // goes to active (delivered at the moment of the mistake); without one — the core. The draft's status is not trusted.
 test('class «once» with a working trigger goes to active; without one (or on a call the hook does not see) — the core', () => {
-  const { mem, draft } = sandbox();
+  const { root, mem, draft } = sandbox();
+  // The lesson module runs in this project (run.cjs: its stage and the delivery's, canary by canary.json).
+  fs.writeFileSync(path.join(root, 'canary.json'), JSON.stringify({ mechanisms: ['memory-lessons', 'delivery'] }));
   const statusOf = (id) => parseLesson(fs.readFileSync(path.join(mem, 'lessons', `${id}.md`), 'utf8')).meta.status;
   const a = draft('sudo-ask-first', ['Команды с sudo — только после вопроса пользователю.', 'Сессия запустила sudo без спроса.'],
     { kind: 'once', status: 'core', keys: ['sudo'], when: [{ tool: '^Bash$', cmd: '(^|;|&&)\\s*sudo\\s' }] });
@@ -186,6 +188,21 @@ test('class «once» with a working trigger goes to active; without one (or on a
     { kind: 'knowledge', status: 'active', keys: ['знание'], when: [{ tool: '^Bash$', cmd: 'make' }] });
   assert.strictEqual(run(['--memory', mem, 'add', k]).code, 0);
   assert.strictEqual(statusOf('knowledge-keeps-status'), 'active');
+  // Review round 1 (HIGH-1): `out` on Write — the hook never fills it, the once stays in the core.
+  const w = draft('write-new-file-check', ['Перед Write нового файла — проверить, что его нет.', 'Write перезаписал чужой файл.'],
+    { kind: 'once', status: 'core', keys: ['write'], when: [{ tool: '^Write$', out: 'has been updated' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', w]).code, 0);
+  assert.strictEqual(statusOf('write-new-file-check'), 'core');
   // The v1 line follows the layer the lesson got.
-  assert.strictEqual(v1Lines(mem).length, 4);
+  assert.strictEqual(v1Lines(mem).length, 5);
+});
+
+test('class «once» with a trigger in a project where the lesson module does not run — the core (review round 1)', () => {
+  const { mem, draft } = sandbox();
+  const a = draft('sudo-ask-first', ['Команды с sudo — только после вопроса пользователю.', 'Сессия запустила sudo без спроса.'],
+    { kind: 'once', status: 'active', keys: ['sudo'], when: [{ tool: '^Bash$', cmd: '(^|;|&&)\\s*sudo\\s' }] });
+  const r = run(['--memory', mem, 'add', a]);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(parseLesson(fs.readFileSync(path.join(mem, 'lessons', 'sudo-ask-first.md'), 'utf8')).meta.status, 'core');
+  assert.match(r.out, /не запущен/);
 });

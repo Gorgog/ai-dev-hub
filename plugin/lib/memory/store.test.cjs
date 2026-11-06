@@ -361,11 +361,13 @@ const TODAY = 'Bash|Edit|Write|MultiEdit|NotebookEdit';
 const WORKING = ['c-knowledge-bash', 'c-rule-bash', 'c-rule-cmd-only', 'c-rule-edit', 'c-rule-mixed', 'c-rule-out'];
 
 // A plugin root of its own: the lesson hook's event from mechanisms/memory-lessons.json, its matcher from hooks.json.
-function pluginWith(matcher, event = 'PostToolUse') {
+// Stages: the lesson module and the delivery (without the delivery the module is silent, run.cjs) — on unless given.
+function pluginWith(matcher, event = 'PostToolUse', { stage = 'on', delivery = 'on' } = {}) {
   const root = tmp('plugin-');
   fs.mkdirSync(path.join(root, 'hooks'));
   fs.mkdirSync(path.join(root, 'mechanisms'));
-  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event }));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', handler: 'memory', event, stage }));
+  if (delivery) fs.writeFileSync(path.join(root, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', handler: 'delivery', stage: delivery }));
   fs.writeFileSync(path.join(root, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {
     PreToolUse: [{ matcher: 'Bash|Agent|Task|mcp__.*', hooks: [] }],
     [event]: [{ matcher, hooks: [] }],
@@ -454,4 +456,51 @@ test('keepInCore: the decision «stays in the core» is an event with the lesson
   assert.deepStrictEqual(S.coreCandidates(d, opts).map((c) => c.id), WORKING);
   assert.throws(() => S.keepInCore(d, 'a-rule-bash'), /не в ядре/);
   assert.strictEqual(S.check(d).problems.filter((p) => /events/.test(p)).length, 0);
+});
+
+// Review round 1 (HIGH-1): a field the hook never fills for that tool is no working trigger — the fields come from the
+// hook's own fieldsOf on a call of that tool: Write/Edit have no stdout (out is empty), Agent has no path, «bash» is Bash.
+test('workingTrigger: a field the hook leaves empty for the tool does not work (out on Write, path on Agent, body on Bash)', () => {
+  const t = (w, tools = TODAY.split('|')) => S.workingTrigger({ when: [w] }, { tools }).ok;
+  assert.strictEqual(t({ tool: '^Write$', out: 'has been updated' }), false);
+  assert.strictEqual(t({ tool: '^(Edit|Write)$', out: 'x' }), false);
+  assert.strictEqual(t({ tool: '^Bash$', out: 'ENOSPC' }), true);
+  assert.strictEqual(t({ tool: '^Bash$', body: 'x' }), false);
+  assert.strictEqual(t({ tool: '^Write$', body: 'x', path: '\\.env' }), true);
+  assert.strictEqual(t({ tool: '^Agent$', path: 'x' }, ['Agent']), false);
+  assert.strictEqual(t({ tool: '^Agent$', body: 'ревью' }, ['Agent']), true);
+  assert.strictEqual(t({ tool: '^bash$', path: 'x' }, ['*']), false);
+  assert.strictEqual(t({ tool: '^bash$', cmd: 'x' }, ['*']), true);
+  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', out: 'x' }, ['mcp__claude-in-chrome__.*']), false);
+  assert.strictEqual(t({ out: 'x' }, ['Write', 'Edit']), false, 'no tool, only Write/Edit listened — out never filled');
+});
+
+// Review round 1 (MEDIUM-1): the lesson module has to run in the project — its stage and the delivery's, as run.cjs.
+test('core candidates only where the lesson module runs: stage off, canary not listed, no delivery — nothing', () => {
+  const d = memory(CORE20);
+  const proj = path.dirname(d);
+  const ids = (plugin) => S.coreCandidates(d, { plugin }).map((c) => c.id);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { stage: 'off' })), []);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: null })), []);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: 'off' })), []);
+  const canary = pluginWith(TODAY, 'PostToolUse', { stage: 'canary', delivery: 'canary' });
+  assert.deepStrictEqual(ids(canary), [], 'canary, project not listed');
+  fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['memory'] }));
+  assert.deepStrictEqual(ids(canary), [], 'the lesson module listed by handler, the delivery not');
+  fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['memory', 'delivery'] }));
+  assert.deepStrictEqual(ids(canary), WORKING);
+  const h = S.lessonHookTools(canary, { project: proj });
+  assert.strictEqual(h.on, true);
+  assert.strictEqual(S.lessonHookTools(pluginWith(TODAY, 'PostToolUse', { stage: 'off' }), { project: proj }).on, false);
+});
+
+test('keptInCore: only decisions about the text as it is and lessons still in the core', () => {
+  const d = memory(CORE20);
+  S.keepInCore(d, 'c-rule-bash', { note: 'x' });
+  S.keepInCore(d, 'c-rule-edit', { note: 'x' });
+  assert.deepStrictEqual(S.keptInCore(d), ['c-rule-bash', 'c-rule-edit']);
+  const f = path.join(d, 'lessons', 'c-rule-edit.md');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('Вторая строка урока.', 'Правлено.'));
+  S.toActive(d, 'c-rule-bash');
+  assert.deepStrictEqual(S.keptInCore(d), []);
 });
