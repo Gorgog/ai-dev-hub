@@ -106,7 +106,7 @@ test('shown: finish holds the mark back, confirm sets it in the epoch of the cal
 // before slice 36 — the mark held back until the output must still be seen by the neighbours.
 function runAsync(s, id) {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, [path.join(s.plugin, 'hooks', 'run.cjs'), 'PreToolUse'], {
+    const p = spawn(process.execPath, [path.join(s.plugin, 'hooks', 'run.cjs'), 'PreToolUse'], { timeout: 20000,
       env: { ...baseEnv(), AI_DEV_HUB: s.hub, HUB_LOG_DIR: s.logs, CLAUDE_PLUGIN_ROOT: s.plugin } });
     let out = '';
     p.stdout.on('data', (d) => { out += d; });
