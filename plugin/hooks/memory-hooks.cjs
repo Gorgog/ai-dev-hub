@@ -3,6 +3,7 @@
 //   pretool.d/51-memory-repeat       a lesson already delivered in the epoch fires again → deny-once with its text
 //   posttool.d/20-memory-write-check a lesson written by Write/Edit is validated at once (block with the problems)
 //   posttool.d/21-memory-lessons     a lesson whose `when` fires on the finished call → delivered after it
+//   posttoolfailure.d/21-memory-lessons-failure  the same on a failed call, `out` — the text of the error (slice 37)
 //   stop.d/30-memory-commit          lesson events of the session → the project's memory/events; memory git under flock
 //   sessionstart.d/40-memory-check   corrupt memory named in the brief (store.check), nothing blocked
 // All of them act only in a hub project whose memory has lessons/ (memory v2); elsewhere they return null. The hot

@@ -1,7 +1,7 @@
 // node --test plugin/hooks/memory-mcp-agent.test.cjs
 // Lessons after MCP and Agent calls (slice 35, decision 06.11 variant A): the PostToolUse matcher of hooks.json lets in
 // Agent/Task and the MCP tools lessons are written for — the browser (claude-in-chrome, Claude_Browser), the tracker,
-// GitLab; not the app's service MCP (ccd_*) and not any MCP at all. PostToolUseFailure stays as it was. The lesson
+// GitLab; not the app's service MCP (ccd_*) and not any MCP at all. PostToolUseFailure — the same list since slice 37. The lesson
 // module sees `out` of those calls — the text blocks of the MCP result / of the agent's report; the out of the tools
 // seen before (Bash, Edit, Write, …) is byte for byte what it was.
 'use strict';
@@ -42,9 +42,11 @@ test('PostToolUse: not the app service MCP, not other MCP, not the read-only bui
   for (const t of NOT) assert.ok(!lets('PostToolUse', t), t);
 });
 
-test('PostToolUseFailure and PreToolUse: the matchers are as they were', () => {
-  assert.deepStrictEqual(hooks.PostToolUseFailure.map((g) => g.matcher), ['Bash|Edit|Write|MultiEdit|NotebookEdit']);
-  assert.deepStrictEqual(hooks.PreToolUse.map((g) => g.matcher), ['Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|mcp__Claude_Browser__.*|mcp__claude-in-chrome__.*']);
+// Slice 37 (decision 06.11) changed both: PostToolUseFailure takes the list of PostToolUse, PreToolUse the list it had,
+// anchored (details — memory-failure.test.cjs).
+test('PostToolUseFailure and PreToolUse: the matchers after slice 37', () => {
+  assert.deepStrictEqual(hooks.PostToolUseFailure.map((g) => g.matcher), hooks.PostToolUse.map((g) => g.matcher));
+  assert.deepStrictEqual(hooks.PreToolUse.map((g) => g.matcher), ['^(?:Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|mcp__Claude_Browser__.*|mcp__claude-in-chrome__.*)$']);
 });
 
 const outOf = (tool_name, tool_response, tool_input = {}) => hot.fieldsOf({ tool_name, tool_input, tool_response }, { withOut: true }).out;

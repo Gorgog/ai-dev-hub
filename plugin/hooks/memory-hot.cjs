@@ -1,6 +1,7 @@
-// Memory v2 in the hooks (slice 21), the hot path: what every PreToolUse / PostToolUse of a memory-v2 project runs —
-// where the memory is, the triggers of memory/.triggers.json, the matcher, and the two lesson modules (memory-lessons
-// after a call, memory-repeat before a repeat). Kept apart from memory-hooks.cjs (the write check, Bash into the
+// Memory v2 in the hooks (slice 21), the hot path: what every PreToolUse / PostToolUse / PostToolUseFailure of a
+// memory-v2 project runs — where the memory is, the triggers of memory/.triggers.json, the matcher, and the lesson
+// modules (memory-lessons after a finished call, memory-lessons-failure after a failed one — slice 37, memory-repeat
+// before a repeat). Kept apart from memory-hooks.cjs (the write check, Bash into the
 // memory, Stop, SessionStart) because a hook call is a cold process: loading the whole library cost ≈ 4 ms per call.
 'use strict';
 const fs = require('fs');
@@ -246,7 +247,11 @@ function fieldsOf(ev, { withOut = false } = {}) {
   else if (typeof ti.new_source === 'string') body = ti.new_source;
   else if (tool !== 'Bash') { try { body = JSON.stringify(ti); } catch { body = ''; } }
   let out = '';
-  if (withOut) {
+  // A failed call (slice 37): PostToolUseFailure has no tool_response, the text the model gets back is in `error`
+  // (probe P37, Claude Code 2.1.317: Bash — «Exit code N\nstdout\nstderr», MCP — its isError text, a JSON-RPC error or
+  // «… timed out after Ns»), for every tool.
+  if (withOut && ev.hook_event_name === 'PostToolUseFailure') out = (typeof ev.error === 'string' ? ev.error : '').replace(/\x1b\[[0-9;]*m/g, '');
+  else if (withOut) {
     const r = ev.tool_response;
     const report = r && typeof r === 'object' && r.handbackReport && typeof r.handbackReport.text === 'string' ? r.handbackReport.text : null;
     out = (CONTENT_OUT.test(tool) ? (report !== null ? report : r && typeof r === 'object' && !Array.isArray(r) ? textOf(r.content) : textOf(r))
@@ -349,7 +354,8 @@ function framed(text) {
 
 // ---------- the modules ----------
 
-// PostToolUse: the lessons the finished call matched. A write into the memory itself is no mistake to teach about.
+// PostToolUse and PostToolUseFailure (slice 37): the lessons the finished or failed call matched. A write into the
+// memory itself is no mistake to teach about.
 function lessonsAfter(ev, ctx) {
   if (!ctx.delivery) return null;
   const mem = memoryOf(ctx);

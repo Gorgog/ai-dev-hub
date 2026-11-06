@@ -1,0 +1,20 @@
+{
+  "id": "memory-lessons-failure",
+  "event": "PostToolUseFailure",
+  "file": "posttoolfailure.d/21-memory-lessons-failure.cjs",
+  "handler": "memory",
+  "stage": "canary",
+  "onError": "open",
+  "failScope": "any",
+  "state": [
+    "memory/.triggers-quarantine.json"
+  ],
+  "reads": [
+    "memory/.triggers.json"
+  ],
+  "polygon": [
+    "H63"
+  ],
+  "replaces": "срез 35: на упавший вызов уроков нет (уроки таймаутов браузера не подавались никогда)",
+  "review": "2027-02-06"
+}

@@ -24,6 +24,7 @@
 | Механизм | Модуль | Что делает |
 |---|---|---|
 | `memory-lessons` | `posttool.d/21-memory-lessons.cjs` | `when` урока сработал на законченном вызове — урок сразу после него (PostToolUse) |
+| `memory-lessons-failure` | `posttoolfailure.d/21-memory-lessons-failure.cjs` | `when` урока сработал на упавшем вызове (по тексту ошибки) — урок сразу после него (PostToolUseFailure, срез 37) |
 | `memory-repeat` | `pretool.d/51-memory-repeat.cjs` | урок уже подан в этой эпохе и его признак снова в вызове — отказ один раз с текстом урока (deny-once) |
 | `memory-write-check` | `posttool.d/20-memory-write-check.cjs` | Write/Edit урока или решения — валидатор 14 сразу; ошибки — `block` с перечнем; `.triggers.json` пересобран |
 | `memory-bash-write` | `pretool.d/50-memory-bash-write.cjs` | Bash пишет в `memory/lessons/` или `memory/decisions/` — `deny` с тем, как писать урок |
@@ -34,7 +35,8 @@
 ошибки в той же эпохе (один отказ; дальше вызов проходит, повтор считается подачей как `repeat`).
 
 Признаки — поля вызова, как в прототипе памяти: `tool`, `cmd` (команда Bash), `path`, `body` (текст Write/Edit), `out`
-(вывод Bash, только PostToolUse). Поле видно хуку первыми 4000 знаками (`out` — последними). Порядок при нескольких
+(только после вызова: вывод Bash; у MCP и Agent — текст результата, срез 35; у упавшего вызова — текст ошибки, поле
+`error` события PostToolUseFailure, срез 37; перед вызовом `out` пуст). Поле видно хуку первыми 4000 знаками (`out` — последними). Порядок при нескольких
 уроках: ядро, затем более узкий признак (больше полей), затем id; подача берёт 3 на вызов.
 
 ## Горячий путь
