@@ -4,7 +4,7 @@
 // to the budget); the latest session note of this branch — its «Дальше». Silent outside projects/<name>/ of the hub.
 // A project with memory v2 (memory/lessons/) on the canary of memory-core (slice 29) gets the core of lessons
 // (status core, ≤ CORE_MAX lines) in place of the index: the rest comes by touch (the lesson hooks) and /hub:recall.
-// A library of the modules sessionstart.d/10-memory-brief.cjs and 11-memory-core.cjs.
+// A library of the modules sessionstart.d/09-memory-core.cjs and 10-memory-brief.cjs.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -21,7 +21,7 @@ const git = (cwd, ...a) => {
 };
 const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
 
-function preflight(dir) {
+function preflight(dir, { core = false } = {}) {
   const warn = [];
   for (const f of ['rules.json', 'dispatch-rules.json', 'checks.json']) {
     const s = read(path.join(dir, f));
@@ -31,7 +31,8 @@ function preflight(dir) {
   if (fs.existsSync(path.join(dir, 'checks.json')) && !fs.existsSync(path.join(dir, 'checks-baseline', 'BASE'))) {
     warn.push('нет фона checks: `checks --full` не увидит поломок чужого кода (фон пишет `--record-baseline` на чистой базе)');
   }
-  const idx = read(path.join(dir, 'memory', 'errors-index.md'));
+  // In the core mode the index is a derived export the brief says not to read: its limits are not the session's concern.
+  const idx = core ? null : read(path.join(dir, 'memory', 'errors-index.md'));
   if (idx !== null) {
     const lines = idx.split(/\r?\n/);
     const long = lines.filter((l) => l.length > 160).length;
@@ -98,35 +99,37 @@ const LESSONS = (dir) => path.join(dir, 'memory', 'lessons');
 const KIND_ORDER = { once: 0, rule: 1, knowledge: 2, decision: 3 };
 
 // Live lessons as the brief needs them: the core (first line and id; class «once» first, then by date and id) and the
-// count of the rest by touch. A file without frontmatter is skipped (memory-check names it); a lesson of an external
-// source is never a core rule (format.cjs refuses it too) — it counts as by touch. The memory library is required here,
-// not at the top: stop.cjs and the v1 entry of this file load it and must not depend on lib/memory. null — no
-// lessons/ or no library: the brief falls back to the index, so memory-brief stepping aside never leaves the start
-// without a brief.
+// count of the rest by touch. Only lessons the write check accepts, as for the triggers (store.ensureTriggers): a file
+// written past the hook — a source «внешний» of any case, a push command or a URL in the text, NUL, broken
+// frontmatter — never comes as a rule of the hub and is not counted (memory-check names it). The memory library is
+// required here, not at the top: stop.cjs and the v1 entry of this file load it and must not depend on lib/memory.
+// null — no lessons/ or no library: the brief falls back to the index, the start never stays without a brief.
 function lessonLayers(dir) {
-  let files = [], parse;
+  let files = [], fmt;
   try { files = fs.readdirSync(LESSONS(dir)).filter((f) => f.endsWith('.md') && !f.startsWith('.')).sort(); } catch { return null; }
-  try { parse = require('../lib/memory/format.cjs').parseLesson; } catch { return null; }
+  try { fmt = require('../lib/memory/format.cjs'); } catch { return null; }
   const core = [];
   let touch = 0;
   for (const f of files) {
-    const text = read(path.join(LESSONS(dir), f));
-    if (text === null) continue;
-    const { meta, body, frontmatter } = parse(text.replace(/\u0000/g, ''));
-    if (!frontmatter) continue;
+    let raw;
+    try { raw = fs.readFileSync(path.join(LESSONS(dir), f)); } catch { continue; }
+    if (fmt.validateLesson(raw, { file: `memory/lessons/${f}` }).length) continue;
+    const { meta, body } = fmt.parseLesson(raw.toString('utf8'));
     const first = (body.find((l) => l.trim()) || '').trim();
-    const external = String(meta.source || '').startsWith('внешний');
-    if (meta.status === 'core' && first && !external) core.push({ id: f.slice(0, -3), first, kind: meta.kind, created: String(meta.created || '') });
+    if (meta.status === 'core' && first) core.push({ id: f.slice(0, -3), first, kind: meta.kind, created: String(meta.created || '') });
     else if (meta.status === 'core' || meta.status === 'active') touch++;
   }
-  const rank = (l) => (l.kind in KIND_ORDER ? KIND_ORDER[l.kind] : 9);
+  const rank = (l) => (Object.hasOwn(KIND_ORDER, l.kind) ? KIND_ORDER[l.kind] : 9);
   core.sort((a, b) => rank(a) - rank(b) || a.created.localeCompare(b.created) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { core, touch };
 }
 
-// memory-core gives the brief where the spine runs it: its record on, or canary with the project's canary.json naming
-// its id or handler (the same test as run.cjs) — and only in a project with memory/lessons/. memory-brief steps aside
-// exactly there, so the session gets one brief, never two or none.
+// The memory-core module gives the brief where the spine runs it (its record on, or canary with the project's
+// canary.json naming its id or handler — the same test as run.cjs) and the project has memory/lessons/. One decision
+// per start (review 1, M1): the core module runs before memory-brief and marks the event it gave the brief for;
+// memory-brief steps aside only for a marked event. The spine skipping the core module (no cwd, the canary changed
+// meanwhile) or the module failing leaves the event unmarked — the index brief comes: never two, never none.
+const coreGiven = new WeakSet();
 function coreOn(proj) {
   if (!proj || !fs.existsSync(LESSONS(proj.dir))) return false;
   const rec = readJsonSafe(CORE_RECORD);
@@ -148,7 +151,7 @@ function coreBlock(layers, room) {
   const over = layers.core.slice(CORE_MAX).map((l) => l.id);
   const foot = () => [
     over.length ? `Ядро сверх ${CORE_MAX} — по касанию: ${over.join(', ')}` : '',
-    `По касанию — ещё ${layers.touch} ${lessonsWord(layers.touch)}: хук подаёт урок при касании его темы, поиск — /hub:recall. `
+    `По касанию — ещё ${layers.touch} ${lessonsWord(layers.touch)}: урок с триггером \`when\` хук подаёт при касании темы, любой — /hub:recall. `
       + 'memory/errors-index.md — выводимый экспорт, не читать.',
   ].filter(Boolean);
   const lines = shown.map((l) => `- ${l.first} [${l.id}]`);
@@ -165,7 +168,7 @@ function buildBrief(cwd, hub = HUB_ROOT, version = '', { core = false } = {}) {
   const branch = wt ? git(wt, 'branch', '--show-current') : '';
   const changed = wt ? git(wt, 'status', '--porcelain').split('\n').filter(Boolean).length : 0;
   const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}${version ? ` · хаб ${version}` : ''}`];
-  const warn = preflight(proj.dir);
+  const warn = preflight(proj.dir, { core: !!layers });
   if (layers && layers.core.length > CORE_MAX) {
     warn.push(`ядро уроков: ${layers.core.length} > ${CORE_MAX} — лишние перевести в active (/hub:memory-gc), сверх ${CORE_MAX} подаются по касанию`);
   }
@@ -208,7 +211,7 @@ function briefItems(brief) {
   ] };
 }
 
-module.exports = { buildBrief, briefItems, coreOn, lessonLayers, coreBlock, workTree, BUDGET, CORE_MAX };
+module.exports = { buildBrief, briefItems, coreOn, coreGiven, lessonLayers, coreBlock, workTree, BUDGET, CORE_MAX };
 
 // v1 entry of SessionStart, kept for sessions started before the spine (their hooks.json calls this file): the
 // brief now comes from sessionstart.d/10-memory-brief.cjs through the spine.

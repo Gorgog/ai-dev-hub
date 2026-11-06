@@ -1,7 +1,7 @@
 {
   "id": "memory-core",
   "event": "SessionStart",
-  "file": "sessionstart.d/11-memory-core.cjs",
+  "file": "sessionstart.d/09-memory-core.cjs",
   "handler": "memory-brief",
   "stage": "canary",
   "onError": "open",
