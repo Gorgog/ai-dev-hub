@@ -1,6 +1,6 @@
 // The storage interface of memory v2 — the one door for hooks (21), skills (22), migration (23) and `recall`:
 //   add (addLesson), repeat, shown, find, export (exportAll, exportV1), import (importAll);
-//   status operations retire / merge / supersede, why, check, retirementCandidates.
+//   status operations retire / merge / supersede, why, check, retirementCandidates; the core — coreCandidates, toActive.
 // Source of truth — files: lessons/*.md, decisions/*.md, events/*.jsonl. Derived, rebuilt by signature (name, size,
 // mtime of every source file) on every search, so a lesson another session wrote is seen without a restart:
 //   .index.db       FTS5 (unicode61) in node:sqlite + the fold (entries and event counters); P2: query p95 2.6 ms,
@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { parseLesson, validateLesson, layer, STATUSES, KINDS } = require('./format.cjs');
+const { parseLesson, validateLesson, compileWhen, layer, STATUSES, KINDS } = require('./format.cjs');
 const { appendEvent, readEvents, foldEvents, eventFiles } = require('./events.cjs');
 
 const INDEX = '.index.db';
@@ -509,6 +509,162 @@ function retirementCandidates(memDir, { days = 30, now = new Date() } = {}) {
     .map((d) => d.id).sort();
 }
 
+// ---------- the core and the lesson hook (tail 34, decision (г) 06.11) ----------
+
+// The core of the brief is for what no hook can deliver: a lesson whose trigger the lesson hook really sees goes to
+// active (delivered at the moment of the mistake); class «once» without a trigger and a trigger only on calls the
+// hook does not listen to (MCP, Agent today) stay in the core. «Listens» is read from the plugin, never hard-coded:
+// the event of mechanisms/memory-lessons.json and the matchers of that event in hooks/hooks.json.
+const PLUGIN = path.join(__dirname, '..', '..');
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+// {event, tools, on, why}: on — the lesson module runs in the project, as the spine decides (run.cjs): the module's
+// stage (none or unknown — on, as any module), the delivery's stage (only an explicit on or a listed canary: no record,
+// no stage — the delivery is off and the module silent), a canary — by the project's canary.json listing id or handler. Throws when the event or its matchers cannot be read.
+function lessonHookTools(plugin = PLUGIN, { project = null } = {}) {
+  const rec = readJson(path.join(plugin, 'mechanisms', 'memory-lessons.json'));
+  if (!rec || typeof rec.event !== 'string') throw new Error('хук уроков: не прочитан mechanisms/memory-lessons.json');
+  const event = rec.event;
+  let groups;
+  try { groups = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks[event]; } catch (e) {
+    throw new Error(`хук уроков: не прочитан hooks/hooks.json (${e.code || e.message})`);
+  }
+  if (!Array.isArray(groups)) throw new Error(`хук уроков: в hooks/hooks.json нет события ${event}`);
+  // A group without a matcher (or «*») listens to every tool. A matcher of plain names (`Bash|Edit`) is a list of
+  // exact names; any other is one regex, read whole (`^(?:Bash|…|mcp__.*)$` split by `|` would lose Bash, merge with 35).
+  const tools = groups.flatMap((g) => (typeof g.matcher !== 'string' || g.matcher === '' || g.matcher === '*' ? ['*']
+    : /^[\w|-]+$/.test(g.matcher) ? g.matcher.split('|') : [g.matcher]));
+  const listed = project ? ((readJson(path.join(project, 'canary.json')) || {}).mechanisms || []) : [];
+  const runs = (r, def) => {
+    const st = r && ['off', 'canary', 'on'].includes(r.stage) ? r.stage : def;
+    return st === 'on' || (st === 'canary' && Array.isArray(listed) && listed.some((m) => m === r.id || m === r.handler));
+  };
+  const dl = readJson(path.join(plugin, 'mechanisms', 'delivery.json'));
+  const why = !runs(rec, 'on') ? `модуль memory-lessons не запущен в проекте (стадия ${rec.stage || 'on'})`
+    : !dl ? 'нет записи доставки (mechanisms/delivery.json) — модуль уроков молчит'
+      : !runs(dl, 'off') ? `доставка не запущена в проекте (стадия ${dl.stage || 'нет'}) — модуль уроков молчит` : '';
+  return { event, tools, on: !why, why };
+}
+
+// Tool names to try a lesson's `tool` regex on: each matcher alternative as a name (`mcp__x__.*` → `mcp__x__x`), and
+// the lesson's own literal names (`^(Edit|Write)$`) that a matcher alternative takes whole. No guessing past that: a
+// trigger that cannot be shown to fire stays in the core (a false «stays» costs a line, a false «goes» — a lesson).
+const LITERAL = /^[\w-]+$/;
+const sampleOf = (alt) => (LITERAL.test(alt) ? alt : alt.replace(/\\\./g, '.').replace(/\.[*+]/g, 'x').replace(/^\^|\$$/g, ''));
+function literalNames(src) {
+  const core = String(src).replace(/^\^/, '').replace(/\$$/, '').replace(/^\((?:\?:)?([^()]*)\)$/, '$1');
+  const parts = core.split('|');
+  return parts.every((p) => LITERAL.test(p)) ? parts : [];
+}
+const whole = (alt) => { try { return new RegExp(`^(?:${alt === '*' ? '.*' : alt})$`); } catch { return null; } };
+// Names a matcher unit may stand for: itself, or for a regex unit its top-level alternatives (`^(?:a|b.*)$` → a, bx)
+// and the known tools — each kept only when the unit takes it whole.
+function unitNames(unit) {
+  if (LITERAL.test(unit)) return [unit];
+  const inner = unit.replace(/^\^/, '').replace(/\$$/, '').replace(/^\((?:\?:)?([\s\S]*)\)$/, '$1');
+  return [...inner.split('|').map(sampleOf), ...Object.keys(CALLS)];
+}
+function namesFor(src, tools) {
+  const alts = tools.map((t) => ({ t, rx: whole(t) })).filter((x) => x.rx);
+  const names = new Set(alts.filter((x) => x.t !== '*').flatMap((x) => unitNames(x.t)).filter((n) => alts.some((x) => x.rx.test(n))));
+  for (const n of literalNames(src)) if (alts.some((x) => x.rx.test(n))) names.add(n);
+  return [...names];
+}
+
+// Which fields a call of the tool fills is the hook's own answer (review round 1): its fieldsOf on a call of that tool
+// in the shape Claude Code gives (Write/Edit answer without stdout — `out` stays empty; Agent has no path; Bash no
+// body). A tool not named here (MCP and the like) — an input object and a content-list answer. Names are exact, as the
+// matcher; a lesson's literal name in another case is the tool it names («bash» is Bash).
+const CALLS = {
+  Bash: { tool_input: { command: 'x', description: 'x' }, tool_response: { stdout: 'x', stderr: 'x', interrupted: false } },
+  Edit: { tool_input: { file_path: 'x', old_string: 'x', new_string: 'x' }, tool_response: { filePath: 'x', oldString: 'x', newString: 'x', structuredPatch: [] } },
+  MultiEdit: { tool_input: { file_path: 'x', edits: [{ old_string: 'x', new_string: 'x' }] }, tool_response: { filePath: 'x', edits: [] } },
+  Write: { tool_input: { file_path: 'x', content: 'x' }, tool_response: { type: 'create', filePath: 'x', content: 'x', structuredPatch: [] } },
+  NotebookEdit: { tool_input: { notebook_path: 'x', new_source: 'x' }, tool_response: { new_source: 'x', cell_id: 'x' } },
+  Read: { tool_input: { file_path: 'x' }, tool_response: { type: 'text', file: { filePath: 'x', content: 'x' } } },
+  Agent: { tool_input: { description: 'x', prompt: 'x', subagent_type: 'x' }, tool_response: { content: [{ type: 'text', text: 'x' }] } },
+  Task: { tool_input: { description: 'x', prompt: 'x', subagent_type: 'x' }, tool_response: { content: [{ type: 'text', text: 'x' }] } },
+};
+const OTHER = { tool_input: { x: 'x' }, tool_response: [{ type: 'text', text: 'x' }] };
+const canonical = (n) => Object.keys(CALLS).find((k) => k.toLowerCase() === String(n).toLowerCase()) || n;
+function filled(name) {
+  const { fieldsOf } = require('../../hooks/memory-hot.cjs');
+  const f = fieldsOf({ tool_name: name, ...(CALLS[name] || OTHER) }, { withOut: true });
+  return new Set(Object.keys(f).filter((k) => String(f[k]).trim() !== ''));
+}
+
+// {ok, reason}: does some item of `when` compile and fire on a tool the hook listens to — every field it names filled
+// by a call of that tool?
+function workingTrigger(meta, { tools = [], event = '' } = {}) {
+  const when = Array.isArray(meta && meta.when) ? meta.when : [];
+  if (!when.length) return { ok: false, reason: 'без триггера when' };
+  const { problems } = compileWhen(when);
+  const on = event ? `хук уроков (${event})` : 'хук уроков';
+  const all = tools.includes('*');
+  const cache = new Map();
+  const has = (name, k) => { if (!cache.has(name)) cache.set(name, filled(name)); return cache.get(name).has(k); };
+  for (let i = 0; i < when.length; i++) {
+    const w = when[i];
+    if (!w || typeof w !== 'object' || problems.some((p) => p.startsWith(`when[${i}]`))) continue;
+    const fields = Object.keys(w).filter((k) => k !== 'tool');
+    let names;
+    if ('tool' in w) {
+      let rx;
+      try { rx = new RegExp(w.tool, 'i'); } catch { continue; }
+      names = all ? [...new Set([...literalNames(w.tool).map(canonical), ...Object.keys(CALLS)])].filter((n) => rx.test(n))
+        : namesFor(w.tool, tools).filter((n) => rx.test(n));
+    } else names = all ? Object.keys(CALLS) : [...new Set(tools.flatMap(unitNames))].filter((n) => tools.some((t) => (whole(t) || /$^/).test(n)));
+    const hit = names.find((n) => fields.every((k) => has(n, k)));
+    if (hit) return { ok: true, reason: `when[${i}] ${'tool' in w ? `tool ${w.tool}` : '(без tool)'} — ${on} слушает ${hit}` };
+  }
+  return { ok: false, reason: `триггер только на вызовах или полях, которых ${on} не видит` };
+}
+
+// Lessons the user kept in the core (`kept-core`) whose decision still holds: the newest one is about the text as it
+// is (the same sha) and the lesson is still in the core.
+function keptInCore(memDir) {
+  const kept = new Map();
+  for (const e of readEvents(memDir).events) if (e.kind === 'kept-core' && typeof e.lesson === 'string') kept.set(e.lesson, e.sha);
+  return loadDocs(memDir).filter((d) => d.dir === 'lessons' && d.status === 'core' && kept.has(d.id) && kept.get(d.id) === d.sha)
+    .map((d) => d.id).sort();
+}
+
+// Proposals (decision г): core lessons, not class «once», not kept by the user, the validator accepts, with a working
+// trigger, in a project where the lesson module runs — [{id, kind, reason}] by id. No hook config to read or the module
+// silent here — nothing (the caller names why by lessonHookTools).
+function coreCandidates(memDir, { plugin = PLUGIN } = {}) {
+  let hook;
+  try { hook = lessonHookTools(plugin, { project: path.dirname(path.resolve(memDir)) }); } catch { return []; }
+  if (!hook.on) return [];
+  const kept = new Set(keptInCore(memDir));
+  return loadDocs(memDir)
+    .filter((d) => d.dir === 'lessons' && d.status === 'core' && d.kind !== 'once' && !kept.has(d.id))
+    .filter((d) => !validateLesson(d.raw, { file: `${path.basename(memDir)}/${d.rel}` }).length)
+    .map((d) => ({ d, t: workingTrigger(d.meta, hook) }))
+    .filter((x) => x.t.ok)
+    .map(({ d, t }) => ({ id: d.id, kind: d.kind, reason: t.reason }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+// core → active: the status line only, then the triggers file and an event `to-active`.
+function toActive(memDir, id, a) {
+  const f = lessonFile(memDir, id);
+  const text = fs.readFileSync(f, 'utf8');
+  if (path.basename(path.dirname(f)) !== 'lessons' || parseLesson(text).meta.status !== 'core') throw new Error(`урок ${id} не в ядре (status не core)`);
+  writeAtomic(f, withField(f, text, 'status', 'active'));
+  refreshTriggers(memDir);
+  return appendEvent(memDir, { ...addr(a), kind: 'to-active', lesson: id });
+}
+
+// The user's «stays in the core» (decision (г) by hand: a trigger that fires where the work is not done, as a stand
+// started through a browser MCP) — an event `kept-core` with the sha of the lesson as it is now.
+function keepInCore(memDir, id, a) {
+  const f = lessonFile(memDir, id);
+  const raw = fs.readFileSync(f);
+  if (path.basename(path.dirname(f)) !== 'lessons' || parseLesson(raw.toString('utf8')).meta.status !== 'core') throw new Error(`урок ${id} не в ядре (status не core)`);
+  const sha = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
+  return appendEvent(memDir, { ...addr(a), kind: 'kept-core', lesson: id, sha });
+}
+
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
   const { findProject } = require('../../hooks/lib/hub.cjs');
@@ -520,6 +676,6 @@ function memoryDir(cwd, hub) {
 
 module.exports = {
   addLesson, repeat, shown, find, similar, exportAll, importAll, exportV1,
-  retire, merge, supersede, why, check, retirementCandidates,
-  ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
+  retire, merge, supersede, why, check, retirementCandidates, coreCandidates, workingTrigger, lessonHookTools, toActive, keepInCore, keptInCore,
+  withField, ensureIndex, indexFold, fold, signature, ensureTriggers, readTriggers, memoryDir, terms, INDEX, TRIGGERS,
 };

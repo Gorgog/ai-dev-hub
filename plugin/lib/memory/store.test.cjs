@@ -9,6 +9,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const S = require('./store.cjs');
 const { formatLesson } = require('./format.cjs');
+const { readEvents } = require('./events.cjs');
 
 const tmp = (p = 'mem-') => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const lesson = (id, first, more = {}) => formatLesson({
@@ -324,4 +325,212 @@ test('status operations on mixed line endings (LF frontmatter, a CRLF body line)
   fs.writeFileSync(f, text);
   S.retire(d, 'mix', {});
   assert.strictEqual(fs.readFileSync(f, 'utf8'), text.replace('status: active', 'status: retired'));
+});
+
+// ---------- the core and decision (г) (tail 34) ----------
+
+// 20 core lessons: exactly the ones whose `when` the validator accepts and the lesson hook listens to are proposed;
+// class «once», a lesson without `when` and a trigger only on calls the hook does not listen to stay in the core.
+const CORE20 = [
+  ['c-rule-bash', 'Правило ядра с триггером на Bash.', { status: 'core', when: [{ tool: '^Bash$', cmd: '\\bnpm\\s+test\\b' }] }],
+  ['c-rule-cmd-only', 'Правило ядра с триггером только по команде.', { status: 'core', when: [{ cmd: '\\bprisma\\s+migrate\\b' }] }],
+  ['c-rule-edit', 'Правило ядра с триггером на правку файла.', { status: 'core', when: [{ tool: '^(Edit|Write)$', path: '\\.vue$' }] }],
+  ['c-rule-mixed', 'Правило ядра: один триггер на Agent, второй на Bash.', { status: 'core',
+    when: [{ tool: '^Agent$', body: 'ревью' }, { tool: '^Bash$', cmd: 'playwright' }] }],
+  ['c-knowledge-bash', 'Знание ядра с триггером на Bash.', { kind: 'knowledge', status: 'core', when: [{ tool: '^Bash$', cmd: '\\bdocker\\b' }] }],
+  ['c-rule-out', 'Правило ядра с триггером по выводу.', { status: 'core', when: [{ out: 'ENOSPC' }] }],
+  ['c-rule-agent', 'Правило ядра с триггером только на Agent.', { status: 'core', when: [{ tool: '^Agent$', body: 'ревью' }] }],
+  ['c-rule-task', 'Правило ядра с триггером только на Task.', { status: 'core', when: [{ tool: '^Task$' }] }],
+  ['c-rule-mcp', 'Правило ядра с триггером на MCP трекера.', { status: 'core', when: [{ tool: 'tracker_issue$' }] }],
+  ['c-rule-chrome', 'Правило ядра с триггером на MCP браузера.', { status: 'core',
+    when: [{ tool: '^mcp__claude-in-chrome__javascript_tool$', body: 'nova' }] }],
+  ['c-rule-badrx', 'Правило ядра с битым регэкспом.', { status: 'core', when: [{ tool: '^Bash$', cmd: '(' }] }],
+  ['c-rule-nowhen', 'Правило ядра без триггера.', { status: 'core' }],
+  ['c-knowledge-nowhen', 'Знание ядра без триггера.', { kind: 'knowledge', status: 'core' }],
+  ['c-once-bash', 'Класс одного раза с триггером на Bash.', { kind: 'once', status: 'core', when: [{ tool: '^Bash$', cmd: 'sudo' }] }],
+  ['c-once-nowhen', 'Класс одного раза без триггера.', { kind: 'once', status: 'core' }],
+  ['c-once-edit', 'Класс одного раза с триггером на правку.', { kind: 'once', status: 'core', when: [{ tool: '^Write$', path: '\\.env' }] }],
+  ['c-once-mcp', 'Класс одного раза с триггером на MCP.', { kind: 'once', status: 'core', when: [{ tool: 'gitlab_mr_create$' }] }],
+  ['c-once-agent', 'Класс одного раза с триггером на Agent.', { kind: 'once', status: 'core', when: [{ tool: '^Agent$' }] }],
+  ['c-rule-external', 'Внешний текст в ядре с триггером на Bash.', { status: 'core', source: 'внешний', when: [{ tool: '^Bash$' }] }],
+  ['c-rule-unknown-field', 'Правило ядра с неизвестным полем триггера.', { status: 'core', when: [{ tool: '^Bash$', file: 'x' }] }],
+  ['a-rule-bash', 'Правило по касанию с триггером на Bash.', { when: [{ tool: '^Bash$', cmd: 'make' }] }],
+];
+// The matcher of the lesson hook as of 06.11 — fixed here, so a wider matcher in the real hooks.json breaks nothing.
+const TODAY = 'Bash|Edit|Write|MultiEdit|NotebookEdit';
+const WORKING = ['c-knowledge-bash', 'c-rule-bash', 'c-rule-cmd-only', 'c-rule-edit', 'c-rule-mixed', 'c-rule-out'];
+
+// A plugin root of its own: the lesson hook's event from mechanisms/memory-lessons.json, its matcher from hooks.json.
+// Stages: the lesson module and the delivery (without the delivery the module is silent, run.cjs) — on unless given.
+function pluginWith(matcher, event = 'PostToolUse', { stage = 'on', delivery = 'on' } = {}) {
+  const root = tmp('plugin-');
+  fs.mkdirSync(path.join(root, 'hooks'));
+  fs.mkdirSync(path.join(root, 'mechanisms'));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', handler: 'memory', event, stage }));
+  if (delivery) fs.writeFileSync(path.join(root, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', handler: 'delivery', stage: delivery }));
+  fs.writeFileSync(path.join(root, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: 'Bash|Agent|Task|mcp__.*', hooks: [] }],
+    [event]: [{ matcher, hooks: [] }],
+  } }));
+  return root;
+}
+
+test('core candidates (decision г): of 20 core lessons exactly the ones with a working trigger, each with its reason', () => {
+  const d = memory(CORE20);
+  assert.strictEqual(fs.readdirSync(path.join(d, 'lessons')).filter((f) => /^c-/.test(f)).length, 20);
+  const got = S.coreCandidates(d, { plugin: pluginWith(TODAY) });
+  assert.deepStrictEqual(got.map((c) => c.id), WORKING);
+  for (const c of got) {
+    assert.match(c.reason, /PostToolUse/, c.id);
+    assert.match(c.reason, /when\[\d\]/, c.id);
+  }
+  assert.match(got.find((c) => c.id === 'c-rule-mixed').reason, /when\[1\][^\n]*Bash/);
+  assert.match(got.find((c) => c.id === 'c-rule-edit').reason, /Edit|Write/);
+});
+
+test('core candidates follow the matcher of hooks.json (read, not hard-coded): an MCP matcher makes an MCP trigger work', () => {
+  const d = memory(CORE20);
+  const wide = pluginWith('Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__claude-in-chrome__.*');
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: wide }).map((c) => c.id), [...WORKING, 'c-rule-chrome'].sort());
+  const agent = pluginWith('Bash|Agent');
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: agent }).map((c) => c.id),
+    ['c-knowledge-bash', 'c-rule-agent', 'c-rule-bash', 'c-rule-cmd-only', 'c-rule-mixed', 'c-rule-out']);
+  // The event comes from the mechanism record: the hook moved to another event — that event's matcher counts.
+  const moved = pluginWith('Edit', 'PostToolUseFailure');
+  // `out` alone does not work there: an Edit answers without stdout (review round 1).
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: moved }).map((c) => c.id), ['c-rule-edit']);
+});
+
+test('core candidates: no hook config to read — nothing is proposed (a lesson stays in the core when in doubt)', () => {
+  const d = memory(CORE20);
+  const none = tmp('plugin-none-');
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: none }), []);
+  assert.throws(() => S.lessonHookTools(none), /memory-lessons|hooks\.json/);
+});
+
+test('toActive: a core lesson goes to active (frontmatter line only), an event, the triggers keep it; not core — refused', () => {
+  const d = memory(CORE20);
+  const f = path.join(d, 'lessons', 'c-rule-bash.md');
+  const before = fs.readFileSync(f, 'utf8');
+  S.toActive(d, 'c-rule-bash', { note: 'решение (г)' });
+  const after = fs.readFileSync(f, 'utf8');
+  assert.strictEqual(after, before.replace('status: core', 'status: active'));
+  const ev = readEvents(d).events.filter((e) => e.lesson === 'c-rule-bash');
+  assert.deepStrictEqual(ev.map((e) => e.kind), ['to-active']);
+  assert.strictEqual(ev[0].note, 'решение (г)');
+  assert.ok(S.readTriggers(d).lessons.some((l) => l.id === 'c-rule-bash' && l.layer === 'touch'));
+  assert.throws(() => S.toActive(d, 'c-rule-bash'), /не в ядре/);
+  assert.throws(() => S.toActive(d, 'a-rule-bash'), /не в ядре/);
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: pluginWith(TODAY) }).map((c) => c.id), WORKING.filter((id) => id !== 'c-rule-bash'));
+});
+
+test('workingTrigger: the validator and the listened tools decide; the reason names the item', () => {
+  const ok = S.workingTrigger({ when: [{ tool: '^Agent$' }, { tool: '^Bash$', cmd: 'x' }] }, { tools: ['Bash', 'Edit'] });
+  assert.strictEqual(ok.ok, true);
+  assert.match(ok.reason, /when\[1\]/);
+  assert.strictEqual(S.workingTrigger({ when: [] }, { tools: ['Bash'] }).ok, false);
+  assert.strictEqual(S.workingTrigger({ when: [{ tool: '^Agent$' }] }, { tools: ['Bash'] }).ok, false);
+  assert.strictEqual(S.workingTrigger({ when: [{ tool: 'tracker_issue$' }] }, { tools: ['Bash', 'mcp__claude-in-chrome__.*'] }).ok, false);
+  assert.strictEqual(S.workingTrigger({ when: [{ tool: '^mcp__claude-in-chrome__navigate$' }] }, { tools: ['mcp__claude-in-chrome__.*'] }).ok, true);
+});
+
+test('lessonHookTools by default: the event of mechanisms/memory-lessons.json and its matcher in hooks/hooks.json', () => {
+  const root = path.join(__dirname, '..', '..');
+  const event = JSON.parse(fs.readFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'), 'utf8')).event;
+  const groups = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'hooks.json'), 'utf8')).hooks[event];
+  const t = S.lessonHookTools();
+  assert.strictEqual(t.event, event);
+  // Plain names — the list; a regex matcher (slice 35 writes `^(?:…)$`) — one unit.
+  assert.deepStrictEqual(t.tools, groups.flatMap((g) => (/^[\w|-]+$/.test(g.matcher) ? g.matcher.split('|') : [g.matcher])));
+});
+
+test('keepInCore: the decision «stays in the core» is an event with the lesson sha; not proposed until the lesson is edited', () => {
+  const d = memory(CORE20);
+  const opts = { plugin: pluginWith(TODAY) };
+  S.keepInCore(d, 'c-rule-bash', { note: 'стенд через MCP' });
+  const ev = readEvents(d).events.filter((e) => e.lesson === 'c-rule-bash');
+  assert.deepStrictEqual(ev.map((e) => [e.kind, e.note]), [['kept-core', 'стенд через MCP']]);
+  assert.match(ev[0].sha, /^[0-9a-f]{12}$/);
+  assert.deepStrictEqual(S.coreCandidates(d, opts).map((c) => c.id), WORKING.filter((id) => id !== 'c-rule-bash'));
+  // The lesson was edited — the old decision is about another text: proposed again.
+  const f = path.join(d, 'lessons', 'c-rule-bash.md');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('Вторая строка урока.', 'Вторая строка урока, правленая.'));
+  assert.deepStrictEqual(S.coreCandidates(d, opts).map((c) => c.id), WORKING);
+  assert.throws(() => S.keepInCore(d, 'a-rule-bash'), /не в ядре/);
+  assert.strictEqual(S.check(d).problems.filter((p) => /events/.test(p)).length, 0);
+});
+
+// Review round 1 (HIGH-1): a field the hook never fills for that tool is no working trigger — the fields come from the
+// hook's own fieldsOf on a call of that tool: Write/Edit have no stdout (out is empty), Agent has no path, «bash» is Bash.
+test('workingTrigger: a field the hook leaves empty for the tool does not work (out on Write, path on Agent, body on Bash)', () => {
+  const t = (w, tools = TODAY.split('|')) => S.workingTrigger({ when: [w] }, { tools }).ok;
+  assert.strictEqual(t({ tool: '^Write$', out: 'has been updated' }), false);
+  assert.strictEqual(t({ tool: '^(Edit|Write)$', out: 'x' }), false);
+  assert.strictEqual(t({ tool: '^Bash$', out: 'ENOSPC' }), true);
+  assert.strictEqual(t({ tool: '^Bash$', body: 'x' }), false);
+  assert.strictEqual(t({ tool: '^Write$', body: 'x', path: '\\.env' }), true);
+  assert.strictEqual(t({ tool: '^Agent$', path: 'x' }, ['Agent']), false);
+  assert.strictEqual(t({ tool: '^Agent$', body: 'ревью' }, ['Agent']), true);
+  assert.strictEqual(t({ tool: '^bash$', path: 'x' }, ['*']), false);
+  assert.strictEqual(t({ tool: '^bash$', cmd: 'x' }, ['*']), true);
+  // The out of an MCP call is whatever the hook's fieldsOf makes of its answer (slice 35 fills it from the content
+  // blocks): the expectation is that same fieldsOf on an MCP call, not a constant — true or false by the hook in place.
+  const { fieldsOf } = require('../../hooks/memory-hot.cjs');
+  const mcpOut = fieldsOf({ tool_name: 'mcp__claude-in-chrome__navigate', tool_input: { url: 'x' },
+    tool_response: [{ type: 'text', text: 'x' }] }, { withOut: true }).out.trim() !== '';
+  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', out: 'x' }, ['mcp__claude-in-chrome__.*']), mcpOut);
+  assert.strictEqual(t({ tool: '^mcp__claude-in-chrome__navigate$', path: 'x' }, ['mcp__claude-in-chrome__.*']), false,
+    'path of an MCP call — never filled for a tool the hook does not know');
+  assert.strictEqual(t({ out: 'x' }, ['Write', 'Edit']), false, 'no tool, only Write/Edit listened — out never filled');
+});
+
+// Review round 1 (MEDIUM-1): the lesson module has to run in the project — its stage and the delivery's, as run.cjs.
+test('core candidates only where the lesson module runs: stage off, canary not listed, no delivery — nothing', () => {
+  const d = memory(CORE20);
+  const proj = path.dirname(d);
+  const ids = (plugin) => S.coreCandidates(d, { plugin }).map((c) => c.id);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { stage: 'off' })), []);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: null })), []);
+  assert.deepStrictEqual(ids(pluginWith(TODAY, 'PostToolUse', { delivery: 'off' })), []);
+  // A delivery record without a stage: the spine turns the delivery on only by an explicit on/canary (review round 2).
+  const nostage = pluginWith(TODAY, 'PostToolUse', { delivery: 'x' });
+  fs.writeFileSync(path.join(nostage, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', handler: 'delivery' }));
+  assert.deepStrictEqual(ids(nostage), []);
+  // The module itself without a stage — on, as any module of the spine.
+  const modnostage = pluginWith(TODAY);
+  fs.writeFileSync(path.join(modnostage, 'mechanisms', 'memory-lessons.json'), JSON.stringify({ id: 'memory-lessons', event: 'PostToolUse' }));
+  assert.deepStrictEqual(ids(modnostage), WORKING);
+  const canary = pluginWith(TODAY, 'PostToolUse', { stage: 'canary', delivery: 'canary' });
+  assert.deepStrictEqual(ids(canary), [], 'canary, project not listed');
+  fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['memory'] }));
+  assert.deepStrictEqual(ids(canary), [], 'the lesson module listed by handler, the delivery not');
+  fs.writeFileSync(path.join(proj, 'canary.json'), JSON.stringify({ mechanisms: ['memory', 'delivery'] }));
+  assert.deepStrictEqual(ids(canary), WORKING);
+  const h = S.lessonHookTools(canary, { project: proj });
+  assert.strictEqual(h.on, true);
+  assert.strictEqual(S.lessonHookTools(pluginWith(TODAY, 'PostToolUse', { stage: 'off' }), { project: proj }).on, false);
+});
+
+test('keptInCore: only decisions about the text as it is and lessons still in the core', () => {
+  const d = memory(CORE20);
+  S.keepInCore(d, 'c-rule-bash', { note: 'x' });
+  S.keepInCore(d, 'c-rule-edit', { note: 'x' });
+  assert.deepStrictEqual(S.keptInCore(d), ['c-rule-bash', 'c-rule-edit']);
+  const f = path.join(d, 'lessons', 'c-rule-edit.md');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('Вторая строка урока.', 'Правлено.'));
+  S.toActive(d, 'c-rule-bash');
+  assert.deepStrictEqual(S.keptInCore(d), []);
+});
+
+// Merge with slice 35: a matcher written as one regex (`^(?:Bash|…|mcp__.*tracker_.*)$`) is one unit, not split by
+// `|` into pieces that do not compile — Bash must stay heard.
+test('a regex matcher (anchored group) is read whole: Bash, Edit and the MCP alternatives inside it all count', () => {
+  const d = memory(CORE20);
+  const rx = pluginWith('^(?:Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__claude-in-chrome__.*)$');
+  assert.deepStrictEqual(S.coreCandidates(d, { plugin: rx }).map((c) => c.id), [...WORKING, 'c-rule-chrome'].sort());
+  const tools = S.lessonHookTools(rx).tools;
+  const t = (w) => S.workingTrigger({ when: [w] }, { tools }).ok;
+  assert.strictEqual(t({ tool: '^Bash$', cmd: 'x' }), true);
+  assert.strictEqual(t({ tool: '^Agent$', body: 'x' }), false, 'Agent is not in this matcher');
+  assert.strictEqual(t({ tool: '^Bash$', cmd: 'x' }), S.workingTrigger({ when: [{ tool: '^Bash$', cmd: 'x' }] }, { tools: TODAY.split('|') }).ok);
 });

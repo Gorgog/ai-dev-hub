@@ -111,6 +111,12 @@ test('more than CORE_MAX core lessons: the first CORE_MAX lines, the rest by id 
   assert.strictEqual(lines.length, CORE_MAX, text);
   assert.match(text, /rule-16, rule-17, rule-18, rule-19/);
   assert.match(text, new RegExp(`ядро уроков: ${CORE_MAX + 4} > ${CORE_MAX}`));
+  // The advice is a real command (tail 34): run as written it answers — here no core lesson has a trigger.
+  const cmd = (text.match(/`(node [^`]+ core)`/) || [])[1];
+  assert.ok(cmd, text);
+  const r = require('child_process').spawnSync('sh', ['-c', cmd], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`кандидатов нет: в ядре ${CORE_MAX + 4}`));
 });
 
 test('a lesson of an external source never comes as a core rule; a broken file is skipped, not thrown', () => {

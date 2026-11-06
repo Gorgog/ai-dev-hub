@@ -156,3 +156,70 @@ test('repeat: the hint names the episode number — 2nd, then 3rd — while the 
   assert.match(r, /3-й эпизод/);
   assert.doesNotMatch(r, /2-й эпизод/);
 });
+
+// The lesson hook of its own (review round 2): stages canary as today, matcher of 06.11 — the live plugin's stages and
+// a wider matcher change nothing here.
+function hookPlugin() {
+  const root = tmp('episode-plugin-');
+  fs.mkdirSync(path.join(root, 'hooks'));
+  fs.mkdirSync(path.join(root, 'mechanisms'));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'memory-lessons.json'),
+    JSON.stringify({ id: 'memory-lessons', handler: 'memory', event: 'PostToolUse', stage: 'canary' }));
+  fs.writeFileSync(path.join(root, 'mechanisms', 'delivery.json'), JSON.stringify({ id: 'delivery', handler: 'delivery', stage: 'canary' }));
+  fs.writeFileSync(path.join(root, 'hooks', 'hooks.json'),
+    JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Bash|Edit|Write|MultiEdit|NotebookEdit', hooks: [] }] } }));
+  return root;
+}
+const runCli = (args) => run(args);
+
+// Tail 34, decision (г): the core is for what no hook can deliver. A «once» whose trigger the lesson hook really sees
+// goes to active (delivered at the moment of the mistake); without one — the core. The draft's status is not trusted.
+test('class «once» with a working trigger goes to active; without one (or on a call the hook does not see) — the core', () => {
+  const { root, mem, draft } = sandbox();
+  // The lesson module runs in this project (run.cjs: its stage and the delivery's, canary by canary.json).
+  fs.writeFileSync(path.join(root, 'canary.json'), JSON.stringify({ mechanisms: ['memory-lessons', 'delivery'] }));
+  const run = (args) => runCli([...args, '--plugin', hookPlugin()]);
+  const statusOf = (id) => parseLesson(fs.readFileSync(path.join(mem, 'lessons', `${id}.md`), 'utf8')).meta.status;
+  const a = draft('sudo-ask-first', ['Команды с sudo — только после вопроса пользователю.', 'Сессия запустила sudo без спроса.'],
+    { kind: 'once', status: 'core', keys: ['sudo'], when: [{ tool: '^Bash$', cmd: '(^|;|&&)\\s*sudo\\s' }] });
+  const ra = run(['--memory', mem, 'add', a]);
+  assert.strictEqual(ra.code, 0, ra.err);
+  assert.strictEqual(statusOf('sudo-ask-first'), 'active');
+  assert.match(ra.out, /active/);
+  assert.match(ra.out, /PostToolUse/);
+
+  const b = draft('prod-modal-no-submit', ['На проде форму клиента только открывать, не отправлять.', 'Отправка — запись в боевую базу.'],
+    { kind: 'once', status: 'active', keys: ['прод', 'форма'] });
+  const rb = run(['--memory', mem, 'add', b]);
+  assert.strictEqual(rb.code, 0, rb.err);
+  assert.strictEqual(statusOf('prod-modal-no-submit'), 'core', 'no trigger — the core, whatever the draft said');
+  assert.match(rb.out, /ядр/);
+
+  const c = draft('no-such-tool-once', ['Вызов инструмента, которого хук не видит, — только после вопроса.', 'Было однажды.'],
+    { kind: 'once', status: 'active', keys: ['инструмент'], when: [{ tool: '^NoSuchTool$' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', c]).code, 0);
+  assert.strictEqual(statusOf('no-such-tool-once'), 'core');
+
+  const k = draft('knowledge-keeps-status', ['Знание с триггером остаётся в своём слое.', 'Скрипт статус знания не трогает.'],
+    { kind: 'knowledge', status: 'active', keys: ['знание'], when: [{ tool: '^Bash$', cmd: 'make' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', k]).code, 0);
+  assert.strictEqual(statusOf('knowledge-keeps-status'), 'active');
+  // Review round 1 (HIGH-1): `out` on Write — the hook never fills it, the once stays in the core.
+  const w = draft('write-new-file-check', ['Перед Write нового файла — проверить, что его нет.', 'Write перезаписал чужой файл.'],
+    { kind: 'once', status: 'core', keys: ['write'], when: [{ tool: '^Write$', out: 'has been updated' }] });
+  assert.strictEqual(run(['--memory', mem, 'add', w]).code, 0);
+  assert.strictEqual(statusOf('write-new-file-check'), 'core');
+  // The v1 line follows the layer the lesson got.
+  assert.strictEqual(v1Lines(mem).length, 5);
+});
+
+test('class «once» with a trigger in a project where the lesson module does not run — the core (review round 1)', () => {
+  const { mem, draft } = sandbox();
+  const run = (args) => runCli([...args, '--plugin', hookPlugin()]); // canary, and no canary.json in this project
+  const a = draft('sudo-ask-first', ['Команды с sudo — только после вопроса пользователю.', 'Сессия запустила sudo без спроса.'],
+    { kind: 'once', status: 'active', keys: ['sudo'], when: [{ tool: '^Bash$', cmd: '(^|;|&&)\\s*sudo\\s' }] });
+  const r = run(['--memory', mem, 'add', a]);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(parseLesson(fs.readFileSync(path.join(mem, 'lessons', 'sudo-ask-first.md'), 'utf8')).meta.status, 'core');
+  assert.match(r.out, /не запущен/);
+});

@@ -170,7 +170,11 @@ function buildBrief(cwd, hub = HUB_ROOT, version = '', { core = false } = {}) {
   const head = [`Бриф хаба: ${proj.name} · ветка ${branch || '—'} · изменённых ${changed}${version ? ` · хаб ${version}` : ''}`];
   const warn = preflight(proj.dir, { core: !!layers });
   if (layers && layers.core.length > CORE_MAX) {
-    warn.push(`ядро уроков: ${layers.core.length} > ${CORE_MAX} — лишние перевести в active (/hub:memory-gc), сверх ${CORE_MAX} подаются по касанию`);
+    // A real command (tail 34): the candidates by decision (г) — core lessons whose trigger the lesson hook sees.
+    const gc = path.join(__dirname, '..', 'skills', 'memory-gc', 'scripts', 'gc.cjs');
+    const q = (s) => `'${s.split("'").join("'\\''")}'`; // sh single quotes: a ' inside is closed, escaped, reopened
+    warn.push(`ядро уроков: ${layers.core.length} > ${CORE_MAX} — кандидаты на вынос в active: \`node ${q(gc)} --memory ${q(path.join(proj.dir, 'memory'))} core\` `
+      + `(скилл /hub:memory-gc, шаг v2-д), сверх ${CORE_MAX} подаются по касанию`);
   }
   if (warn.length) head.push('Предполётная проверка:', ...warn.map((w) => `- ${w}`));
   const note = latestNote(proj.dir, branch);
