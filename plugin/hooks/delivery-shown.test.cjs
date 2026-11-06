@@ -88,7 +88,8 @@ test('shown: finish holds the mark back, confirm sets it in the epoch of the cal
     session.startEpoch({ session_id: 'c1', source: 'startup' });
     const r = call('c1');
     assert.match(r.text, /урок L1/);
-    assert.deepStrictEqual(session.read('c1').agents.main.shown, {}, 'not marked before the text is written');
+    const way = session.read('c1').agents.main.shown['lesson:L1'];
+    assert.strictEqual(way && way.pid, process.pid, 'before the text is written the mark is only on its way');
     r.confirm();
     assert.deepStrictEqual(session.read('c1').agents.main.shown, { 'lesson:L1': 1 });
     // A compaction between the output and the mark: the new epoch never had the text.
@@ -124,4 +125,24 @@ test('shown: parallel calls of one agent show the lesson once', async () => {
     counts.push(outs.filter((o) => /урок L1/.test(o)).length);
   }
   assert.deepStrictEqual(counts, [1, 1, 1, 1, 1, 1], 'how many of 4 parallel calls showed the lesson, per trial');
+});
+
+test('shown: a mark on its way hides the lesson while its owner lives and is fresh; dead or stale — shown again', () => {
+  const before = process.env.HUB_LOG_DIR;
+  process.env.HUB_LOG_DIR = mkdtemp('delivery-shown-way-');
+  try {
+    const session = require('./lib/session.cjs');
+    const D = require('./lib/deliver.cjs');
+    const items = [{ text: 'урок L1', priority: 'lesson', key: 'L1', lesson: 'L1' }];
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout;
+    const cases = { live: { pid: process.pid, at: Date.now() }, stale: { pid: process.pid, at: Date.now() - D.LIMITS.inFlightMs - 1000 },
+      dead: { pid: Number(dead), at: Date.now() }, confirmed: 1 };
+    const got = {};
+    for (const [name, way] of Object.entries(cases)) {
+      session.startEpoch({ session_id: name, source: 'startup' });
+      session.update(name, (st) => { session.agentIn(st, 'main').shown['lesson:L1'] = way; });
+      got[name] = /урок L1/.test(D.open('PreToolUse', { session_id: name, tool_use_id: 't1' }).finish({ items, final: null, reaches: () => true }).text);
+    }
+    assert.deepStrictEqual(got, { live: false, stale: true, dead: true, confirmed: false });
+  } finally { if (before === undefined) delete process.env.HUB_LOG_DIR; else process.env.HUB_LOG_DIR = before; }
 });

@@ -141,11 +141,11 @@ async function main(event) {
   else text = deliver(items);
   // Every write is awaited: the runner exits right after main(), and a write still queued in a pipe (more than its
   // capacity — 64 KB, 4 KB when pipe pages run short) would be cut, a cut JSON deny is no decision at all.
-  const emit = (stream, s) => new Promise((resolve) => stream.write(s, () => resolve()));
+  // Resolves false when the write failed (EPIPE: Claude closed the pipe) — then nothing is confirmed as shown.
+  const emit = (stream, s) => new Promise((resolve) => stream.write(s, (err) => resolve(!err)));
   const out = (o) => emit(process.stdout, JSON.stringify(o));
   // «Already shown» is saved only after the write's callback: a hook killed before it shows the text again.
-  await send();
-  if (confirm) confirm();
+  if ((await send()) !== false && confirm) confirm();
 
   function send() {
     if (event === 'PreToolUse') {

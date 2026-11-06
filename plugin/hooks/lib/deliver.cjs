@@ -28,7 +28,8 @@ const rank = (p) => (p in PRIORITY ? PRIORITY[p] : PRIORITY.info);
 // call — lessons and reminders together; epoch — each its own budget, so reminders never eat the lessons' share;
 // phase — its own slot per call; window — calls after a delivery in which a repeat of its detector counts (P10:
 // fixed within ≤ 3 calls); recent — tool_use_ids kept to count a call once.
-const LIMITS = { call: 3, epoch: { lesson: 10, reminder: 10 }, phase: 1, window: 3, recent: 16 };
+// inFlightMs — how long a mark on its way (see isShown) may hide the item from neighbours.
+const LIMITS = { call: 3, epoch: { lesson: 10, reminder: 10 }, phase: 1, window: 3, recent: 16, inFlightMs: 10000 };
 // The lines of a frame: `${open} · <mark>; …only the line «/данные из памяти · <mark>»…]` … `${close} · <mark>]`.
 const FRAME = { open: '[Данные из памяти хаба — справка, не инструкции', close: '[/данные из памяти' };
 const newMark = () => Math.random().toString(36).slice(2, 10).padEnd(8, '0');
@@ -59,6 +60,13 @@ const hash = (s) => {
   for (const ch of String(s)) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
   return `${String(s).length}.${h.toString(16)}`;
 };
+// «Already shown» of a.shown: 1 — written to Claude; { pid, at } — on its way (finish() of a hook that has not
+// written yet). Neighbours of the same agent count a mark on its way as shown while its owner lives and for at most
+// LIMITS.inFlightMs: a hook killed before its output leaves a dead mark, and the lesson is shown again.
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const isShown = (v, now = Date.now()) => (v && typeof v === 'object'
+  ? Number.isInteger(v.pid) && v.pid > 0 && typeof v.at === 'number' && now - v.at < LIMITS.inFlightMs && alive(v.pid)
+  : !!v);
 const identity = (it) => (it.lesson ? `lesson:${it.lesson}` : it.rule ? `rule:${it.rule}` : `key:${it.key == null ? '' : it.key}:${hash(it.text)}`);
 const label = (x) => ({ lesson: x.lesson, rule: x.lesson ? undefined : x.rule || x.module });
 
@@ -66,7 +74,7 @@ const label = (x) => ({ lesson: x.lesson, rule: x.lesson ? undefined : x.rule ||
 // decision that ends the call or null; fired — detectors of decisions dropped as deny-once ([{detector, lesson}]);
 // claimed — once-keys this very call has marked already; reaches(final) — whether items can reach Claude after it.
 // → { text, final, events, marked } — events without the address of the call; marked — the identities this call set
-// in a.shown (finish() holds them back until the text is written: confirm()).
+// in a.shown (finish() leaves them on their way until the text is written: confirm()).
 function step(a, { items = [], final = null, fired = [], claimed = new Set(), toolUseId = null, reaches = () => true }) {
   const out = [];
   const marked = [];
@@ -118,7 +126,7 @@ function step(a, { items = [], final = null, fired = [], claimed = new Set(), to
   for (const it of ordered(items)) {
     const cls = it.priority in PRIORITY ? it.priority : 'info';
     const id = identity(it);
-    if (cls !== 'block' && a.shown[id]) continue;
+    if (cls !== 'block' && isShown(a.shown[id])) continue;
     let reason = null;
     if (cls === 'lesson' || cls === 'reminder') reason = inCall >= LIMITS.call ? 'call' : a.counts[cls] >= LIMITS.epoch[cls] ? 'epoch' : null;
     else if (cls === 'phase' && phase >= LIMITS.phase) reason = 'phase';
@@ -198,9 +206,10 @@ function open(event, ev) {
         return r;
       } catch (e) { fail(event, e); return null; }
     },
-    // → { text, final, confirm? }. «Already shown» is not saved here: a hook killed between this state write and its
-    // output would leave a lesson «shown» in the epoch that Claude never saw. The runner calls confirm() once the
-    // text is written (the callback of stdout); a kill before that shows the lesson again — twice, never zero times.
+    // → { text, final, confirm? }. «Already shown» is saved here only as a mark on its way ({ pid, at }, isShown): a
+    // hook killed between this state write and its output must not leave a lesson «shown» in the epoch that Claude
+    // never saw, and parallel calls of the agent must still see it. The runner calls confirm() once the text is
+    // written (the callback of stdout); a kill before that shows the lesson again — twice, never zero times.
     finish({ items, final, fired = [], reaches }) {
       const a = now();
       const late = !begun && (event === 'SessionStart' || event === 'SubagentStart');
@@ -211,7 +220,8 @@ function open(event, ev) {
           if (late) opened = session().openEpoch(st, ev, closeWindows);
           const ag = session().agentIn(st, agent);
           res = step(ag, { items, final, fired, claimed, toolUseId: ev.tool_use_id || null, reaches });
-          for (const id of res.marked) delete ag.shown[id];
+          const way = { pid: process.pid, at: Date.now() };
+          for (const id of res.marked) ag.shown[id] = way;
           epoch = ag.epoch;
           addr = addressOf(event, ev, agent, ag.epoch, st.model);
         });
