@@ -238,3 +238,44 @@ test('review: a reviewed mark without a model (reviewed before any review) does 
   assert.match(r.out, /опорная модель model-a/);
   assert.doesNotMatch(run(['--memory', mem, 'review', '--list']).out, /undefined/);
 });
+
+// Slice 32: fold rewrites a month by tmp + rename. A writer that opened the month before the rename appends into the
+// old inode — its event used to vanish with it. The month is folded under the events lock, and what the old inode got
+// after the read is carried over into the new month.
+function foldRace(stage) {
+  const mem = memory();
+  for (let d = 1; d <= 3; d++) appendEvent(mem, { at: `2026-05-0${d}T10:00:00.000Z`, kind: 'shown', lesson: 'dev-port' });
+  const month = path.join(mem, 'events', '2026-05.jsonl');
+  const { main } = require('./gc.cjs');
+  const real = fs.renameSync;
+  let staged = null;
+  fs.renameSync = function (from, to) {
+    if (to === month && staged === null) staged = stage(mem, month);
+    return real.call(this, from, to);
+  };
+  let out;
+  try { out = main(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']); } finally { fs.renameSync = real; }
+  return { mem, month, out, staged };
+}
+
+test('fold: an event appended to the month while it is being rewritten is not lost (slice 32)', () => {
+  const late = JSON.stringify({ at: '2026-05-04T10:00:00.000Z', kind: 'repeat', lesson: 'dev-port', note: 'поздний' });
+  // A writer without the lock (the \n frame: no node:sqlite, or the lock was stuck) holds the old inode open.
+  const { mem, out } = foldRace((m, month) => { fs.appendFileSync(month, `\n${late}\n`); return true; });
+  assert.match(out, /2026-05: событий 3 → 1/);
+  const kinds = readEvents(mem).events.filter((e) => e.at.startsWith('2026-05')).map((e) => `${e.kind}:${e.at.slice(8, 10)}`);
+  assert.deepStrictEqual(kinds, ['shown:03', 'repeat:04']);
+  assert.deepStrictEqual(readEvents(mem).problems, []);
+  // The archive is «the month as it was», the late line included: a later fold has nothing to fold (review 1).
+  assert.match(fs.readFileSync(path.join(mem, 'events', 'archive', '2026-05.jsonl'), 'utf8'), /"note":"поздний"/);
+  assert.match(require('./gc.cjs').main(['--memory', mem, 'fold', '--now', '2026-11-05', '--apply']), /сворачивать нечего/);
+});
+
+test('fold: the month is rewritten under the events lock — a locked writer cannot get in between (slice 32)', { skip: !require('../../../lib/memory/sqlite.cjs')() && 'no node:sqlite' }, () => {
+  const D = require('../../../lib/memory/sqlite.cjs')();
+  const { staged } = foldRace((m) => {
+    const db = new D(path.join(m, '.events.lock.db'), { timeout: 0 });
+    try { db.exec('BEGIN EXCLUSIVE'); db.exec('COMMIT'); return 'free'; } catch (e) { return `held: ${e.message}`; } finally { db.close(); }
+  });
+  assert.match(String(staged), /^held/, 'the events lock is held while the month is renamed');
+});
