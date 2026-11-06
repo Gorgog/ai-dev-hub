@@ -76,3 +76,27 @@ test('shown: control — without the kill the lesson is shown once in the epoch'
   assert.match(pre(s, 't1').ctx, /урок L1/);
   assert.doesNotMatch(pre(s, 't2').ctx, /урок L1/, 'the staging tells «shown» from «not shown»');
 });
+
+test('shown: finish holds the mark back, confirm sets it in the epoch of the call only', () => {
+  const before = process.env.HUB_LOG_DIR;
+  process.env.HUB_LOG_DIR = mkdtemp('delivery-shown-lib-');
+  try {
+    const session = require('./lib/session.cjs');
+    const D = require('./lib/deliver.cjs');
+    const items = [{ text: 'урок L1', priority: 'lesson', key: 'L1', lesson: 'L1' }];
+    const call = (sid) => D.open('PreToolUse', { session_id: sid, tool_use_id: 't1' }).finish({ items, final: null, reaches: () => true });
+    session.startEpoch({ session_id: 'c1', source: 'startup' });
+    const r = call('c1');
+    assert.match(r.text, /урок L1/);
+    assert.deepStrictEqual(session.read('c1').agents.main.shown, {}, 'not marked before the text is written');
+    r.confirm();
+    assert.deepStrictEqual(session.read('c1').agents.main.shown, { 'lesson:L1': 1 });
+    // A compaction between the output and the mark: the new epoch never had the text.
+    session.startEpoch({ session_id: 'c2', source: 'startup' });
+    const r2 = call('c2');
+    session.startEpoch({ session_id: 'c2', source: 'compact' });
+    r2.confirm();
+    const a = session.read('c2').agents.main;
+    assert.deepStrictEqual([a.epoch, a.shown], [2, {}]);
+  } finally { if (before === undefined) delete process.env.HUB_LOG_DIR; else process.env.HUB_LOG_DIR = before; }
+});
