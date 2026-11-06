@@ -17,13 +17,24 @@ hooks.json ─► node hooks/run.cjs <Событие>      (событие JSON 
 
 | Событие | Каталог | Матчер | Что умеет вернуть |
 |---|---|---|---|
-| PreToolUse | `pretool.d/` | `Bash\|Edit\|Write\|MultiEdit\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*` | `block` (код 2, причина в stderr), `deny`/`ask` (JSON), подача — `additionalContext` |
-| PostToolUse | `posttool.d/` | `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit` | `block` (причина Claude), подача — `additionalContext` |
-| PostToolUseFailure | `posttoolfailure.d/` | тот же | подача — `additionalContext` (по тексту ошибки инструмента); `block` раннер отдаёт как у PostToolUse, но для упавшего инструмента Claude Code его действие не проверено |
+| PreToolUse | `pretool.d/` | `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Agent\|Task\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*` | `block` (код 2, причина в stderr), `deny`/`ask` (JSON), подача — `additionalContext` |
+| PostToolUse | `posttool.d/` | `^(?:Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Agent\|Task\|mcp__Claude_Browser__.*\|mcp__claude-in-chrome__.*\|mcp__.*tracker_.*\|mcp__.*gitlab_.*)$` (35) | `block` (причина Claude), подача — `additionalContext` |
+| PostToolUseFailure | `posttoolfailure.d/` | `Bash\|Edit\|Write\|MultiEdit\|NotebookEdit` | подача — `additionalContext` (по тексту ошибки инструмента); `block` раннер отдаёт как у PostToolUse, но для упавшего инструмента Claude Code его действие не проверено |
 | Stop | `stop.d/` | — | `block` (Claude продолжает с причиной) |
 | SessionStart | `sessionstart.d/` | `startup\|resume\|clear\|compact` | подача — простым текстом (как v1) |
 | SessionEnd | `sessionend.d/` | — | ничего (только побочные действия) |
 | SubagentStart | `subagentstart.d/` | — | подача — `additionalContext` субагенту |
+
+Матчер PostToolUse (срез 35, решение 06.11): кроме правок и Bash — Agent/Task и MCP, под которые пишут уроки (браузер,
+трекер, GitLab), чтобы модуль уроков после вызова видел их вход и вывод. Служебные MCP приложения (`ccd_*` и подобные) и
+`mcp__.*` целиком не пускаются: уроков на них нет, есть только цена запуска. Вывод таких вызовов для `when.out` —
+текстовые блоки результата MCP (в хуке — массив блоков, проба P35) или отчёт агента: `handbackReport.text` у сдавшего
+через SubagentHandback (в `content` у него заглушка), иначе блоки `content`; асинхронный запуск текста не несёт (`fieldsOf`
+в `memory-hot.cjs`). У прежних инструментов `out` прежний побайтно. Матчер записан с якорями `^(?:…)$`: Claude Code
+сравнивает список имён точно, только пока в матчере нет других символов, а с `.*` проверяет регэксп без якорей:
+`Task` пустил бы TaskList (проба P35 на 2.1.317), `Write` — TodoWrite, `Bash` — BashOutput. Остальные модули PostToolUse на новых инструментах молчат (вывод тестов — только Bash, проверка записи урока —
+только Write/Edit/MultiEdit; сценарий H60). PostToolUseFailure — прежний матчер, модуля уроков там нет: уроки на
+упавших вызовах (таймауты браузера) хук не видит. Новый инструмент с уроками — дописать в матчер и в H59.
 
 `UserPromptSubmit` не заведён (решение 05.11). Проверено живым `claude -p --plugin-dir <worktree>/plugin` против
 мок-API (Claude Code 2.1.317, 05.11): события доходят до раннера, `CLAUDE_PLUGIN_DATA` задан, при `HUB_OFF=1` ни один модуль не вызван, ошибок хуков 0.
