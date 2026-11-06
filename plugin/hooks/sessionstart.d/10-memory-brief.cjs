@@ -2,23 +2,15 @@
 // note of this branch — at every session start inside projects/<name>/ of the hub; the hub version in its header.
 // Two items (decision 05.11): the header and the rules index are instructions of the hub and go as they are; the note of
 // the session — written by a model — is data from memory, framed by the delivery as «not instructions».
+// Where 09-memory-core gave the brief for this very event (memory v2 on its canary, slice 29), this module steps aside:
+// one brief per start.
 'use strict';
-const { buildBrief } = require('../session-start.cjs');
-
-// Where the note's part of the brief begins: buildBrief puts it last. The first match: a rules index quoting this
-// line only moves more text into the frame, never a note's text out of it.
-const NOTE = '\nПоследняя заметка этой ветки: ';
+const { buildBrief, briefItems, coreGiven } = require('../session-start.cjs');
 
 module.exports = {
   id: 'memory-brief',
   run(ev, ctx) {
-    const brief = buildBrief(ev.cwd || process.cwd(), ctx.hub, ctx.version);
-    if (!brief) return null;
-    const at = brief.indexOf(NOTE);
-    if (at < 0) return { items: [{ text: brief, priority: 'info', key: 'memory-brief' }] };
-    return { items: [
-      { text: brief.slice(0, at), priority: 'info', key: 'memory-brief' },
-      { text: brief.slice(at + 1), priority: 'info', key: 'memory-brief-note', source: 'memory' },
-    ] };
+    if (coreGiven.has(ev)) return null;
+    return briefItems(buildBrief(ev.cwd || process.cwd(), ctx.hub, ctx.version));
   },
 };
