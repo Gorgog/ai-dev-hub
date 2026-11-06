@@ -10,7 +10,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|mcp__Claude_Browser__.*|mcp__claude-in-chrome__.*|mcp__.*tracker_.*|mcp__.*gitlab_.*",
+        "matcher": "^(?:Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|mcp__Claude_Browser__.*|mcp__claude-in-chrome__.*|mcp__.*tracker_.*|mcp__.*gitlab_.*)$",
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.cjs", "PostToolUse"], "timeout": 10 }
         ]

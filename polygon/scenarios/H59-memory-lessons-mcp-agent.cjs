@@ -1,6 +1,6 @@
 // Уроки после вызовов MCP и Agent (срез 35, решение 06.11 — вариант А): матчер PostToolUse из hooks.json пускает
 // Agent/Task и MCP браузера, трекера и GitLab — урок с `when` на такой вызов приходит сразу после него, в том числе по
-// выводу (блоки text результата MCP, отчёт агента). Тишина: служебные MCP приложения (ccd_*) и PostToolUseFailure хук
+// выводу (блоки text результата MCP, отчёт агента — handbackReport у сдавшего через SubagentHandback). Тишина: служебные MCP приложения (ccd_*) и PostToolUseFailure хук
 // не видит — как раньше; урок второй раз в эпохе не подаётся. Вызовы идут через матчер, как их пускает Claude Code.
 'use strict';
 const fs = require('fs');
@@ -39,14 +39,20 @@ module.exports = {
     ev('SessionStart', { source: 'startup' });
     const page = post('mcp__claude-in-chrome__get_page_text', { tabId: 1 }, blocks('Трекер: K-123 «Починить вход»'));
     const page2 = post('mcp__Claude_Browser__get_page_text', { tabId: 2 }, blocks('Трекер: K-456'));
-    const agent = post('Agent', { description: 'qa', prompt: 'проверь стенд', subagent_type: 'x' },
-      { status: 'completed', content: blocks('Стенд отдал ERR_CONNECTION_RESET дважды') });
+    // A hub agent hands its report back (SubagentHandback): content is a stub, the report — handbackReport.text.
+    const agent = post('Agent', { description: 'qa', prompt: 'проверь стенд', subagent_type: 'x' }, { status: 'completed', handback: 'send',
+      handbackReport: { text: 'Стенд отдал ERR_CONNECTION_RESET дважды' }, content: blocks('This agent\'s report was delivered to you as a message.') });
     const tracker = post('mcp__plugin_studio-skills_tracker__tracker_issue', { key: 'K-1' }, blocks('{"summary":"x"}'));
     const gitlab = post('mcp__plugin_studio-skills_gitlab__gitlab_mr_create', { title: 't' }, blocks('created'));
     const service = post('mcp__ccd_turn__update_plan', { items: [] }, blocks('SERVICE_MARKER'));
     const failure = post('mcp__claude-in-chrome__computer', { action: 'left_click' }, blocks('SERVICE_MARKER timeout'), 'PostToolUseFailure');
     const failBash = post('Bash', { command: 'false' }, 'SERVICE_MARKER', 'PostToolUseFailure');
 
+    // Claude Code tests a matcher with anything but names and `|` as a regex WITHOUT anchors (probe P35, 2.1.317):
+    // the matcher must not let in a tool whose name holds one of its names.
+    const m = JSON.parse(fs.readFileSync(path.join(pluginDir, 'hooks', 'hooks.json'), 'utf8')).hooks.PostToolUse[0].matcher;
+    const asCC = (t) => (/^[A-Za-z0-9_|]+$/.test(m) ? m.split('|').includes(t) : new RegExp(m).test(t));
+    const leak = ['TodoWrite', 'TaskList', 'TaskStop', 'BashOutput', 'ListAgents', 'mcp__x__EditFile'].filter(asCC);
     const has = (r, id) => new RegExp(`Урок памяти \\(${id}\\)`).test(r.ctx);
     return [
       { id: 'browser-out', source: SRC, pass: page.ran && has(page, 'page-task') && /\[Данные из памяти хаба/.test(page.ctx), detail: `get_page_text: ${page.ran ? page.ctx.slice(0, 120) || 'пусто' : 'хук не вызван'}` },
@@ -55,6 +61,8 @@ module.exports = {
       { id: 'gitlab', source: SRC, pass: gitlab.ran && has(gitlab, 'mr-branch'), detail: `GitLab: ${gitlab.ran ? gitlab.ctx.slice(0, 120) || 'пусто' : 'хук не вызван'}` },
       { id: 'once-per-epoch', kind: 'quiet', source: SRC, pass: page2.ran && !has(page2, 'page-task'), detail: `второй раз в эпохе: ${page2.ctx.slice(0, 100) || (page2.ran ? 'пусто' : 'хук не вызван')}` },
       { id: 'service-mcp-unseen', kind: 'quiet', source: QUIET, pass: !service.ran, detail: `ccd_turn: ${service.ran ? `хук вызван: ${service.ctx.slice(0, 80)}` : 'не вызван'}` },
+      { id: 'matcher-unanchored-tight', kind: 'quiet', source: QUIET, pass: !leak.length && ['Agent', 'Bash', 'mcp__claude-in-chrome__computer'].every(asCC),
+        detail: `матчер как его проверяет Claude Code (регэксп без якорей): лишние ${leak.join(', ') || 'нет'}` },
       { id: 'failure-unchanged', kind: 'quiet', source: QUIET, pass: !failure.ran && failBash.ran && !/Урок памяти/.test(failBash.ctx),
         detail: `PostToolUseFailure: MCP ${failure.ran ? 'вызван' : 'не вызван'}, Bash ${failBash.ran ? 'вызван' : 'не вызван'}${failBash.ctx ? `: ${failBash.ctx.slice(0, 80)}` : ''}` },
     ];

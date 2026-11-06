@@ -229,8 +229,9 @@ function loadTriggers(mem) {
 const head = (s) => String(s || '').slice(0, CAP);
 const tail = (s) => String(s || '').slice(-CAP);
 // The text an MCP tool or an agent returned (slice 35): its content blocks of type text — as an array, an object with
-// content (the agent's report) or a string; images and other blocks are not text. Only for these tools: the out of
-// the tools seen before (Bash, Edit, Write, …) stays byte for byte what it was.
+// content or a string; images and other blocks are not text. An agent that handed its report back (SubagentHandback)
+// has a stub in content and the report in handbackReport.text (review 06.11: so are all sync agents of the hub). Only
+// for these tools: the out of the tools seen before (Bash, Edit, Write, …) stays byte for byte what it was.
 const CONTENT_OUT = /^(?:Agent|Task|mcp__.+)$/;
 const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c)
   ? c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n') : '');
@@ -247,7 +248,8 @@ function fieldsOf(ev, { withOut = false } = {}) {
   let out = '';
   if (withOut) {
     const r = ev.tool_response;
-    out = (CONTENT_OUT.test(tool) ? (r && typeof r === 'object' && !Array.isArray(r) ? textOf(r.content) : textOf(r))
+    const report = r && typeof r === 'object' && r.handbackReport && typeof r.handbackReport.text === 'string' ? r.handbackReport.text : null;
+    out = (CONTENT_OUT.test(tool) ? (report !== null ? report : r && typeof r === 'object' && !Array.isArray(r) ? textOf(r.content) : textOf(r))
       : typeof r === 'string' ? r : r && typeof r === 'object' ? `${r.stdout || ''}\n${r.stderr || ''}` : '').replace(/\x1b\[[0-9;]*m/g, '');
   }
   return { tool, cmd: head(typeof ti.command === 'string' ? ti.command : ''), path: head(ti.file_path || ti.notebook_path || ti.path || ''),
