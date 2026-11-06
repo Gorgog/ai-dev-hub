@@ -8,8 +8,9 @@
 //   gc.cjs fold [--months 3] [--now YYYY-MM-DD] [--apply]   event months older than N: one shown per lesson
 //   gc.cjs core [--plugin <dir>]                    core lessons with a working trigger (decision г) — proposals
 //   gc.cjs core --apply <id>… [--note <текст>]       those named candidates go core → active (after the user's «да»)
+//   gc.cjs core --keep <id>… --note <почему>         the user keeps them in the core: not proposed until edited
 // Reports change nothing: merge and retire are `recall merge|retire` after the user's «да». Only review/reviewed
-// append events, only core --apply moves named lessons out of the core, only fold --apply rewrites old event months (the source kept in events/archive/). A project without memory/lessons/ has no v2 memory: said so, code 0. Codes: 0 done, 1 refused, 2 usage.
+// append events (core --keep too), only core --apply moves named lessons out of the core, only fold --apply rewrites old event months (the source kept in events/archive/). A project without memory/lessons/ has no v2 memory: said so, code 0. Codes: 0 done, 1 refused, 2 usage.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,18 +19,19 @@ const { appendEvent, readEvents, eventFiles, withEventsLock } = require('../../.
 const { parseLesson } = require('../../../lib/memory/format.cjs');
 
 const USAGE = 'команды: dups · retire [--days N] · review --model <id> · review --list · reviewed <id> [--note <текст>] · '
-  + 'fold [--months 3] [--apply] · core [--apply <id>… --note <текст>]';
+  + 'fold [--months 3] [--apply] · core [--apply | --keep <id>… --note <текст>]';
 const LIVE = ['core', 'active'];
 const REVIEW = ['review', 'reviewed'];
 
 function parse(argv) {
-  const a = { _: [], memory: null, days: 30, months: 3, now: null, model: null, list: false, note: undefined, apply: false, plugin: undefined };
+  const a = { _: [], memory: null, days: 30, months: 3, now: null, model: null, list: false, note: undefined, apply: false, keep: false, plugin: undefined };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--memory') a.memory = argv[++i];
     else if (k === '--days') a.days = Math.max(1, Number(argv[++i]) || 30);
     else if (k === '--months') a.months = Math.max(1, Number(argv[++i]) || 3);
     else if (k === '--apply') a.apply = true;
+    else if (k === '--keep') a.keep = true;
     else if (k === '--now') a.now = argv[++i];
     else if (k === '--model') a.model = argv[++i];
     else if (k === '--list') a.list = true;
@@ -108,21 +110,33 @@ function core(mem, a, named) {
   const opts = a.plugin ? { plugin: a.plugin } : {};
   const cands = S.coreCandidates(mem, opts);
   const on = `хук уроков слушает ${hook.event}: ${hook.tools.join('|')}`;
-  if (a.apply) {
-    if (!ids.length) throw Object.assign(new Error(`core --apply: назови id кандидатов\n${USAGE}`), { code: 2 });
+  if (a.apply && a.keep) throw Object.assign(new Error(`core: --apply или --keep, не оба\n${USAGE}`), { code: 2 });
+  if (a.apply || a.keep) {
+    const flag = a.apply ? '--apply' : '--keep';
+    if (!ids.length) throw Object.assign(new Error(`core ${flag}: назови id кандидатов\n${USAGE}`), { code: 2 });
     const known = new Set(cands.map((c) => c.id));
     const bad = ids.filter((id) => !known.has(id));
     if (bad.length) {
-      throw Object.assign(new Error(`не кандидаты на вынос из ядра (решение (г)): ${bad.join(', ')} — ничего не перенесено; `
+      throw Object.assign(new Error(`не кандидаты на вынос из ядра (решение (г)): ${bad.join(', ')} — ничего не записано; `
         + 'кандидаты — `gc.cjs core`'), { code: 1 });
     }
-    for (const id of ids) S.toActive(mem, id, { session_id: session(), note: a.note });
+    const who = { session_id: session(), note: a.note };
+    if (a.keep) {
+      for (const id of ids) S.keepInCore(mem, id, who);
+      return [`Оставлены в ядре (событие kept-core; снова предложит, только если урок правили):`, ...ids.map((id) => `- ${id}`)].join('\n');
+    }
+    for (const id of ids) S.toActive(mem, id, who);
     return [`Из ядра в active (${on}):`, ...ids.map((id) => `- ${id}`)].join('\n');
   }
   const inCore = S.fold(mem).entries.filter((e) => e.dir === 'lessons' && e.status === 'core').length;
-  if (!cands.length) return `кандидатов нет: в ядре ${inCore}, у уроков ядра нет триггера, который видит хук (${on})`;
+  const kept = new Set(readEvents(mem).events.filter((e) => e.kind === 'kept-core').map((e) => e.lesson)).size;
+  if (!cands.length) {
+    return `кандидатов нет: в ядре ${inCore}, у уроков ядра нет триггера, который видит хук (${on})`
+      + `${kept ? `; оставлены в ядре решением (kept-core): ${kept}` : ''}`;
+  }
   return [`Кандидаты на вынос из ядра в active — триггер видит хук (${on}); в ядре ${inCore}. Класс «одного раза» и уроки `
-    + 'без такого триггера остаются. После «да» — `gc.cjs core --apply <id>… --note "<почему>"`:',
+    + 'без такого триггера остаются. После «да» — `gc.cjs core --apply <id>… --note "<почему>"`; оставить в ядре — '
+    + '`gc.cjs core --keep <id>… --note "<почему>"`:',
   ...cands.map((c) => `- ${c.id}: ${c.reason}`)].join('\n');
 }
 

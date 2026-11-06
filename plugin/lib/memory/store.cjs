@@ -575,11 +575,14 @@ function workingTrigger(meta, { tools = [], event = '' } = {}) {
 
 // Proposals (decision г): core lessons, not class «once», the validator accepts, with a working trigger — [{id, kind,
 // reason}] by id. No hook config to read — nothing (the caller names the error by lessonHookTools).
+// A lesson the user kept in the core (`kept-core` with the sha of that text) is not proposed until its text changes.
 function coreCandidates(memDir, { plugin = PLUGIN } = {}) {
   let hook;
   try { hook = lessonHookTools(plugin); } catch { return []; }
+  const kept = new Map();
+  for (const e of readEvents(memDir).events) if (e.kind === 'kept-core' && typeof e.lesson === 'string') kept.set(e.lesson, e.sha);
   return loadDocs(memDir)
-    .filter((d) => d.dir === 'lessons' && d.status === 'core' && d.kind !== 'once')
+    .filter((d) => d.dir === 'lessons' && d.status === 'core' && d.kind !== 'once' && kept.get(d.id) !== d.sha)
     .filter((d) => !validateLesson(d.raw, { file: `${path.basename(memDir)}/${d.rel}` }).length)
     .map((d) => ({ d, t: workingTrigger(d.meta, hook) }))
     .filter((x) => x.t.ok)
@@ -597,8 +600,15 @@ function toActive(memDir, id, a) {
   return appendEvent(memDir, { ...addr(a), kind: 'to-active', lesson: id });
 }
 
-// Stub (tail 34, keep): implemented after the red tests.
-function keepInCore() { return null; }
+// The user's «stays in the core» (decision (г) by hand: a trigger that fires where the work is not done, as a stand
+// started through a browser MCP) — an event `kept-core` with the sha of the lesson as it is now.
+function keepInCore(memDir, id, a) {
+  const f = lessonFile(memDir, id);
+  const raw = fs.readFileSync(f);
+  if (path.basename(path.dirname(f)) !== 'lessons' || parseLesson(raw.toString('utf8')).meta.status !== 'core') throw new Error(`урок ${id} не в ядре (status не core)`);
+  const sha = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
+  return appendEvent(memDir, { ...addr(a), kind: 'kept-core', lesson: id, sha });
+}
 
 // The memory of the hub project a cwd is in: {dir, newFormat} (newFormat — memory/lessons/ exists), or null.
 function memoryDir(cwd, hub) {
